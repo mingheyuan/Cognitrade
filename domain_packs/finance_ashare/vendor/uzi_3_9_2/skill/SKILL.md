@@ -1,6 +1,6 @@
 ---
 name: deep-analysis
-description: 个股深度分析的核心工作流。当用户要求"深度分析 / 全面分析 / 帮我看看 / 值不值得买 / DCF / 机构建模 / 首次覆盖 / 投委会备忘录"等涉及个股研究的请求时触发。覆盖 A 股、港股、美股，产出 22 维数据 + 65 位大佬量化评审 + 6 种机构级估值建模 (DCF/Comps/LBO/3-Stmt/Merger) + 7 种研究产物 (首次覆盖/财报解读/催化剂日历/投资逻辑追踪/晨报/量化筛选/行业综述) + 6 种决策方法 (IC Memo/DD/Porter/单位经济/VCP/再平衡) + 杀猪盘检测，最终生成 Bloomberg 风格 HTML 报告 + 社交分享战报。关键词：股票、个股、深度分析、估值、DCF、comps、首次覆盖、IC memo、杀猪盘、龙虎榜、akshare。
+description: 个股深度分析的核心工作流。当用户要求"深度分析 / 全面分析 / 帮我看看 / 值不值得买 / DCF / 机构建模 / 首次覆盖 / 投委会备忘录"等涉及个股研究的请求时触发。覆盖 A 股、港股、美股，产出 22 维数据 + 66 位大佬量化评审 + 6 种机构级估值建模 (DCF/Comps/LBO/3-Stmt/Merger) + 7 种研究产物 (首次覆盖/财报解读/催化剂日历/投资逻辑追踪/晨报/量化筛选/行业综述) + 6 种决策方法 (IC Memo/DD/Porter/单位经济/VCP/再平衡) + 杀猪盘检测，最终生成 Bloomberg 风格 HTML 报告 + 社交分享战报。关键词：股票、个股、深度分析、估值、DCF、comps、首次覆盖、IC memo、杀猪盘、龙虎榜、akshare。
 version: 3.9.4
 author: FloatFu-true
 license: MIT
@@ -21,7 +21,7 @@ metadata:
 - **你是分析师** — 你读原始数据 + 量化结果，然后用自己的判断串起一个有冲突感、有洞察的叙事。
 - **脚本给你提供 5 类产物**：
   1. **原始数据** (Task 1 · 22 维 fetcher)
-  2. **机构建模结果** (Task 1.5 · DCF/Comps/LBO/3-Stmt/IC Memo/Porter 等 17 种方法的计算输出)
+  2. **机构建模结果** (Task 1.5 · DCF/Comps/LBO/3-Stmt/IC Memo/Porter 等 22 种方法的计算输出)
   3. **65 人评委量化裁决** (Task 3 · 每人引用具体规则)
   4. **数据完整性报告** (哪些字段缺失 / 哪些降级)
   5. **可审计的 methodology_log** (每一步计算的推导链)
@@ -534,7 +534,7 @@ genuine investment analysis. The whole point of this plugin is agent-driven judg
     ]
   },
   "narrative_override": {
-    "core_conclusion": "宁波建工 · 48 分 · 谨慎。典型地方基建股，ROE 不到 8%、毛利率 8%，靠城投整合讲故事。65 位大佬 12 人看多，29 人看空。DCF 高估 23%，但 LBO 压力测试 IRR 18% — 博弈价值存在但风险更大。",
+    "core_conclusion": "宁波建工 · 48 分 · 谨慎。典型地方基建股，ROE 不到 8%、毛利率 8%，靠城投整合讲故事。66 位大佬 12 人看多，29 人看空。DCF 高估 23%，但 LBO 压力测试 IRR 18% — 博弈价值存在但风险更大。",
     "risks": [
       "ROE 持续下滑，连续 3 年低于 8%",
       "应收账款占比过高，回款周期拉长",
@@ -1082,7 +1082,7 @@ echo "${CODEX:-${OPENAI_API_KEY:+codex_via_openai}}"
 - `references/task3-investor-panel.md` — 65 评委规则
 - `references/task4-synthesis.md` — 叙事合成规范
 - `references/task5-report-assembly.md` — 报告组装
-- `references/fin-methods/README.md` — 17 种机构方法论索引
+- `references/fin-methods/README.md` — 22 种机构方法论索引
 - `assets/data-contracts.md` — 所有 JSON schema
 - `assets/quality-checklist.md` — 完成前的 checklist
 

@@ -1,27 +1,32 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import importlib
-from pathlib import Path
+import os
 import sys
 import threading
-from typing import Any, Callable
+import time
+import uuid
+from collections.abc import Callable
+from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Any
 
-
-UZI_SOURCE_COMMIT = "0acf25122cabf493e7bc442faff62ceceb7f2f02"
-UZI_REPORT_SOURCE_COMMIT = "0acf25122cabf493e7bc442faff62ceceb7f2f02"
+UZI_SOURCE_COMMIT = "b004d7a988ca53a4805bf36784af091fa1209f22"
+UZI_REPORT_SOURCE_COMMIT = "b004d7a988ca53a4805bf36784af091fa1209f22"
 UZI_REPORT_VERSION = "3.9.4"
 UZI_REPORT_TEMPLATE_SHA256 = "1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8"
 UZI_REPORT_RENDERER_SHA256 = {
     "lib/report/dim_viz.py": "032dd9e0429f8d5e4ffd030dcc33c6360817b4ac81f6983479b4f82adef29304",
     "lib/report/institutional.py": "ca2e0ff2ba3dcc2690834da994e5a292e466b137875f660306be4687506e3fef",
-    "lib/report/panel_cards.py": "0b21aefb50d87dc992a378cbe8e50eef9988e0d69147d9956db759858ec666ce",
+    "lib/report/panel_cards.py": "28dfdb0b9ba226cc92236b0f31e7032c22fe624c2069b140410429923c82e828",
     "lib/report/svg_primitives.py": "2b13c6fdc9bfc1a5182a39c74d75d8c14ce1d52c26b7e88ae32975d1b547f93e",
 }
-UZI_PURE_PYTHON_TREE_SHA256 = "dae53a8de9c31ec7fa9d057f954ac61c6a53d2c907ca9517be40ead873ef1905"
-UZI_COMMAND_TREE_SHA256 = "18a54c151139e8cfe50ffa093035bf90ebbf3bd6327248adc5b5bfdbda7ccc61"
-UZI_ANALYST_ASSET_TREE_SHA256 = "c5afcc7f7266ba7932195c4ee0534d6eb17707f11052bbf1bd5ce9a3c30b0396"
+UZI_PURE_PYTHON_TREE_SHA256 = "defc3d44eae6106fa92a3d707eed0268aac74012a4490b8d0f4294cd8b0ef7ce"
+UZI_COMMAND_TREE_SHA256 = "e4bedf13fae4dbe429ed1816a235b61a96a179a2b6aa4588421a17d34c2c33e6"
+UZI_ANALYST_ASSET_TREE_SHA256 = "8cf78e97cd37ba3f1e6c53decad83ae35dd46b487618aa8f9bb535af55e38350"
+UZI_STANDALONE_SKILL_TREE_SHA256 = "8bc93074f001fa97154629dcd33cf5a6dfed653cf79d954fa883570be0a4f1ca"
 
 UZI_FETCHER_IDS: tuple[str, ...] = (
     "0_basic",
@@ -44,7 +49,7 @@ UZI_FETCHER_IDS: tuple[str, ...] = (
     "17_sentiment",
     "18_trap",
     "19_contests",
-    "fund_holders",
+    "6_fund_holders",
     "similar_stocks",
 )
 
@@ -128,7 +133,22 @@ def _fund_holders_call(
     options: dict[str, Any],
 ) -> dict[str, Any]:
     limit = options.get("limit")
-    return main(ticker, limit=int(limit) if limit is not None else None)
+    stats_top_n = options.get("fund_stats_top_n")
+    if stats_top_n is None:
+        return main(ticker, limit=int(limit) if limit is not None else None)
+    # UZI's apply_profile_to_env sets this process variable before collection.
+    # Agent OS may run different profiles concurrently, so scope the exact
+    # variable to this one native call and restore it under a lock.
+    with _FUND_PROFILE_ENV_LOCK:
+        previous = os.environ.get("UZI_FUND_STATS_TOP")
+        try:
+            os.environ["UZI_FUND_STATS_TOP"] = str(int(stats_top_n))
+            return main(ticker, limit=int(limit) if limit is not None else None)
+        finally:
+            if previous is None:
+                os.environ.pop("UZI_FUND_STATS_TOP", None)
+            else:
+                os.environ["UZI_FUND_STATS_TOP"] = previous
 
 
 def _similar_stocks_call(
@@ -139,6 +159,49 @@ def _similar_stocks_call(
     options: dict[str, Any],
 ) -> dict[str, Any]:
     return main(ticker, top_n=int(options.get("top_n") or 4))
+
+
+@contextmanager
+def _pipeline_process_job_timeout_scope(
+    pipeline_collect: Any,
+    *,
+    overrides: dict[str, float] | None = None,
+):
+    """Apply host-owned hard timeouts without editing pinned UZI sources.
+
+    UZI v3 executes fetchers in spawned processes, so a request-scoped timeout
+    installed in the Agent OS parent cannot reach those workers.  The pinned
+    scheduler already supports a per-job ``timeout_sec``; this narrow wrapper
+    only changes that field for explicitly named optional fetchers and restores
+    the upstream constructor before the collection lock is released.
+    """
+
+    normalized = {
+        str(key): float(value)
+        for key, value in dict(overrides or {}).items()
+        if str(key) and float(value) > 0
+    }
+    if not normalized:
+        yield
+        return
+
+    original_process_job = pipeline_collect.ProcessJob
+
+    def process_job_with_host_timeout(*args: Any, **kwargs: Any):
+        job = original_process_job(*args, **kwargs)
+        timeout_seconds = normalized.get(str(job.key))
+        return (
+            replace(job, timeout_sec=timeout_seconds)
+            if timeout_seconds is not None
+            else job
+        )
+
+    with UZI_ENVIRONMENT_LOCK:
+        pipeline_collect.ProcessJob = process_job_with_host_timeout
+        try:
+            yield
+        finally:
+            pipeline_collect.ProcessJob = original_process_job
 
 
 _FETCHERS: dict[str, _FetcherSpec] = {
@@ -162,13 +225,19 @@ _FETCHERS: dict[str, _FetcherSpec] = {
     "17_sentiment": _FetcherSpec("fetch_sentiment", _ticker_call),
     "18_trap": _FetcherSpec("fetch_trap_signals", _ticker_call),
     "19_contests": _FetcherSpec("fetch_contests", _ticker_call),
-    "fund_holders": _FetcherSpec("fetch_fund_holders", _fund_holders_call),
+    "6_fund_holders": _FetcherSpec("fetch_fund_holders", _fund_holders_call),
     "similar_stocks": _FetcherSpec("fetch_similar_stocks", _similar_stocks_call),
 }
 
 
 _IMPORT_LOCK = threading.Lock()
-_CONTEST_POLICY_LOCK = threading.Lock()
+_CONTEST_POLICY_LOCK = threading.RLock()
+_FUND_PROFILE_ENV_LOCK = threading.Lock()
+UZI_ENVIRONMENT_LOCK = threading.RLock()
+_PIPELINE_MINI_RACER_LOCK = threading.Lock()
+_MINI_RACER_SENTINEL_OWNER_PREFIX = "cognitrade-timeout-owner="
+_PARALLEL_SYMBOL_SCOPE_OPTION = "cognitrade_parallel_symbol_scope"
+_PARALLEL_SYMBOL_SCOPE_TOKEN = object()
 _INITIALIZED_ROOTS: set[Path] = set()
 
 
@@ -218,6 +287,310 @@ class Uzi392FetcherRuntime:
             raise TypeError(f"UZI fetcher {fetcher_id} returned {type(result).__name__}, expected dict")
         return result
 
+    def collect_symbol(
+        self,
+        *,
+        ticker: str,
+        raw_previous: dict[str, Any] | None = None,
+        max_workers: int = 6,
+        resume: bool = True,
+        options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run the pinned UZI root collection route once for one symbol.
+
+        UZI 3.9.4's root command selects the v3 pipeline by default, forces
+        ``collect_raw_data`` when ``UZI_LEGACY=1``, and falls the whole symbol
+        back to legacy only when a preflight guard or the pipeline orchestrator
+        raises.  A ``BaseFetcher`` error is already a normal ``DimResult`` and
+        therefore must not switch lanes.
+        """
+
+        normalized_ticker = str(ticker or "").strip()
+        if not normalized_ticker:
+            raise ValueError("UZI symbol collection requires a ticker")
+        normalized_options = dict(options or {})
+        parallel_scope_active = (
+            normalized_options.pop(_PARALLEL_SYMBOL_SCOPE_OPTION, None)
+            is _PARALLEL_SYMBOL_SCOPE_TOKEN
+        )
+        process_timeout_overrides = dict(
+            normalized_options.get(
+                "cognitrade_pipeline_fetcher_timeout_overrides"
+            )
+            or {}
+        )
+        contest_policy = dict(
+            normalized_options.get("cognitrade_xueqiu_policy") or {}
+        )
+        route_mode = str(
+            normalized_options.get("cognitrade_root_route_mode") or "single"
+        ).strip().lower()
+        if route_mode not in {"single", "multi"}:
+            raise ValueError(f"unsupported UZI root route mode: {route_mode}")
+        # UZI's dedicated versus/portfolio runners call run_pipeline directly
+        # and therefore do not honor the root CLI's UZI_LEGACY switch.
+        force_legacy = route_mode == "single" and os.environ.get("UZI_LEGACY") == "1"
+
+        if force_legacy:
+            raw = self._collect_symbol_legacy(
+                normalized_ticker,
+                max_workers=max_workers,
+                resume=resume,
+                contest_policy=contest_policy,
+                contest_policy_scoped=parallel_scope_active,
+            )
+            return {
+                **raw,
+                "_uzi_execution": {
+                    "lane": "legacy_forced",
+                    "fallback_reason": None,
+                },
+            }
+
+        previous: dict[str, Any] = {}
+        try:
+            pipeline_run = importlib.import_module("lib.pipeline.run")
+            pipeline_collect = importlib.import_module("lib.pipeline.collect")
+            pipeline_run._preflight_guards(normalized_ticker)
+            previous = self._pipeline_previous(
+                normalized_ticker,
+                raw_previous=raw_previous,
+                resume=resume,
+            )
+            collection_scope = (
+                nullcontext()
+                if parallel_scope_active
+                else _pipeline_symbol_collection_scope(
+                    pipeline_collect,
+                    policy=contest_policy,
+                    timeout_overrides=process_timeout_overrides,
+                )
+            )
+            with collection_scope:
+                collected = pipeline_collect.collect(
+                    normalized_ticker,
+                    raw_previous=previous,
+                    max_workers=max(int(max_workers), 1),
+                )
+            if not isinstance(collected, dict):
+                raise TypeError(
+                    "UZI pipeline collect returned "
+                    f"{type(collected).__name__}, expected dict"
+                )
+            raw = self._assemble_pipeline_raw(normalized_ticker, collected)
+            self._write_native_raw(raw)
+            return {
+                **raw,
+                "_uzi_execution": {
+                    "lane": "pipeline",
+                    "fallback_reason": None,
+                },
+            }
+        except Exception as exc:
+            # Keep route diagnostics useful without persisting provider URLs,
+            # credentials or other exception text into report artifacts.
+            fallback_reason = type(exc).__name__
+            if route_mode == "multi":
+                # Pinned versus_runner/portfolio_runner do not retry legacy.
+                # They only reuse a *complete* report cache (raw + synthesis),
+                # not a raw_data file by itself.  This collection adapter cannot
+                # prove that completeness, so it surfaces the symbol failure;
+                # the multi-symbol composer then skips it exactly as upstream.
+                raise
+            raw = self._collect_symbol_legacy(
+                normalized_ticker,
+                max_workers=max_workers,
+                resume=resume,
+                contest_policy=contest_policy,
+                contest_policy_scoped=parallel_scope_active,
+            )
+            return {
+                **raw,
+                "_uzi_execution": {
+                    "lane": "legacy_fallback",
+                    "fallback_reason": fallback_reason,
+                },
+            }
+
+    @contextmanager
+    def parallel_symbol_collection_scope(
+        self,
+        *,
+        options: dict[str, Any] | None = None,
+        cancellation: Any = None,
+    ):
+        """Install request-global UZI patches once for parallel symbol threads.
+
+        ``collect_symbol`` normally scopes two module-global wrappers around one
+        pipeline invocation. Applying those wrappers independently from worker
+        threads would either serialize all symbols or deadlock against the
+        request's profile lock. This scope installs the identical policy and
+        timeout wrappers once on the coordinating thread, then returns an
+        opaque option token that lets workers reuse them safely.
+
+        Mini-racer jobs remain process-isolated by UZI and are additionally
+        serialized across symbol pipelines so their shared crash sentinel
+        cannot be armed or cleared concurrently.
+        """
+
+        normalized_options = dict(options or {})
+        process_timeout_overrides = dict(
+            normalized_options.get(
+                "cognitrade_pipeline_fetcher_timeout_overrides"
+            )
+            or {}
+        )
+        contest_policy = dict(
+            normalized_options.get("cognitrade_xueqiu_policy") or {}
+        )
+        pipeline_collect = importlib.import_module("lib.pipeline.collect")
+        contests = importlib.import_module("fetch_contests")
+        with (
+            _pipeline_process_job_timeout_scope(
+                pipeline_collect,
+                overrides=process_timeout_overrides,
+            ),
+            _pipeline_contests_policy_scope(
+                pipeline_collect,
+                policy=contest_policy,
+            ),
+            _pipeline_mini_racer_serial_scope(
+                pipeline_collect,
+                cancellation=cancellation,
+            ),
+            _contests_policy_scope(contests, policy=contest_policy),
+        ):
+            yield {
+                **normalized_options,
+                _PARALLEL_SYMBOL_SCOPE_OPTION: _PARALLEL_SYMBOL_SCOPE_TOKEN,
+            }
+
+    def _pipeline_previous(
+        self,
+        ticker: str,
+        *,
+        raw_previous: dict[str, Any] | None,
+        resume: bool,
+    ) -> dict[str, Any]:
+        # The v3 pipeline receives resume as a function argument. The
+        # process-wide UZI_NO_RESUME switch belongs to the legacy
+        # collect_raw_data path; pinned versus/portfolio always resume.
+        if not resume:
+            return {}
+        if isinstance(raw_previous, dict):
+            return raw_previous
+        cache = importlib.import_module("lib.cache")
+        market_router = importlib.import_module("lib.market_router")
+        try:
+            cache_ticker = market_router.parse_ticker(ticker).full
+        except Exception:
+            cache_ticker = ticker
+        try:
+            # Pinned ``lib.pipeline.run._load_cache`` treats a missing or
+            # malformed raw_data.json as an empty resume candidate.  A cache
+            # parse failure is not a pipeline-orchestrator failure and must
+            # therefore never select the legacy lane.
+            previous = cache.read_task_output(cache_ticker, "raw_data")
+        except Exception:
+            previous = {}
+        return previous if isinstance(previous, dict) else {}
+
+    def _assemble_pipeline_raw(
+        self,
+        ticker: str,
+        collected: dict[str, Any],
+    ) -> dict[str, Any]:
+        market_router = importlib.import_module("lib.market_router")
+        ticker_info = market_router.parse_ticker(ticker)
+        basic = collected.get("0_basic")
+        basic_market = basic.get("market") if isinstance(basic, dict) else None
+        dimensions = {
+            key: value
+            for key, value in collected.items()
+            if key not in {"fund_managers", "similar_stocks"}
+            and isinstance(value, dict)
+        }
+        raw: dict[str, Any] = {
+            "ticker": ticker,
+            "market": basic_market
+            if basic_market in {"A", "H", "U"}
+            else ticker_info.market,
+            "code": ticker_info.code,
+            "full": ticker_info.full,
+            "dimensions": dimensions,
+        }
+        for key in ("fund_managers", "similar_stocks"):
+            if key in collected:
+                raw[key] = collected[key]
+        return raw
+
+    def _write_native_raw(self, raw: dict[str, Any]) -> None:
+        cache = importlib.import_module("lib.cache")
+        cache_ticker = str(raw.get("full") or raw.get("ticker") or "").strip()
+        if cache_ticker:
+            try:
+                # Upstream's pipeline cache write is best-effort and must not
+                # turn a successful pipeline collection into a legacy retry.
+                cache.write_task_output(cache_ticker, "raw_data", raw)
+            except Exception:
+                pass
+
+    def _collect_symbol_legacy(
+        self,
+        ticker: str,
+        *,
+        max_workers: int,
+        resume: bool,
+        contest_policy: dict[str, Any],
+        contest_policy_scoped: bool = False,
+    ) -> dict[str, Any]:
+        run_real_test = importlib.import_module("run_real_test")
+        contests = importlib.import_module("fetch_contests")
+        resolved_ticker = self._resolve_legacy_equity_ticker(ticker)
+        policy_scope = (
+            nullcontext()
+            if contest_policy_scoped
+            else _contests_policy_scope(contests, policy=contest_policy)
+        )
+        with policy_scope:
+            raw = run_real_test.collect_raw_data(
+                resolved_ticker,
+                max_workers=max(int(max_workers), 1),
+                resume=resume,
+            )
+        if not isinstance(raw, dict):
+            raise TypeError(
+                "UZI legacy collect_raw_data returned "
+                f"{type(raw).__name__}, expected dict"
+            )
+        return raw
+
+    def _resolve_legacy_equity_ticker(self, ticker: str) -> str:
+        """Preserve stage1's target semantics without embedding its CLI/report work.
+
+        Agent OS owns interactive candidate confirmation and fund routing, but a
+        preflight fallback must never continue to score an ETF/LOF/fund/bond as
+        an individual company.  Name resolution and security classification are
+        the pinned stage1 primitives; only the CLI prompts and report side
+        effects remain outside this collection adapter.
+        """
+
+        market_router = importlib.import_module("lib.market_router")
+        if market_router.is_chinese_name(ticker):
+            data_sources = importlib.import_module("lib.data_sources")
+            resolved = data_sources.resolve_chinese_name_rich(ticker)
+            ticker_info = resolved.get("resolved") if isinstance(resolved, dict) else None
+            if ticker_info is None:
+                raise ValueError("UZI target name could not be resolved uniquely")
+        else:
+            ticker_info = market_router.parse_ticker(ticker)
+
+        if ticker_info.market == "A":
+            security_type = market_router.classify_security_type(ticker_info.code)
+            if security_type in {"etf", "lof", "mutual_fund", "convertible_bond"}:
+                raise ValueError(f"UZI target is not an individual stock: {security_type}")
+        return ticker_info.full
+
     def _initialize_import_boundary(self) -> None:
         with _IMPORT_LOCK:
             if self.scripts_root not in _INITIALIZED_ROOTS:
@@ -229,11 +602,320 @@ class Uzi392FetcherRuntime:
             cache.CACHE_ROOT = self.workspace_root / "cache" / "uzi_3_9_2"
 
 
+@contextmanager
+def uzi_snapshot_scoring_scope():
+    """Keep pinned UZI scoring on the already-collected snapshot.
+
+    UZI 3.9.4's style detector calls ``detect_quant_signal`` while generating
+    the synthesis.  When the snapshot has fewer than 20 fund-manager rows that
+    helper silently starts a new AkShare collection.  That makes an otherwise
+    deterministic scoring command depend on an unbounded network request and
+    can stall Linux workers inside AkShare pagination.
+
+    Cognitrade owns data collection before this boundary, so temporarily make
+    AkShare unavailable to that optional fallback.  The vendored scoring code
+    and its returned object shape remain unchanged, and the module global is
+    restored before releasing the process-wide UZI lock.
+    """
+
+    with UZI_ENVIRONMENT_LOCK:
+        quant_signal = importlib.import_module("lib.quant_signal")
+        previous_akshare = quant_signal.ak
+        try:
+            quant_signal.ak = None
+            yield
+        finally:
+            quant_signal.ak = previous_akshare
+
+
 def _collect_contests_with_policy(module: Any, *, ticker: str, policy: dict[str, Any]) -> dict[str, Any]:
     """Run the pinned contests fetcher without bypassing Cognitrade's source gate.
 
     Only the Xueqiu branch is wrapped. The upstream function, public Taoguba /
     10jqka / DPS sources and the returned UZI object shape remain unchanged.
+    """
+
+    with _contests_policy_scope(module, policy=policy):
+        return module.main(ticker)
+
+
+def _run_pipeline_contest_job(
+    dim_key: str,
+    ticker: Any,
+    raw_context: dict[str, Any] | None = None,
+    policy: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Run only the contest job with its request-local policy in the child."""
+
+    pipeline_collect = importlib.import_module("lib.pipeline.collect")
+    contests = importlib.import_module("fetch_contests")
+    with _contests_policy_scope(contests, policy=dict(policy or {})):
+        return pipeline_collect._run_fetcher_job(dim_key, ticker, raw_context)
+
+
+def _mini_racer_sentinel_path() -> Path:
+    run_real_test = importlib.import_module("run_real_test")
+    return Path(run_real_test._MINI_RACER_SENTINEL)
+
+
+def _arm_owned_mini_racer_sentinel(module_name: str, owner_token: str) -> None:
+    """Write a marker that the host can recover after an intentional kill."""
+
+    try:
+        sentinel = _mini_racer_sentinel_path()
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text(
+            "|".join(
+                (
+                    str(time.time()),
+                    str(module_name),
+                    f"{_MINI_RACER_SENTINEL_OWNER_PREFIX}{owner_token}",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except (ImportError, OSError):
+        # Match pinned UZI's fail-open marker write. The fetcher still runs;
+        # the process boundary remains the hard-crash containment mechanism.
+        return
+
+
+def _run_pipeline_owned_mini_racer_job(
+    target: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    owner_token: str,
+) -> Any:
+    """Run one pinned job while tagging only the sentinel it arms."""
+
+    run_real_test = importlib.import_module("run_real_test")
+    original_arm = run_real_test._arm_mini_racer_sentinel
+
+    def owned_arm(module_name: str) -> None:
+        _arm_owned_mini_racer_sentinel(module_name, owner_token)
+
+    run_real_test._arm_mini_racer_sentinel = owned_arm
+    try:
+        return target(*args, **kwargs)
+    finally:
+        run_real_test._arm_mini_racer_sentinel = original_arm
+
+
+def _recover_timed_out_mini_racer_sentinel(owner_token: str) -> bool:
+    """Remove only the marker owned by a worker the host intentionally killed.
+
+    Pipe failures and other abnormal worker exits do not call this function, so
+    a genuine V8 crash keeps the pinned UZI fail-safe sentinel in place. An
+    exact owner check also prevents one concurrent/native UZI caller from
+    clearing another caller's marker.
+    """
+
+    sentinel = _mini_racer_sentinel_path()
+    expected_owner = f"{_MINI_RACER_SENTINEL_OWNER_PREFIX}{owner_token}"
+    try:
+        before = sentinel.stat()
+        fields = sentinel.read_text(encoding="utf-8").strip().split("|")
+        after = sentinel.stat()
+        if len(fields) != 3 or fields[2] != expected_owner:
+            return False
+        if (
+            before.st_ino != after.st_ino
+            or before.st_mtime_ns != after.st_mtime_ns
+            or before.st_size != after.st_size
+        ):
+            return False
+        sentinel.unlink()
+        return True
+    except (FileNotFoundError, OSError, UnicodeError):
+        return False
+
+
+@contextmanager
+def _pipeline_symbol_collection_scope(
+    module: Any,
+    *,
+    policy: dict[str, Any],
+    timeout_overrides: dict[str, float],
+):
+    """Install the single-symbol wrappers in a consistent lock order."""
+
+    # Always take UZI_ENVIRONMENT_LOCK before _CONTEST_POLICY_LOCK. The public
+    # collection entrypoint already owns the environment lock while applying a
+    # profile, and this order prevents a direct runtime caller from creating a
+    # lock inversion with that request.
+    with (
+        _pipeline_process_job_timeout_scope(
+            module,
+            overrides=timeout_overrides,
+        ),
+        _pipeline_contests_policy_scope(module, policy=policy),
+        _pipeline_mini_racer_serial_scope(module),
+    ):
+        yield
+
+
+@contextmanager
+def _pipeline_mini_racer_serial_scope(module: Any, *, cancellation: Any = None):
+    """Serialize mini-racer process jobs across concurrent symbol pipelines.
+
+    UZI's scheduler already serializes these jobs inside one symbol. A
+    multi-symbol request adds several schedulers in parallel, however, and all
+    of their child processes share one crash-sentinel path. Split only the
+    mini-racer jobs out of each wave and admit them through one host lock. Lock
+    queueing is host orchestration time, not provider execution time, so every
+    admitted group retains its original UZI wave budget.
+    """
+
+    original_runner = module.run_process_jobs
+
+    def controlled_runner(jobs, *, max_workers, overall_timeout):
+        jobs = list(jobs)
+        mini_racer_jobs = [
+            job for job in jobs if getattr(job, "serial_group", None) == "mini_racer"
+        ]
+        if not mini_racer_jobs:
+            return original_runner(
+                jobs,
+                max_workers=max_workers,
+                overall_timeout=overall_timeout,
+            )
+
+        regular_jobs = [job for job in jobs if job not in mini_racer_jobs]
+        outcomes = (
+            original_runner(
+                regular_jobs,
+                max_workers=max_workers,
+                overall_timeout=overall_timeout,
+            )
+            if regular_jobs
+            else []
+        )
+        acquired = False
+        while not acquired and not (
+            cancellation is not None and cancellation.is_set()
+        ):
+            acquired = _PIPELINE_MINI_RACER_LOCK.acquire(timeout=0.1)
+        if not acquired:
+            outcomes.extend(
+                module.ProcessOutcome(
+                    key=job.key,
+                    error="cancelled before mini-racer start",
+                )
+                for job in mini_racer_jobs
+            )
+            return outcomes
+        try:
+            if cancellation is not None and cancellation.is_set():
+                outcomes.extend(
+                    module.ProcessOutcome(
+                        key=job.key,
+                        error="cancelled before mini-racer start",
+                    )
+                    for job in mini_racer_jobs
+                )
+            else:
+                mini_started = time.monotonic()
+                for index, job in enumerate(mini_racer_jobs):
+                    if cancellation is not None and cancellation.is_set():
+                        outcomes.extend(
+                            module.ProcessOutcome(
+                                key=pending_job.key,
+                                error="cancelled before mini-racer start",
+                            )
+                            for pending_job in mini_racer_jobs[index:]
+                        )
+                        break
+                    remaining = float(overall_timeout) - (
+                        time.monotonic() - mini_started
+                    )
+                    if remaining <= 0:
+                        outcomes.extend(
+                            module.ProcessOutcome(
+                                key=pending_job.key,
+                                error="overall timeout before mini-racer start",
+                                timed_out=True,
+                            )
+                            for pending_job in mini_racer_jobs[index:]
+                        )
+                        break
+
+                    owner_token = uuid.uuid4().hex
+                    owned_job = replace(
+                        job,
+                        target=_run_pipeline_owned_mini_racer_job,
+                        args=(job.target, job.args, job.kwargs, owner_token),
+                        kwargs={},
+                    )
+                    job_outcomes = original_runner(
+                        [owned_job],
+                        max_workers=1,
+                        overall_timeout=remaining,
+                    )
+                    for outcome in job_outcomes:
+                        if outcome.timed_out:
+                            _recover_timed_out_mini_racer_sentinel(owner_token)
+                    outcomes.extend(job_outcomes)
+        finally:
+            _PIPELINE_MINI_RACER_LOCK.release()
+        return outcomes
+
+    module.run_process_jobs = controlled_runner
+    try:
+        yield
+    finally:
+        module.run_process_jobs = original_runner
+
+
+@contextmanager
+def _pipeline_contests_policy_scope(module: Any, *, policy: dict[str, Any]):
+    """Transport the request-local source policy into spawn workers."""
+
+    enabled = bool(policy.get("enabled")) and bool(
+        str(policy.get("cookie") or "").strip()
+    )
+    child_policy = {
+        "enabled": enabled,
+        "cookie": str(policy.get("cookie") or "").strip() if enabled else None,
+    }
+    original_runner = module.run_process_jobs
+
+    def controlled_runner(jobs, *, max_workers, overall_timeout):
+        scoped_jobs = [
+            replace(
+                job,
+                target=_run_pipeline_contest_job,
+                args=(
+                    job.args[0],
+                    job.args[1],
+                    job.args[2] if len(job.args) > 2 else None,
+                    child_policy,
+                ),
+            )
+            if job.key == "19_contests"
+            else job
+            for job in jobs
+        ]
+        return original_runner(
+            scoped_jobs,
+            max_workers=max_workers,
+            overall_timeout=overall_timeout,
+        )
+
+    with _CONTEST_POLICY_LOCK:
+        module.run_process_jobs = controlled_runner
+        try:
+            yield
+        finally:
+            module.run_process_jobs = original_runner
+
+
+@contextmanager
+def _contests_policy_scope(module: Any, *, policy: dict[str, Any]):
+    """Scope Cognitrade's Xueqiu gate around the pinned contests call.
+
+    The policy defaults to disabled.  The rest of ``fetch_contests`` and its
+    public sources execute unchanged.
     """
 
     enabled = bool(policy.get("enabled"))
@@ -301,7 +983,7 @@ def _collect_contests_with_policy(module: Any, *, ticker: str, policy: dict[str,
         module.fetch_xueqiu_cubes = controlled_fetch
         module.cached = policy_cached
         try:
-            return module.main(ticker)
+            yield
         finally:
             module.fetch_xueqiu_cubes = original_fetch
             module.cached = original_cached
@@ -364,6 +1046,17 @@ def verify_vendored_uzi_integrity() -> dict[str, Any]:
         analyst_tree.update(path.read_bytes())
         analyst_tree.update(b"\0")
     analyst_tree_sha256 = analyst_tree.hexdigest()
+    standalone_skill_paths = [*(root / "skills").rglob("*")]
+    standalone_skill_paths = sorted(
+        path for path in standalone_skill_paths if path.is_file()
+    )
+    standalone_skill_tree = hashlib.sha256()
+    for path in standalone_skill_paths:
+        standalone_skill_tree.update(path.relative_to(root).as_posix().encode("utf-8"))
+        standalone_skill_tree.update(b"\0")
+        standalone_skill_tree.update(path.read_bytes())
+        standalone_skill_tree.update(b"\0")
+    standalone_skill_tree_sha256 = standalone_skill_tree.hexdigest()
     return {
         "source_commit": UZI_SOURCE_COMMIT,
         "report_source_commit": UZI_REPORT_SOURCE_COMMIT,
@@ -384,13 +1077,19 @@ def verify_vendored_uzi_integrity() -> dict[str, Any]:
         "analyst_asset_file_count": len(analyst_paths),
         "analyst_asset_tree_sha256": analyst_tree_sha256,
         "analyst_asset_tree_matches": analyst_tree_sha256 == UZI_ANALYST_ASSET_TREE_SHA256,
+        "standalone_skill_file_count": len(standalone_skill_paths),
+        "standalone_skill_tree_sha256": standalone_skill_tree_sha256,
+        "standalone_skill_tree_matches": (
+            standalone_skill_tree_sha256 == UZI_STANDALONE_SKILL_TREE_SHA256
+        ),
         "valid": not missing_fetchers
         and set(command_ids) == set(UZI_COMMAND_IDS)
         and python_tree_sha256 == UZI_PURE_PYTHON_TREE_SHA256
         and command_tree_sha256 == UZI_COMMAND_TREE_SHA256
         and template_sha256 == UZI_REPORT_TEMPLATE_SHA256
         and report_renderer_matches
-        and analyst_tree_sha256 == UZI_ANALYST_ASSET_TREE_SHA256,
+        and analyst_tree_sha256 == UZI_ANALYST_ASSET_TREE_SHA256
+        and standalone_skill_tree_sha256 == UZI_STANDALONE_SKILL_TREE_SHA256,
     }
 
 
@@ -399,12 +1098,15 @@ __all__ = [
     "UZI_COMMAND_TREE_SHA256",
     "UZI_ANALYST_ASSET_TREE_SHA256",
     "UZI_FETCHER_IDS",
+    "UZI_ENVIRONMENT_LOCK",
     "UZI_PURE_PYTHON_TREE_SHA256",
     "UZI_REPORT_RENDERER_SHA256",
     "UZI_REPORT_SOURCE_COMMIT",
     "UZI_REPORT_TEMPLATE_SHA256",
     "UZI_REPORT_VERSION",
     "UZI_SOURCE_COMMIT",
+    "UZI_STANDALONE_SKILL_TREE_SHA256",
     "Uzi392FetcherRuntime",
+    "uzi_snapshot_scoring_scope",
     "verify_vendored_uzi_integrity",
 ]

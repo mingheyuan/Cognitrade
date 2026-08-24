@@ -115,6 +115,23 @@ class ApiV1FundHoldingReportsTests(unittest.TestCase):
         self.assertEqual(self.service.calls[0][1]["profile"], "deep")
         self.assertTrue(self.service.calls[0][1]["force"])
 
+    def test_create_contract_allows_exactly_ten_holdings(self) -> None:
+        source_run_id = "01J00000000000000000000001"
+        response = self.client.post(
+            f"/api/v1/runs/{source_run_id}/holding-reports",
+            headers=auth_headers(),
+            json={"fund_code": "110011", "profile": "lite", "top_n": 9},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "validation_error")
+        self.assertEqual(self.service.calls, [])
+        schema = self.app.openapi()["components"]["schemas"][
+            "FundHoldingReportCreateRequest"
+        ]["properties"]["top_n"]
+        self.assertEqual(schema["const"], 10)
+        self.assertEqual(schema["default"], 10)
+
     def test_stale_disclosure_returns_structured_conflict(self) -> None:
         self.service.raise_stale = True
         response = self.client.post(

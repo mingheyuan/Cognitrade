@@ -54,12 +54,18 @@ class Settings(BaseModel):
     strategy_object_store_root: Path | None = None
     llm_request_timeout_seconds: int = 25
     uzi_llm_request_timeout_seconds: int = 480
+    uzi_llm_lite_request_timeout_seconds: int = 240
+    uzi_llm_medium_request_timeout_seconds: int = 600
+    uzi_llm_deep_request_timeout_seconds: int = 900
+    uzi_llm_buy_zone_request_timeout_seconds: int = 300
     uzi_llm_max_concurrency: int = 2
     uzi_llm_transient_retries: int = 6
     uzi_llm_retry_base_seconds: float = 2.0
     uzi_llm_retry_max_seconds: float = 60.0
     max_agent_tool_loop_turns: int = 4
     max_child_threads_per_turn: int = 8
+    market_data_auto_collection_enabled: bool = False
+    market_data_collection_concurrency: int = 5
     fund_holding_report_concurrency: int = 2
     fund_holding_report_max_auto_retries: int = 3
     strategy_backfill_batch_timeout_seconds: int = 6 * 60 * 60
@@ -95,6 +101,16 @@ class Settings(BaseModel):
             raise ValueError("llm_request_timeout_seconds must be positive")
         if self.uzi_llm_request_timeout_seconds <= 0:
             raise ValueError("uzi_llm_request_timeout_seconds must be positive")
+        if any(
+            timeout <= 0
+            for timeout in (
+                self.uzi_llm_lite_request_timeout_seconds,
+                self.uzi_llm_medium_request_timeout_seconds,
+                self.uzi_llm_deep_request_timeout_seconds,
+                self.uzi_llm_buy_zone_request_timeout_seconds,
+            )
+        ):
+            raise ValueError("profile-specific UZI request timeouts must be positive")
         if self.uzi_llm_max_concurrency <= 0:
             raise ValueError("uzi_llm_max_concurrency must be positive")
         if self.uzi_llm_transient_retries < 0:
@@ -112,8 +128,10 @@ class Settings(BaseModel):
             raise ValueError("max_agent_tool_loop_turns must be positive")
         if self.max_child_threads_per_turn <= 0:
             raise ValueError("max_child_threads_per_turn must be positive")
-        if not 1 <= self.fund_holding_report_concurrency <= 10:
-            raise ValueError("fund_holding_report_concurrency must be between 1 and 10")
+        if not 1 <= self.market_data_collection_concurrency <= 5:
+            raise ValueError("market_data_collection_concurrency must be between 1 and 5")
+        if not 1 <= self.fund_holding_report_concurrency <= 5:
+            raise ValueError("fund_holding_report_concurrency must be between 1 and 5")
         if self.fund_holding_report_max_auto_retries < 0:
             raise ValueError("fund_holding_report_max_auto_retries must not be negative")
         if self.strategy_backfill_batch_timeout_seconds <= 0:

@@ -1,25 +1,27 @@
 from __future__ import annotations
 
+import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event, Thread
-import time
+from unittest.mock import patch
 
-from research_system.schemas.core_runtime import CoreToolDefinition
-from research_system.schemas.domain_pack import PackToolDefinition
-from research_system.schemas.tools import ToolDefinition
+from research_system.adapters.storage.resource_lease import (
+    FileResourceLeaseStore,
+    RedisResourceLeaseStore,
+)
 from research_system.runtime.core.tool_registry import (
     CoreToolContext,
     CoreToolRegistry,
     build_core_tool_registry,
     register_domain_pack_tools,
 )
-from research_system.adapters.storage.resource_lease import (
-    FileResourceLeaseStore,
-    RedisResourceLeaseStore,
-)
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
+from research_system.schemas.core_runtime import CoreToolDefinition
+from research_system.schemas.domain_pack import PackToolDefinition
+from research_system.schemas.tools import ToolDefinition
 from research_system.schemas.turn_runtime import FollowupTaskResult
 
 
@@ -277,12 +279,72 @@ class ToolDefinitionContractTests(unittest.TestCase):
                 arguments={"symbol": "600000"},
                 context=second_context,
             )
-            self.assertEqual(blocked.status, "rejected")
+            self.assertEqual(blocked.status, "rejected", blocked.error)
             self.assertTrue(blocked.retryable)
             release.set()
             thread.join(timeout=3)
             self.assertFalse(thread.is_alive())
             self.assertEqual(result[0].status, "completed")
+
+    def test_file_lease_renewal_cannot_overwrite_a_reclaimed_owner(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            from research_system.adapters.storage import (
+                resource_lease as resource_lease_module,
+            )
+
+            store = FileResourceLeaseStore(Path(temporary_directory))
+            clock = [datetime(2026, 8, 18, tzinfo=timezone.utc)]
+            renewal_entered = Event()
+            allow_renewal = Event()
+            acquire_finished = Event()
+            renewal_result: list = []
+            acquire_result: list = []
+            original_write_json = resource_lease_module.write_json
+
+            def paused_write_json(path, payload):
+                renewal_entered.set()
+                allow_renewal.wait(timeout=2)
+                original_write_json(path, payload)
+
+            with patch.object(resource_lease_module, "utc_now", side_effect=lambda: clock[0]):
+                lease = store.acquire(
+                    resource_key="market:600000",
+                    metadata={"worker_id": "worker-1"},
+                    lease_seconds=1,
+                )
+                self.assertIsNotNone(lease)
+
+                def renew_lease():
+                    renewal_result.append(store.renew(lease, lease_seconds=5))
+
+                def acquire_lease():
+                    acquire_result.append(
+                        store.acquire(
+                            resource_key="market:600000",
+                            metadata={"worker_id": "worker-2"},
+                            lease_seconds=5,
+                        )
+                    )
+                    acquire_finished.set()
+
+                with patch.object(resource_lease_module, "write_json", paused_write_json):
+                    renewal_thread = Thread(target=renew_lease)
+                    renewal_thread.start()
+                    self.assertTrue(renewal_entered.wait(timeout=2))
+                    clock[0] += timedelta(seconds=2)
+
+                    acquire_thread = Thread(target=acquire_lease)
+                    acquire_thread.start()
+                    self.assertFalse(acquire_finished.wait(timeout=0.2))
+
+                    allow_renewal.set()
+                    renewal_thread.join(timeout=2)
+                    acquire_thread.join(timeout=2)
+
+            self.assertFalse(renewal_thread.is_alive())
+            self.assertFalse(acquire_thread.is_alive())
+            self.assertIsNotNone(renewal_result[0])
+            self.assertIsNone(acquire_result[0])
 
     def test_redis_resource_lease_uses_owner_checked_operations(self) -> None:
         class FakeRedis:

@@ -35,10 +35,7 @@ const GROUPS: Array<{
   {
     id: 'analysis',
     title: '核心分析',
-    types: [
-      'financial_analysis', 'valuation_model', 'investor_panel_review', 'risk_scan',
-      'institutional_analysis', 'research_workflow', 'deep_analysis', 'uzi_dimension_coverage',
-    ],
+    types: ['uzi_native_analysis'],
   },
   {
     id: 'intent',
@@ -51,13 +48,7 @@ const GROUPS: Array<{
   {
     id: 'methods',
     title: '专项方法与组合',
-    types: [
-      'uzi_native_method_result', 'uzi_native_command_result', 'ai_readiness', 'earnings_preview', 'model_update', 'returns_attribution',
-      'holding_rebalance', 'portfolio_rebalance', 'three_statement_model', 'quick_lbo',
-      'accretion_dilution', 'segmental_model', 'initiation_report', 'earnings_review',
-      'catalyst_calendar', 'thesis_tracker', 'morning_note', 'ic_memo', 'porter_bcg',
-      'dd_checklist', 'unit_economics', 'value_creation_plan',
-    ],
+    types: ['uzi_native_method_result', 'uzi_native_command_result'],
   },
   {
     id: 'evidence',

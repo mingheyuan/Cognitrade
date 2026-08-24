@@ -10,6 +10,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from research_system.market_data.report_inputs import ReportInputError
+
 from research_system.runtime.presentation.display import (
     localize_public_error_fields,
     localize_runtime_error,
@@ -39,6 +41,7 @@ class ApiError(Exception):
 
 def install_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(ApiError, _handle_api_error)
+    app.add_exception_handler(ReportInputError, _handle_report_input_error)
     app.add_exception_handler(RequestValidationError, _handle_request_validation_error)
     app.add_exception_handler(StarletteHTTPException, _handle_http_error)
     app.add_exception_handler(Exception, _handle_unknown_error)
@@ -52,6 +55,15 @@ async def _handle_api_error(request: Request, exc: ApiError) -> JSONResponse:
         message=exc.message,
         details=exc.details,
         headers=exc.headers,
+    )
+
+
+async def _handle_report_input_error(request: Request, exc: ReportInputError) -> JSONResponse:
+    return _error_response(
+        request,
+        status_code=409,
+        code=exc.code,
+        message=str(exc),
     )
 
 

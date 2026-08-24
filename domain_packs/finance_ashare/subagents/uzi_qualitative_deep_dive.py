@@ -1,4 +1,4 @@
-"""Three-way Agent qualitative deep dive for UZI Deep research.
+"""Three-way qualitative research for UZI's full Agent workflow.
 
 Collection remains in governed DomainPack skills.  This module receives the
 frozen ArtifactBoard snapshots, dispatches the latest UZI qualitative groups
@@ -90,6 +90,8 @@ def apply_qualitative_deep_dive(
     cancellation: Event | None = None,
     progress_callback=None,
     analysis_cycle: int | None = None,
+    repair_feedback: list[str] | None = None,
+    research_profile: Literal["lite", "medium", "deep"] = "deep",
 ) -> dict[str, Any]:
     result = deepcopy(deep_analysis)
     provider_available = llm_provider is not None and bool(getattr(llm_provider, "available", True))
@@ -118,7 +120,7 @@ def apply_qualitative_deep_dive(
         )
 
     system_prompt = (
-        "你是 UZI Deep 六维定性研究执行器。只允许引用冻结证据包里的 URL 和事实；"
+        "你是 UZI 完整 Agent 工作流的六维定性研究执行器。只允许引用冻结证据包里的 URL 和事实；"
         "禁止补造来源、补造数字或把爬虫片段直接改写成无引用结论。每维至少引用两个不同 URL，"
         "并明确跨域因果链。三个分析组共用同一冻结证据前缀。\n"
         f"UZI_SOURCE_COMMIT={LATEST_UZI_SOURCE_COMMIT}\n"
@@ -129,7 +131,7 @@ def apply_qualitative_deep_dive(
     errors: list[str] = []
     pending_groups: list[tuple[str, tuple[str, str], str, Path | None]] = []
     for label, dimensions in _GROUPS:
-        user_prompt = _group_user_prompt(
+        canonical_user_prompt = _group_user_prompt(
             group_label=label,
             dimensions=dimensions,
             evidence_bundle=evidence_bundle,
@@ -138,17 +140,37 @@ def apply_qualitative_deep_dive(
             llm_provider,
             group_label=label,
             system_prompt=system_prompt,
-            user_prompt=user_prompt,
+            user_prompt=canonical_user_prompt,
         )
         cached = _load_qualitative_stage_cache(cache_path)
         if cached is None:
-            pending_groups.append((label, dimensions, user_prompt, cache_path))
+            pending_groups.append((
+                label,
+                dimensions,
+                _group_user_prompt(
+                    group_label=label,
+                    dimensions=dimensions,
+                    evidence_bundle=evidence_bundle,
+                    repair_feedback=_group_repair_feedback(label, repair_feedback),
+                ),
+                cache_path,
+            ))
             continue
         try:
             _validate_group(cached, dimensions, evidence_bundle)
         except Exception as exc:
             _discard_qualitative_stage_cache(cache_path, exc)
-            pending_groups.append((label, dimensions, user_prompt, cache_path))
+            pending_groups.append((
+                label,
+                dimensions,
+                _group_user_prompt(
+                    group_label=label,
+                    dimensions=dimensions,
+                    evidence_bundle=evidence_bundle,
+                    repair_feedback=_group_repair_feedback(label, repair_feedback),
+                ),
+                cache_path,
+            ))
             continue
         completed.append(cached)
         _LOGGER.info("UZI qualitative stage cache hit: group=%s", label)
@@ -159,7 +181,10 @@ def apply_qualitative_deep_dive(
             group_label=label,
             cache_hit=True,
         )
-    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="uzi-qualitative") as pool:
+    with ThreadPoolExecutor(
+        max_workers=_configured_workers(llm_provider, len(pending_groups), ceiling=3),
+        thread_name_prefix="uzi-qualitative",
+    ) as pool:
         futures = {
             pool.submit(
                 _evaluate_group,
@@ -169,6 +194,7 @@ def apply_qualitative_deep_dive(
                 dimensions=dimensions,
                 evidence_bundle=evidence_bundle,
                 user_prompt=user_prompt,
+                research_profile=research_profile,
             ): (label, dimensions, cache_path)
             for label, dimensions, user_prompt, cache_path in pending_groups
         }
@@ -269,6 +295,7 @@ def _evaluate_group(
     dimensions: tuple[str, str],
     evidence_bundle: dict[str, dict[str, Any]],
     user_prompt: str | None = None,
+    research_profile: Literal["medium", "deep"] = "deep",
 ) -> QualitativeGroupResult:
     user_prompt = user_prompt or _group_user_prompt(
         group_label=group_label,
@@ -289,6 +316,8 @@ def _evaluate_group(
             user_prompt=user_prompt,
             schema=QualitativeGroupResult,
             temperature=0.1,
+            research_profile=research_profile,
+            uzi_stage=f"qualitative_{group_label}",
         )
     except Exception as exc:
         _LOGGER.warning(
@@ -314,20 +343,57 @@ def _group_user_prompt(
     group_label: str,
     dimensions: tuple[str, str],
     evidence_bundle: dict[str, dict[str, Any]],
+    repair_feedback: list[str] | None = None,
 ) -> str:
     prompts = {
         "A · Macro-Policy": "分析增长/通胀/利率/流动性向公司与行业的传导，以及政策目标、实施工具、受益与约束。",
         "B · Industry-Events": "分析行业生命周期、供需和竞争格局，并区分公告/事件的时间、确定性与财务传导。",
         "C · Cost-Transmission": "从已识别原材料映射到相关期货，分析成本变动、价格传导、毛利率时滞与对冲条件。",
     }
+    repair_instruction = ""
+    if repair_feedback:
+        repair_instruction = (
+            "\nUZI_REPAIR_FEEDBACK="
+            + json.dumps(repair_feedback, ensure_ascii=False, separators=(",", ":"))
+            + "\n这是上一轮 suggested_fix 对应的机械校验错误。逐条修正；"
+            "evidence.url 必须逐字等于本组证据 allowed_urls 中的一个值，"
+            "禁止附加说明、标点、锚点、查询参数或生成新 URL。"
+        )
     return (
         f"负责分组：{group_label}\n"
         f"必须且只能返回维度 {list(dimensions)}。{prompts[group_label]}"
         "每维 evidence 至少两条且 URL 必须原样取自冻结包；六维总体需要至少三条跨域 associations，"
         "本组至少提供一条。缺失事实只能写缺口，不能猜测。\n"
-        "本组证据="
+        + repair_instruction
+        + "\n本组证据="
         + json.dumps({key: evidence_bundle[key] for key in dimensions}, ensure_ascii=False, sort_keys=True)
     )
+
+
+def _group_repair_feedback(
+    group_label: str,
+    repair_feedback: list[str] | None,
+) -> list[str]:
+    """Keep UZI recovery feedback scoped to the group that actually failed."""
+
+    if not repair_feedback:
+        return []
+    scoped = [
+        str(error)[:500]
+        for error in repair_feedback
+        if str(error).startswith(f"{group_label}:")
+    ]
+    return list(dict.fromkeys(scoped))[-8:]
+
+
+def _configured_workers(provider: Any, task_count: int, *, ceiling: int) -> int:
+    settings = getattr(provider, "settings", None)
+    configured = getattr(settings, "uzi_llm_max_concurrency", ceiling)
+    try:
+        limit = int(configured)
+    except (TypeError, ValueError):
+        limit = ceiling
+    return max(1, min(task_count or 1, ceiling, max(limit, 1)))
 
 
 def _qualitative_stage_cache_path(

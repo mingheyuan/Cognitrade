@@ -1,7 +1,7 @@
 schema_version: "2"
 upstream:
   repository: https://github.com/wbh604/UZI-Skill
-  commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
+  commit: b004d7a988ca53a4805bf36784af091fa1209f22
   version: 3.9.4
   vendored_root: domain_packs/finance_ashare/vendor/uzi_3_9_2
   runtime_boundary: in_process_vendored_pure_capability
@@ -13,6 +13,7 @@ inventory:
   marketed_method_count: 22
   implementation_method_count: 23
   panel_seat_count: 66
+  vendored_methodology_resource_count: 17
 
 invariants:
   external_uzi_checkout_or_cli: forbidden
@@ -24,10 +25,19 @@ invariants:
   critical_report_bypass: forbidden
   recovery_round_limit: none
   html_pdf_visible_source: same_pinned_native_template
+  markdown_skill_dynamic_execution: forbidden
+
+vendored_methodology_resources:
+  status: pinned_reference_contract
+  roots: [skills/investor-panel, skills/lhb-analyzer, skills/trap-detector]
+  canonical_file_count: 17
+  path_sensitive_sha256: 8bc93074f001fa97154629dcd33cf5a6dfed653cf79d954fa883570be0a4f1ca
+  runtime_consumption: DomainPack implementations and Agent OS routes are executable; Markdown resources are not dynamically interpreted
+  acceptance: tests.test_uzi_392_vendor_runtime.Uzi392VendorRuntimeTests.test_all_referenced_standalone_skill_resources_are_vendored
 
 # These are upstream 3.9.4 behaviours explicitly preserved or deliberately
 # bounded by the Agent OS host.  None is an old UZI runtime compatibility path.
-upstream_3_9_2_regressions:
+upstream_3_9_4_regressions:
   - {id: direct_report_path_reuse, status: source_parity, target: finance.uzi.native.report.compose}
   - {id: cloudflare_no_implicit_install, status: host_boundary, target: deployment_owned_web_runtime}
   - {id: invalid_agent_analysis_fallback, status: source_parity, target: finance.uzi.native.analyze_stock}
@@ -36,6 +46,221 @@ upstream_3_9_2_regressions:
   - {id: peers_self_only_without_industry, status: source_parity, target: uzi_peers_snapshot_skill}
   - {id: valuation_cninfo_market_fallback, status: source_parity, target: uzi_valuation_snapshot_skill}
   - {id: registry_matches_provider_shapes, status: source_parity, target: uzi_source_registry}
+  - {id: pipeline_spawn_hard_timeouts, status: source_parity, target: finance.uzi.native.collect}
+  - {id: pipeline_resume_uses_fetcher_ttl, status: source_parity, target: finance.uzi.native.collect}
+  - {id: mx_financial_and_valuation_fallbacks, status: source_parity, target: fundamental_snapshot_skill}
+  - {id: missing_data_truthfulness, status: source_parity, target: finance.uzi.native.analyze_stock}
+  - {id: hollow_panel_consensus_guard, status: source_parity, target: finance.uzi.native.analyze_stock}
+  - {id: short_mandate_consensus_separation, status: source_parity, target: finance.uzi.native.analyze_stock}
+  - {id: one_liner_long_mandate_count, status: source_parity, target: finance.uzi.native.report.compose}
+  - {id: profile_ui_executable_panel_count, status: host_boundary, target: fund_holding_report_profile_selector}
+  - {id: recovery_artifact_refresh, status: source_parity, target: finance.uzi.native.analyze_stock}
+  - {id: safe_rule_placeholder_rendering, status: source_parity, target: finance.uzi.native.analyze_stock}
+  - {id: nullable_moat_idea_screen_bridge, status: host_boundary, target: finance.uzi.native.analyze_stock}
+
+integration_contracts:
+  root_collection:
+    status: source_parity
+    canonical_upstream_entry: run.py
+    host_entry: domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime.Uzi392FetcherRuntime.collect_symbol
+    host_opt_in_intents: [stock_check, uzi_analyze_stock, stock_compare, uzi_portfolio_batch]
+    alignment_scope: resolved_equity_collection_branch
+    route_granularity: whole_symbol
+    default_lane: lib.pipeline.collect.collect
+    default_preflight: lib.pipeline.run._preflight_guards
+    single_symbol:
+      intents: [stock_check, uzi_analyze_stock]
+      forced_legacy_condition: UZI_LEGACY=1
+      forced_and_fallback_lane: run_real_test.collect_raw_data
+      fallback_trigger: preflight_or_pipeline_collection_exception
+    multi_symbol:
+      intents: [stock_compare, uzi_portfolio_batch]
+      upstream_runners: [lib.versus_runner.run_versus, lib.portfolio_runner.run_portfolio]
+      ignores_root_UZI_LEGACY_switch: true
+      pipeline_error: skip_symbol_unless_a_complete_report_cache_can_be_proven
+      current_host_cache_boundary: raw_only_cache_is_not_treated_as_complete_report_cache
+      legacy_retry: false
+      failed_symbol_host_recovery: disabled
+      failed_symbol_native_analysis: skipped
+    provider_fetch_error: pipeline_dim_result_error_without_legacy_fallback
+    host_boundaries:
+      - pinned_name_resolution_and_security_classification_are_reused_without_CLI_prompts_or_fund_holding_loop
+      - Agent_OS_native_analysis_owns_post_collection_scoring_and_rendering
+      - post_collection_failure_does_not_recollect_legacy
+    execution_metadata:
+      field: _uzi_execution
+      lane_values: [pipeline, legacy_forced, legacy_fallback]
+      fallback_reason: null_or_exception_type_only
+    profile_semantics:
+      pipeline_collection_count: {lite: 22, medium: 22, deep: 22}
+      snapshot_transport_count: {lite: 22, medium: 22, deep: 22}
+      expected_self_review_fetcher_count: {lite: 7, medium: 20, deep: 20}
+      legacy_numbered_fetcher_count: {lite: 7, medium: 20, deep: 20}
+      executable_panel_seat_count: {lite: 66, medium: 66, deep: 66}
+      stale_declared_panel_seat_count: {lite: 10, medium: 51, deep: 51}
+      quick_scan_explicit_panel_seat_count: 10
+  raw_data_shape:
+    status: source_parity
+    common_fields: [ticker, market, dimensions]
+    pipeline_lane:
+      identity_fields: [code, full]
+      registry_entries_executed: 22
+      dimension_envelopes: pinned_pipeline_dim_result
+      fund_holders_dimension_key: 6_fund_holders
+      fund_managers: optional_top_level_spill
+      similar_stocks: optional_top_level_spill_replacing_same_named_dimension
+    legacy_lanes:
+      collection_timestamp_field: fetched_at
+      dimensions: profile_scoped_numbered_fetcher_envelopes
+      fund_holders_dimension_key: absent
+      fund_managers: top_level_bonus
+      similar_stocks: top_level_bonus
+    artifact_transport:
+      dimension_envelope_field: _uzi_raw_result
+      root_presence_field: _uzi_root_fields
+      bonus_presence_field: _uzi_top_level_fields
+      native_source_trace_field: _uzi_source_trace
+      snapshot_source_trace_field: source_trace
+      recovery_source_refs: every_recovery_provider_is_projected_into_artifact_lineage
+      presence_semantics: absent_none_and_empty_list_are_distinct
+      raw_round_trip_scope: lossless_before_recovery;recovery_additions_are_explicit_and_traced
+    fund_stats_top_n_by_profile: {lite: 5, medium: 20, deep: 100}
+  snapshot_cache:
+    status: source_parity
+    owner: Agent OS snapshot envelope mirrors raw_data dimension resume; vendored lib.cache owns provider sub-cache
+    pipeline_lane:
+      previous_input: explicit_raw_previous_then_pinned_raw_data_cache
+      reused_dimensions: every_fresh_dimension_envelope_accepted_by_lib.pipeline.collect._is_resume_valid_including_0_basic
+      validity: nonempty_data_and_quality_not_missing_or_error_and_fallback_not_true_and_numeric_fetched_at_within_fetcher_cache_ttl
+      timestamp_free_previous_envelope: refetch
+      top_level_spills: not_independent_dimension_cache_entries
+      active_lane_note: resumed_dimension_envelopes_may_have_been_created_by_a_previous_legacy_run
+      process_UZI_NO_RESUME: ignored_by_v3
+      single_request_no_resume: maps_to_resume_false
+      multi_runner_resume: always_true_and_public_no_resume_is_rejected
+    legacy_lanes:
+      numbered_dimensions: reuse valid cached raw result without TTL expiry
+      profile_partition: none for native numbered dimensions, matching ticker-level raw_data resume
+      always_refetched_dimensions: [0_basic]
+      always_refetched_bonus: [6_fund_holders, similar_stocks]
+      active_lane_note: resumed_numbered_dimension_envelopes_may_have_been_created_by_a_previous_pipeline_run
+  collection_waves:
+    status: route_specific_source_parity
+    pipeline_lane:
+      canonical_upstream_path: skills/deep-analysis/scripts/lib/pipeline/collect.py::collect
+      registry_scope: all_22_fetchers_for_lite_medium_and_deep
+      max_workers: 6
+      worker_model: multiprocessing_spawn_with_force_terminate_then_kill
+      wave_1: [0_basic]
+      wave_1_hard_timeout_seconds: 120
+      wave_2: 17_non_dependent_registry_fetchers_including_6_fund_holders_and_similar_stocks
+      wave_3_sequential: [13_policy, 3_macro, 7_industry, 9_futures]
+      dependency_context: 0_basic_plus_8_materials_and_1_financials_when_present
+      per_fetcher_hard_timeout_seconds: 120
+      host_optional_fetcher_timeout_seconds: {similar_stocks: 30}
+      per_wave_hard_timeout_seconds: 300
+      timeout_env: {fetcher: UZI_PIPELINE_FETCHER_TIMEOUT, wave: UZI_PIPELINE_WAVE_TIMEOUT}
+      provider_error_semantics: normalize_validate_and_return_dim_result_error
+      mini_racer_policy:
+        serial_group: [10_valuation, 12_capital_flow, 7_industry]
+        disabled_valuation: main_safe_without_mini_racer
+        disabled_other_modules: missing_dim_result
+    legacy_lanes:
+      canonical_upstream_path: skills/deep-analysis/scripts/run_real_test.py::collect_raw_data
+      max_workers: 6
+      wave_1: [0_basic]
+      wave_2: profile_scoped_numbered_fetchers
+      wave_2_completion_classification_seconds: 300
+      wave_2_configured_fetcher_seconds: {default: 90, 6_research: 180, 1_financials: 150, 10_valuation: 150, 15_events: 120}
+      wave_3_bonus: [6_fund_holders, similar_stocks]
+      wave_3_workers: 2
+      wave_3_completion_classification_seconds: 180
+      wave_3_configured_fetcher_seconds: 120
+      timeout_semantics: completion_classification_windows_not_hard_thread_cancellation
+      mini_racer_policy: run_fetcher_lock_disable_force_and_crash_sentinel
+    host_transport_guard: context-scoped requests default timeout 20s applies to direct_and_legacy_UZI_threads;pipeline_spawn_workers_use_upstream_process_scheduler_with_similar_stocks_narrowed_to_30s;peer_Agent_OS_traffic_is_unaffected
+    sensitive_source_guard: request_local_Xueqiu_policy_is_transported_to_the_spawned_19_contests_worker
+    legacy_long_running_worker_risk: a provider performing many bounded requests may finish after the classification window because Python threads cannot be force-cancelled
+  self_review_compatibility_view:
+    status: source_parity
+    original_evidence_mutated: false
+    nullable_string_defaults:
+      - dimensions.0_basic.data.industry
+      - dimensions.7_industry.data.cninfo_metrics.industry_name_match
+    dcf_output_alias:
+      producer: intrinsic_per_share
+      upstream_self_review_reader: intrinsic_per_share_then_intrinsic_value_per_share
+    comps_output_alias:
+      producer: implied_price
+      upstream_self_review_reader: implied_price_then_target_price_implied
+  panel_only:
+    status: source_parity
+    collection_profile: lite
+    executable_panel_seats: 66
+    output: [dimensions, panel, synthesis]
+  panel_mandates:
+    long_consensus: excludes_short_mandates
+    short_consensus: separate_short_candidates_and_no_short_thesis
+    short_investors: [burry, chanos]
+
+standalone_command_collection:
+  explicit_profiles:
+    quick_scan: lite
+    uzi_panel_only: lite
+    uzi_initiate: deep
+    uzi_ic_memo: deep
+  generic_profile_resolver_default: medium
+  fixed_scopes:
+    quick_scan: [1_financials, 2_kline, 10_valuation, 18_trap]
+    uzi_panel_only: [0_basic, 1_financials]
+    uzi_scan_trap: [18_trap]
+    uzi_segmental_model: [0_basic, 1_financials, 5_chain, 6_research, 13_policy, 14_moat, 15_events]
+    uzi_dcf: [0_basic, 1_financials]
+    uzi_comps: [0_basic, 1_financials, 10_valuation, similar_stocks]
+    uzi_lbo: [1_financials]
+    uzi_initiate: all_22_pipeline_snapshots
+    uzi_ic_memo: all_22_pipeline_snapshots
+    uzi_earnings_preview: all_22_pipeline_snapshots
+    uzi_earnings: [1_financials, 6_research]
+    uzi_catalysts: [15_events]
+    uzi_thesis: [0_basic, 1_financials, 2_kline, 10_valuation]
+    uzi_screen: [1_financials, 14_moat]
+    uzi_dd: [0_basic, 1_financials, 4_peers, 5_chain, 7_industry, 11_governance, 13_policy, 14_moat, 15_events, 17_sentiment, 18_trap]
+    uzi_model_update: [0_basic, 1_financials, 10_valuation, similar_stocks]
+    uzi_three_statement_method: [0_basic, 1_financials, 10_valuation]
+    uzi_accretion_dilution_method: [0_basic, 1_financials]
+    uzi_morning_note_method: [0_basic, 2_kline, 10_valuation, 12_capital_flow, 16_lhb, 17_sentiment]
+    uzi_sector_review_method: [0_basic, 4_peers, 5_chain, 7_industry]
+    uzi_porter_bcg_method: [0_basic, 7_industry, 14_moat]
+    uzi_unit_economics_method: [0_basic, 1_financials]
+    uzi_ai_readiness: [0_basic, 1_financials, 5_chain, 7_industry, 11_governance, 13_policy, 14_moat, 15_events, 17_sentiment, 18_trap]
+    uzi_value_creation_plan_method: [0_basic, 1_financials, 7_industry]
+  screen_style_scopes:
+    value: [0_basic, 1_financials, 10_valuation]
+    growth: [1_financials]
+    quality: [1_financials, 14_moat]
+    gulp: [0_basic, 1_financials, 2_kline, 10_valuation]
+    short: [0_basic, 1_financials, 10_valuation]
+  pinned_optional_defaults:
+    uzi_thesis: {method: thesis_tracker, direction: long}
+    uzi_screen: {method: quantitative_screen, style: quality}
+
+root_modes:
+  school_lock:
+    status: source_parity
+    values: [A, B, C, D, E, F, G, H, I]
+    transport: request_local_locked_uzi_environment
+    targets: [finance.uzi.native.analyze_stock, finance.uzi.native.report.compose]
+  versus:
+    status: source_parity
+    symbols: {minimum: 2, maximum: 4}
+    renderer: lib.versus_runner._render_html
+    target: finance.stock.compare.report.compose
+  portfolio:
+    status: source_parity
+    missing_weight_semantics: native_equal_or_remaining_weight_normalization
+    renderer: lib.portfolio_runner._render_html
+    target: finance.uzi.portfolio.report.compose
 
 fetchers:
   - {id: 0_basic, target: market_snapshot_skill, status: source_parity}
@@ -51,14 +276,14 @@ fetchers:
   - {id: 10_valuation, target: uzi_valuation_snapshot_skill, status: source_parity}
   - {id: 11_governance, target: uzi_governance_snapshot_skill, status: source_parity}
   - {id: 12_capital_flow, target: capital_flow_snapshot_skill, status: source_parity}
-  - {id: 13_policy, target: policy_snapshot_skill, status: source_parity}
+  - {id: 13_policy, target: policy_snapshot_skill, status: source_parity, scope: stock_uzi_route_only, sector_research_route: host_capability_outside_uzi_parity}
   - {id: 14_moat, target: uzi_moat_snapshot_skill, status: source_parity}
   - {id: 15_events, target: events_snapshot_skill, status: source_parity}
   - {id: 16_lhb, target: lhb_snapshot_skill, status: source_parity}
   - {id: 17_sentiment, target: sentiment_snapshot_skill, status: source_parity}
   - {id: 18_trap, target: uzi_trap_snapshot_skill, status: source_parity}
   - {id: 19_contests, target: uzi_contests_snapshot_skill, status: source_parity, sensitive_source: explicit_enable_only}
-  - {id: fund_holders, target: uzi_fund_holders_snapshot_skill, status: source_parity}
+  - {id: 6_fund_holders, target: uzi_fund_holders_snapshot_skill, status: source_parity}
   - {id: similar_stocks, target: uzi_similar_stocks_snapshot_skill, status: source_parity}
 
 commands:
@@ -110,7 +335,15 @@ methods:
 
 recovery_loop:
   status: implemented
-  order: [primary_provider, integrity_check, playwright, web_ddgs, mx, agent_qualitative_inference, recompute, self_review]
+  order:
+    - primary_provider
+    - integrity_check_and_suggested_fix_plan
+    - suggested_fix_actions_in_native_priority
+    - six_dimension_recovery_mx_then_ddgs
+    - playwright_recovery_when_profile_enabled
+    - agent_qualitative_inference
+    - recompute
+    - self_review
   termination: critical_zero_or_real_sources_exhausted_or_cancelled
   artificial_round_limit: false
   numeric_or_factual_inference: forbidden
@@ -120,14 +353,20 @@ native_report:
   status: source_parity
   template: domain_packs/finance_ashare/vendor/uzi_3_9_2/assets/report-template.html
   presentation_version: 3.9.4
-  presentation_commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
+  presentation_commit: b004d7a988ca53a4805bf36784af091fa1209f22
   template_sha256: 1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8
   renderer_helpers:
     lib/report/dim_viz.py: 032dd9e0429f8d5e4ffd030dcc33c6360817b4ac81f6983479b4f82adef29304
     lib/report/institutional.py: ca2e0ff2ba3dcc2690834da994e5a292e466b137875f660306be4687506e3fef
-    lib/report/panel_cards.py: 0b21aefb50d87dc992a378cbe8e50eef9988e0d69147d9956db759858ec666ce
+    lib/report/panel_cards.py: 28dfdb0b9ba226cc92236b0f31e7032c22fe624c2069b140410429923c82e828
     lib/report/svg_primitives.py: 2b13c6fdc9bfc1a5182a39c74d75d8c14ce1d52c26b7e88ae32975d1b547f93e
   html_pdf_same_source: true
+  side_outputs:
+    share_card_png: {status: source_parity, selector: "#share-card", device_scale_factor: 2, viewport: [1280, 800]}
+    war_report_png: {status: source_parity, selector: "#war-report", device_scale_factor: 2, viewport: [1280, 800]}
+    one_liner_txt: {status: source_parity, scope: single_stock}
+  versus_html: {status: source_parity, input: ArtifactBoard}
+  portfolio_html: {status: source_parity, input: ArtifactBoard}
   critical_blocks_export: true
   warning_banner: upstream_native
   pdf_slots: 2
@@ -136,8 +375,12 @@ native_report:
 
 verification:
   fetcher_and_registry_parity: tests.test_uzi_source_parity
+  actual_import_mapping_runtime_ledger: tests.test_uzi_source_parity.UziSourceParityTests.test_fetcher_mapping_runtime_snapshot_and_ledger_are_cross_checked
+  root_collection_router: tests.test_uzi_root_collection_router
+  pristine_checkout_tree: tests.test_uzi_checkout_parity
   command_parity: tests.test_uzi_392_commands
   method_parity: tests.test_uzi_392_native_methods
   runtime_boundary: tests.test_uzi_392_vendor_runtime
+  pinned_upstream_suite: .github/workflows/ci.yml::uzi-upstream-tests
   quality_gate: tests.test_uzi_392_analysis
   quick_scan: tests.test_uzi_quick_scan

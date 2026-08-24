@@ -1,24 +1,77 @@
 schema_version: "3"
 source:
   repository: https://github.com/wbh604/UZI-Skill
-  commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
+  commit: b004d7a988ca53a4805bf36784af091fa1209f22
   version: 3.9.4
   license: MIT
   license_sha256: 78bebb5232741327c31b0da4f5bbd570dc59ab3c3230582a4d1b4650238a7d58
   vendored_root: domain_packs/finance_ashare/vendor/uzi_3_9_2
 
 contract:
-  adapter: domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime.Uzi392FetcherRuntime
-  invocation: exact_upstream_function_and_arguments
-  returned_object: exact_upstream_identity
+  adapter: domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime.Uzi392FetcherRuntime.collect_symbol
+  canonical_root_entry: run.py
+  host_route_scope: resolved_equity_collection_for_full_analysis_symbol_bundle
+  route_granularity: whole_symbol
+  default_route: skills/deep-analysis/scripts/lib/pipeline/collect.py::collect
+  default_route_preflight: skills/deep-analysis/scripts/lib/pipeline/run.py::_preflight_guards
+  single_symbol_intents: [stock_check, uzi_analyze_stock]
+  single_symbol_forced_legacy_condition: UZI_LEGACY=1
+  single_symbol_forced_and_fallback_route: skills/deep-analysis/scripts/run_real_test.py::collect_raw_data
+  single_symbol_fallback_trigger: preflight_or_pipeline_collection_exception
+  multi_symbol_intents: [stock_compare, uzi_portfolio_batch]
+  multi_symbol_route: pinned_versus_and_portfolio_run_pipeline_per_symbol
+  multi_symbol_error_behavior: skip_symbol_without_legacy_when_complete_report_cache_is_not_provable
+  multi_symbol_failed_symbol_host_recovery: disabled
+  multi_symbol_failed_symbol_native_analysis: skipped
+  pipeline_provider_error_behavior: return_dim_result_error_without_legacy_fallback
+  invocation: route_selected_exact_upstream_function_and_arguments
+  returned_object_before_artifact_boundary: exact_upstream_identity
+  returned_object_before_artifact_boundary_scope: direct_legacy_fetcher_adapter
+  pipeline_result_contract: upstream_data_extraction_normalization_validation_and_dim_result
+  root_result_contract: upstream_raw_data_shape_plus_uzi_execution_lane_metadata
+  route_metadata: _uzi_execution
+  root_cli_boundary: pinned_target_resolution_and_security_classification_without_CLI_prompts_or_fund_holding_loop;Agent_OS_owns_post_collection_analysis_rendering
+  artifact_boundary: canonical_json_equality_with_provenance
   source_registry: exact_deep_equality
   source_registry_count: 73
-  provider_errors: preserved_as_upstream_result
-  sensitive_sources: explicit_enable_only
+  provider_errors: preserved_per_selected_upstream_lane
+  collection_orchestrator: root_v3_primary_with_route_specific_single_or_multi_error_policy
+  pipeline_execution: spawn_process_workers_with_hard_per_fetcher_and_per_wave_timeouts
+  pipeline_timeout_defaults_seconds: {fetcher: 120, wave: 300}
+  pipeline_resume_freshness: fetcher_cache_ttl_requires_numeric_fetched_at
+  pipeline_registry_dimensions: all_22_fetchers_for_every_profile
+  profile_source_dimensions_scope: legacy_numbered_wave_and_expected_self_review_dimensions
+  snapshot_cache: route_specific_pinned_pipeline_or_legacy_resume_semantics_plus_lib_cache
+  v3_single_no_resume: request_no_resume_maps_to_resume_false
+  v3_process_UZI_NO_RESUME: ignored
+  v3_multi_resume: always_true_and_public_no_resume_is_rejected
+  artifact_source_trace: snapshot_schema_and_source_refs_preserve_native_and_recovery_providers
+  raw_round_trip_scope: lossless_before_recovery;explicit_recovery_fields_are_traced_mutations
+  executable_panel_seats_by_profile: {lite: 66, medium: 66, deep: 66}
+  stale_declared_panel_seats_by_profile: {lite: 10, medium: 51, deep: 51}
+  non_uzi_sector_policy_route: host_capability_outside_uzi_parity
+  sensitive_sources: explicit_enable_only_with_request_policy_transported_to_spawn_worker
   external_checkout_runtime: forbidden
 
+vendored_methodology_resources:
+  standalone_skill_roots: [skills/investor-panel, skills/lhb-analyzer, skills/trap-detector]
+  canonical_file_count: 17
+  path_sensitive_sha256: 8bc93074f001fa97154629dcd33cf5a6dfed653cf79d954fa883570be0a4f1ca
+  consumption: reference_only_static_contracts
+  deep_analysis_relocations:
+    skills/deep-analysis/SKILL.md: skill/SKILL.md
+    skills/deep-analysis/references: skill/references
+    skills/deep-analysis/personas: skill/personas
+    skills/deep-analysis/scripts: scripts
+    skills/deep-analysis/assets: assets
+  host_boundary:
+    upstream_root_router: replaced_by_agent_os
+    upstream_cli_entrypoints: replaced_by_agent_os
+    plugin_installers_and_hooks: distribution_only
+    upstream_tests: pinned_checkout_ci_surface
+
 defaults: &defaults
-  source_commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
+  source_commit: b004d7a988ca53a4805bf36784af091fa1209f22
   migration_status: source_parity
   result_equivalence: exact
   invocation_acceptance: tests.test_uzi_392_vendor_runtime.Uzi392VendorRuntimeTests.test_all_22_fetcher_dispatches_preserve_upstream_results_and_call_contracts
@@ -36,7 +89,11 @@ fetchers:
   - {source_id: 9_futures, source_path: skills/deep-analysis/scripts/fetch_futures.py, target_skill: uzi_futures_snapshot_skill, <<: *defaults}
   - {source_id: 10_valuation, source_path: skills/deep-analysis/scripts/fetch_valuation.py, target_skill: uzi_valuation_snapshot_skill, <<: *defaults}
   - {source_id: 11_governance, source_path: skills/deep-analysis/scripts/fetch_governance.py, target_skill: uzi_governance_snapshot_skill, <<: *defaults}
-  - {source_id: 12_capital_flow, source_path: skills/deep-analysis/scripts/fetch_capital_flow.py, target_skill: capital_flow_snapshot_skill, <<: *defaults}
+  - source_id: 12_capital_flow
+    source_path: skills/deep-analysis/scripts/fetch_capital_flow.py
+    target_skill: capital_flow_snapshot_skill
+    invocation_acceptance: tests.test_uzi_source_parity.UziSourceParityTests.test_capital_flow_default_pipeline_imports_actual_vendored_module
+    <<: *defaults
   - {source_id: 13_policy, source_path: skills/deep-analysis/scripts/fetch_policy.py, target_skill: policy_snapshot_skill, <<: *defaults}
   - {source_id: 14_moat, source_path: skills/deep-analysis/scripts/fetch_moat.py, target_skill: uzi_moat_snapshot_skill, <<: *defaults}
   - {source_id: 15_events, source_path: skills/deep-analysis/scripts/fetch_events.py, target_skill: events_snapshot_skill, <<: *defaults}
@@ -52,7 +109,7 @@ fetchers:
       allowlist: COGNITRADE_SENSITIVE_SOURCE_ALLOWLIST
       credential: COGNITRADE_XUEQIU_COOKIE
       default: disabled
-  - {source_id: fund_holders, source_path: skills/deep-analysis/scripts/fetch_fund_holders.py, target_skill: uzi_fund_holders_snapshot_skill, <<: *defaults}
+  - {source_id: 6_fund_holders, source_path: skills/deep-analysis/scripts/fetch_fund_holders.py, target_skill: uzi_fund_holders_snapshot_skill, <<: *defaults}
   - {source_id: similar_stocks, source_path: skills/deep-analysis/scripts/fetch_similar_stocks.py, target_skill: uzi_similar_stocks_snapshot_skill, <<: *defaults}
 
 source_registry:
@@ -66,12 +123,17 @@ source_registry:
   acceptance: tests.test_uzi_source_parity.UziSourceParityTests.test_catalog_fields_are_deep_equal_to_pinned_upstream_registry
 
 profiles:
-  lite: {source_dimensions: [0_basic, 1_financials, 2_kline, 10_valuation, 11_governance, 15_events, 16_lhb], panel_seats: 10}
-  medium: {source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests], panel_seats: 51}
-  deep: {source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests], panel_seats: 66}
+  lite: {source_dimensions: [0_basic, 1_financials, 2_kline, 10_valuation, 11_governance, 15_events, 16_lhb], bonus_collectors: [6_fund_holders, similar_stocks], panel_seats: 66}
+  medium: {source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests], bonus_collectors: [6_fund_holders, similar_stocks], panel_seats: 66}
+  deep: {source_dimensions: [0_basic, 1_financials, 2_kline, 3_macro, 4_peers, 5_chain, 6_research, 7_industry, 8_materials, 9_futures, 10_valuation, 11_governance, 12_capital_flow, 13_policy, 14_moat, 15_events, 16_lhb, 17_sentiment, 18_trap, 19_contests], bonus_collectors: [6_fund_holders, similar_stocks], panel_seats: 66}
 
 verification:
   fetcher_id_set: exact_22
   source_registry_deep_equality: exact_73
-  object_identity: preserved
+  route_contract: tests.test_uzi_root_collection_router
+  actual_import_mapping_runtime_ledger: tests.test_uzi_source_parity.UziSourceParityTests.test_fetcher_mapping_runtime_snapshot_and_ledger_are_cross_checked
+  pristine_checkout_tree: tests.test_uzi_checkout_parity
+  object_identity: direct_legacy_fetcher_adapter_only
+  pipeline_result: exact_pinned_dim_result_contract
+  provider_smoke_scope: direct_per_dimension_provider_availability_not_full_root_v3
   external_runtime_dependency: none

@@ -66,6 +66,8 @@ def _snapshots() -> list[dict]:
                     "total_debt": 500,
                     "cash": 200,
                 },
+                "operating_cash_flow_yi": 160,
+                "gross_margin": 35,
             },
         ),
         _row(
@@ -88,7 +90,80 @@ def _snapshots() -> list[dict]:
             "similar_stocks",
             {"similar_stocks": [{"ticker": "601398", "name": "工商银行", "pe": 5.0, "market_cap_yi": 10000}]},
         ),
+        _row(
+            "fund_holders",
+            {
+                "top_holders": [{"name": "测试基金", "shares": 100}],
+                "fund_managers": [{"name": "测试经理", "fund": "测试基金"}],
+            },
+        ),
     ]
+
+
+def _complete_method_snapshots() -> list[dict]:
+    """Add only the observations needed by strict standalone-method gates.
+
+    ``test_uzi_392_analysis`` imports the historical ``_snapshots`` fixture,
+    so keep that fixture stable and enrich a private copy for method tests.
+    """
+    rows = _snapshots()
+    enrichments = {
+        "events": {
+            "event_timeline": ["2026-08-01 业绩增长"],
+            "recent_news": [{"title": "业绩发布"}],
+        },
+        "industry": {
+            "tam": "万亿元级",
+            "growth": "6%",
+            "lifecycle": "成熟期",
+            "industry_market_cap_yi": 60000,
+            "cninfo_metrics": {"total_mcap_yi": 60000},
+        },
+        "chain": {"main_business_breakdown": ["公司金融"]},
+        "moat": {
+            "scores": {
+                "intangible": 8,
+                "switching": 8,
+                "network": 7,
+                "scale": 9,
+            }
+        },
+        "research": {"consensus_rev_yi": 1350, "consensus_ni_yi": 135},
+    }
+    for row in rows:
+        data = row["facts"]["_uzi_raw_result"]["data"]
+        data.update(enrichments.get(row["snapshot_type"], {}))
+    rows.extend(
+        [
+            _row(
+                "peers",
+                {
+                    "peer_table": [
+                        {"ticker": "601398", "name": "工商银行", "pe": 5.0}
+                    ]
+                },
+            ),
+            _row(
+                "governance",
+                {
+                    "pledge": [{"质押比例": 10}],
+                    "insider_trades_1y": [{"direction": "buy"}],
+                },
+            ),
+            _row(
+                "capital_flow",
+                {
+                    "main_5d": "净流入 1.2 亿元",
+                    "main_fund_flow_20d": [{"净额": 1.2}],
+                },
+            ),
+            _row("policy", {"snippets": [{"title": "金融支持实体经济"}]}),
+            _row("lhb", {"lhb_count_30d": 2, "matched_youzi": ["机构专用"]}),
+            _row("sentiment", {"thermometer_value": 68, "sentiment_label": "偏热"}),
+            _row("trap", {"trap_level": "low", "signals": []}),
+        ]
+    )
+    return rows
 
 
 def _stock_inputs() -> dict:
@@ -130,8 +205,6 @@ def _stock_inputs() -> dict:
                 "synergies_yi": 10,
                 "new_debt_rate": 0.05,
             },
-            "unit_economics": {"accept_uzi_native_defaults": True},
-            "value_creation_plan": {"accept_uzi_native_defaults": True},
             "thesis_tracker": {"direction": "long"},
             "quantitative_screen": {"style": "quality"},
         },
@@ -174,7 +247,7 @@ class Uzi392NativeMethodTests(unittest.TestCase):
         )
 
     def test_every_native_method_has_a_real_result_or_explicit_data_gap(self) -> None:
-        rows = _snapshots()
+        rows = _complete_method_snapshots()
         inputs = _stock_inputs()
         portfolio_inputs = {
             "portfolio_holdings": [
@@ -183,8 +256,7 @@ class Uzi392NativeMethodTests(unittest.TestCase):
             ],
             "benchmark_return": 4,
             "rebalance_targets": {"600000.SH": 0.5, "019785": 0.5},
-            "asset_class_targets": {"equity": 0.5, "bond": 0.5},
-            "accept_uzi_native_fee_schedule": True,
+            "asset_class_targets": {"equity": 50, "bond": 50},
         }
         for method_id in UZI_NATIVE_METHOD_IDS:
             with self.subTest(method_id=method_id):
@@ -202,7 +274,7 @@ class Uzi392NativeMethodTests(unittest.TestCase):
                 self.assertTrue(isinstance(row["result"], dict) or row["data_gap"])
 
     def test_adapter_preserves_upstream_dcf_result_byte_for_byte(self) -> None:
-        rows = _snapshots()
+        rows = _complete_method_snapshots()
         raw = build_uzi_raw(rows, "600000")
         features = importlib.import_module("lib.stock_features").extract_features(raw, {})
         expected = importlib.import_module("lib.fin_models").compute_dcf(features)
@@ -210,7 +282,7 @@ class Uzi392NativeMethodTests(unittest.TestCase):
         self.assertEqual(actual["results"][0]["result"], expected)
 
     def test_raw_builder_joins_suffixed_and_plain_a_share_symbols(self) -> None:
-        rows = _snapshots()
+        rows = _complete_method_snapshots()
         rows[0]["symbol"] = "600000.SH"
         rows[1]["symbol"] = "600000"
 
@@ -218,10 +290,42 @@ class Uzi392NativeMethodTests(unittest.TestCase):
 
         self.assertIn("0_basic", raw["dimensions"])
         self.assertIn("1_financials", raw["dimensions"])
-        self.assertEqual(raw["ticker"], "600000.SH")
+        self.assertEqual(raw["ticker"], "600000")
+        self.assertEqual(raw["code"], "600000")
+        self.assertEqual(raw["full"], "600000.SH")
+
+    def test_raw_builder_uses_basic_resolved_ticker_for_a_named_entity(self) -> None:
+        market = _row(
+            "market",
+            {"code": "600519", "name": "贵州茅台", "industry": "白酒"},
+        )
+        market["symbol"] = "贵州茅台"
+        market["facts"]["_uzi_raw_result"].update({
+            "ticker": "600519.SH",
+            "market": "A",
+        })
+
+        raw = build_uzi_raw([market], "贵州茅台")
+
+        self.assertEqual(raw["ticker"], "600519.SH")
+        self.assertEqual(raw["code"], "600519")
+        self.assertEqual(raw["full"], "600519.SH")
+
+    def test_raw_builder_matches_uzi_bonus_collector_top_level_contract(self) -> None:
+        raw = build_uzi_raw(_complete_method_snapshots(), "600000")
+
+        self.assertEqual(raw["similar_stocks"][0]["ticker"], "601398")
+        self.assertNotIn("similar_stocks", raw["dimensions"])
+        self.assertEqual(raw["fund_managers"][0]["name"], "测试经理")
+        self.assertIn("6_fund_holders", raw["dimensions"])
+        self.assertNotIn("fund_managers", raw["dimensions"]["6_fund_holders"]["data"])
+        self.assertEqual(
+            raw["dimensions"]["6_fund_holders"]["data"]["top_holders"][0]["name"],
+            "测试基金",
+        )
 
     def test_adapter_preserves_workflow_decision_and_tier1_results(self) -> None:
-        rows = _snapshots()
+        rows = _complete_method_snapshots()
         raw = build_uzi_raw(rows, "600000")
         features = importlib.import_module("lib.stock_features").extract_features(raw, {})
         cases = {
@@ -234,8 +338,68 @@ class Uzi392NativeMethodTests(unittest.TestCase):
                 actual = execute_native_method(method_id, rows, ["600000"], {})
                 self.assertEqual(actual["results"][0]["result"], expected)
 
+    def test_native_errors_and_exceptions_do_not_escape_or_look_available(self) -> None:
+        rows = [
+            _row("market", {"code": "600000", "name": "浦发银行", "price": 10}),
+            _row("fundamental", {"revenue_history": [], "net_profit_history": []}),
+        ]
+
+        native_error = execute_native_method("dcf", rows, ["600000"], {})
+        self.assertEqual(native_error["quality_status"], "data_gap")
+        self.assertIsInstance(native_error["results"][0]["result"], dict)
+        self.assertIn("error", native_error["results"][0]["result"])
+        self.assertIn("native_error", native_error["results"][0]["data_gap"])
+
+        native_exception = execute_native_method(
+            "initiation_report", rows, ["600000"], {}
+        )
+        self.assertEqual(native_exception["quality_status"], "data_gap")
+        self.assertIsNone(native_exception["results"][0]["result"])
+        self.assertIn(
+            "native_exception:TypeError",
+            native_exception["results"][0]["data_gap"],
+        )
+
+    def test_accretion_adapter_maps_the_pinned_acquirer_field_names(self) -> None:
+        rows = _complete_method_snapshots()
+        assumptions = _stock_inputs()["method_assumptions"]["accretion_dilution"]
+        payload = execute_native_method(
+            "accretion_dilution",
+            rows,
+            ["600000"],
+            {"method_assumptions": {"accretion_dilution": assumptions}},
+        )
+        result = payload["results"][0]["result"]
+
+        self.assertEqual(payload["quality_status"], "available")
+        self.assertGreater(result["pro_forma_shares_yi"], 300)
+        self.assertIn("收购方 140.0", result["methodology_log"][2])
+
+    def test_portfolio_rebalance_maps_public_value_fields_to_native_input(self) -> None:
+        holdings = [
+            {
+                "ticker": "600000.SH",
+                "weight": 1.0,
+                "value": 100000,
+                "asset_class": "A股蓝筹",
+            }
+        ]
+        payload = execute_native_method(
+            "portfolio_rebalance", [], [], {"portfolio_holdings": holdings}
+        )
+
+        self.assertEqual(payload["quality_status"], "degraded")
+        self.assertEqual(
+            payload["results"][0]["result"]["portfolio_total_yuan"],
+            100000,
+        )
+        self.assertIn(
+            "native_defaults_used:portfolio_rebalance.target_allocation",
+            payload["data_gap"],
+        )
+
     def test_all_23_method_results_equal_their_pinned_upstream_functions(self) -> None:
-        rows = _snapshots()
+        rows = _complete_method_snapshots()
         raw = build_uzi_raw(rows, "600000")
         features = importlib.import_module("lib.stock_features").extract_features(raw, {})
         fin = importlib.import_module("lib.fin_models")
@@ -250,7 +414,7 @@ class Uzi392NativeMethodTests(unittest.TestCase):
                 "pe": row.get("pe") or row.get("pe_ttm"),
                 "market_cap_yi": row.get("market_cap_yi") or row.get("market_cap"),
             }
-            for row in (raw["dimensions"]["similar_stocks"]["data"]["similar_stocks"])
+            for row in raw["similar_stocks"]
         ]
         expected = {
             "dcf": fin.compute_dcf(features, None),
@@ -258,7 +422,11 @@ class Uzi392NativeMethodTests(unittest.TestCase):
             "three_statement": fin.project_three_stmt(features, assumptions["three_statement"]),
             "quick_lbo": fin.quick_lbo(features, **assumptions["quick_lbo"]),
             "accretion_dilution": fin.accretion_dilution(
-                features,
+                {
+                    **features,
+                    "shares_yi": features.get("shares_outstanding_yi"),
+                    "net_income_yi": features.get("net_profit_latest_yi"),
+                },
                 assumptions["accretion_dilution"]["target"],
                 **{key: value for key, value in assumptions["accretion_dilution"].items() if key != "target"},
             ),
@@ -295,8 +463,7 @@ class Uzi392NativeMethodTests(unittest.TestCase):
             ],
             "benchmark_return": 4,
             "rebalance_targets": {"600000.SH": 0.5, "019785": 0.5},
-            "asset_class_targets": {"equity": 0.5, "bond": 0.5},
-            "accept_uzi_native_fee_schedule": True,
+            "asset_class_targets": {"equity": 50, "bond": 50},
         }
         expected.update({
             "returns_attribution": importlib.import_module("lib.tier1.returns_attrib").build_returns_attribution(
@@ -323,29 +490,627 @@ class Uzi392NativeMethodTests(unittest.TestCase):
                 )
                 self.assertEqual(actual["results"][0]["result"], expected[method_id])
 
-    def test_numeric_defaults_that_stand_in_for_user_decisions_are_blocked(self) -> None:
-        rows = _snapshots()
+    def test_pinned_numeric_defaults_execute_and_are_disclosed_as_degraded(self) -> None:
+        rows = _complete_method_snapshots()
         expected_gaps = {
-            "three_statement": "explicit_assumption_missing:revenue_growth_y1",
-            "quick_lbo": "explicit_assumption_missing:entry_multiple",
-            "accretion_dilution": "explicit_assumption_missing:target",
-            "model_update": "explicit_assumption_missing:__non_empty__",
-            "unit_economics": "accept_uzi_native_defaults_required",
-            "value_creation_plan": "accept_uzi_native_defaults_required",
+            "three_statement": "native_defaults_used:three_statement",
+            "quick_lbo": "native_defaults_used:quick_lbo",
+            "model_update": "native_defaults_used:model_update.demo_mode",
+            "unit_economics": "native_defaults_used:unit_economics",
+            "value_creation_plan": "native_defaults_used:value_creation_plan",
         }
         for method_id, expected_gap in expected_gaps.items():
             with self.subTest(method_id=method_id):
                 payload = execute_native_method(method_id, rows, ["600000"], {})
-                self.assertIsNone(payload["results"][0]["result"])
+                self.assertIsInstance(payload["results"][0]["result"], dict)
+                self.assertEqual(payload["quality_status"], "degraded")
                 self.assertIn(expected_gap, payload["data_gap"][0])
 
-    def test_missing_returns_are_not_coerced_to_zero_and_fee_schedule_is_explicit(self) -> None:
+        missing_target = execute_native_method(
+            "accretion_dilution", rows, ["600000"], {}
+        )
+        self.assertIsNone(missing_target["results"][0]["result"])
+        self.assertIn(
+            "explicit_assumption_missing:target",
+            missing_target["results"][0]["data_gap"],
+        )
+
+    def test_thesis_and_screen_use_the_pinned_uzi_defaults_when_omitted(self) -> None:
+        rows = _complete_method_snapshots()
+        thesis = execute_native_method("thesis_tracker", rows, ["600000"], {})
+        screen = execute_native_method("quantitative_screen", rows, ["600000"], {})
+
+        self.assertEqual(thesis["quality_status"], "degraded")
+        self.assertIn(
+            "native_source_limitation:roe_last_alias",
+            thesis["results"][0]["data_gap"],
+        )
+        self.assertEqual(thesis["results"][0]["result"]["direction"], "long")
+        self.assertEqual(screen["quality_status"], "available")
+        self.assertEqual(
+            screen["results"][0]["result"]["method"],
+            "Idea Screen (quality)",
+        )
+
+        invalid_thesis = execute_native_method(
+            "thesis_tracker",
+            rows,
+            ["600000"],
+            {"method_assumptions": {"thesis_tracker": {"direction": "sideways"}}},
+        )
+        invalid_screen = execute_native_method(
+            "quantitative_screen",
+            rows,
+            ["600000"],
+            {"method_assumptions": {"quantitative_screen": {"style": "momentum"}}},
+        )
+        self.assertEqual(
+            invalid_thesis["results"][0]["data_gap"],
+            ["explicit_assumption_invalid:direction"],
+        )
+        self.assertEqual(
+            invalid_screen["results"][0]["data_gap"],
+            ["explicit_assumption_invalid:style"],
+        )
+
+        no_pe = execute_native_method(
+            "thesis_tracker",
+            [
+                row
+                for row in rows
+                if row["snapshot_type"] not in {"market", "valuation"}
+            ],
+            ["600000"],
+            {},
+        )
+        self.assertEqual(
+            no_pe["results"][0]["data_gap"],
+            [
+                "observation_missing:pe",
+                "native_source_limitation:roe_last_alias",
+            ],
+        )
+
+    def test_method_outputs_do_not_treat_uncollected_dimensions_as_real_zeroes(self) -> None:
+        cases = {
+            "morning_note": ("lhb", "16_lhb"),
+            "quantitative_screen": ("moat", "14_moat"),
+            "sector_review": ("peers", "4_peers"),
+            "porter_bcg": ("moat", "14_moat"),
+            "value_creation_plan": ("industry", "7_industry"),
+            "ai_readiness": ("policy", "13_policy"),
+        }
+        for method_id, (missing_type, missing_dimension) in cases.items():
+            with self.subTest(method_id=method_id):
+                rows = [
+                    row
+                    for row in _complete_method_snapshots()
+                    if row["snapshot_type"] != missing_type
+                ]
+                payload = execute_native_method(method_id, rows, ["600000"], {})
+                self.assertEqual(payload["quality_status"], "degraded")
+                self.assertIsInstance(payload["results"][0]["result"], dict)
+                self.assertIn(
+                    f"dimension_missing:{missing_dimension}",
+                    payload["results"][0]["data_gap"],
+                )
+
+    def test_value_screen_does_not_treat_missing_pb_as_zero(self) -> None:
+        rows = _complete_method_snapshots()
+        for row in rows:
+            if row["snapshot_type"] in {"market", "valuation"}:
+                row["facts"]["_uzi_raw_result"]["data"].pop("pb", None)
+
+        payload = execute_native_method(
+            "quantitative_screen",
+            rows,
+            ["600000"],
+            {"method_assumptions": {"quantitative_screen": {"style": "value"}}},
+        )
+
+        self.assertEqual(payload["quality_status"], "degraded")
+        self.assertIsInstance(payload["results"][0]["result"], dict)
+        self.assertIn(
+            "observation_missing:pb",
+            payload["results"][0]["data_gap"],
+        )
+
+    def test_dcf_family_discloses_missing_price_shares_and_nested_valuation(self) -> None:
+        rows = _complete_method_snapshots()
+        market = next(row for row in rows if row["snapshot_type"] == "market")
+        market_data = market["facts"]["_uzi_raw_result"]["data"]
+        market_data.pop("price", None)
+        market_data.pop("market_cap_yi", None)
+
+        for method_id in ("dcf", "initiation_report", "ic_memo"):
+            with self.subTest(method_id=method_id):
+                payload = execute_native_method(method_id, rows, ["600000"], {})
+                gaps = payload["results"][0]["data_gap"]
+                self.assertEqual(payload["quality_status"], "degraded")
+                self.assertIsInstance(payload["results"][0]["result"], dict)
+                self.assertIn("observation_missing:price", gaps)
+                self.assertIn(
+                    "observation_missing:shares_or_market_cap_and_price", gaps
+                )
+                if method_id != "dcf":
+                    self.assertIn("observation_missing:comps.peer_count", gaps)
+
+    def test_native_quality_envelope_exposes_proxies_placeholders_and_warnings(self) -> None:
+        dcf_rows = _complete_method_snapshots()
+        financial = next(
+            row for row in dcf_rows if row["snapshot_type"] == "fundamental"
+        )["facts"]["_uzi_raw_result"]["data"]
+        financial.pop("operating_cash_flow_yi", None)
+        health = financial["financial_health"]
+        health.pop("total_debt", None)
+        health.pop("cash", None)
+        dcf = execute_native_method("dcf", dcf_rows, ["600000"], {})
+        self.assertEqual(dcf["quality_status"], "degraded")
+        self.assertIn(
+            "native_proxy_used:dcf.fcf_from_net_income",
+            dcf["results"][0]["data_gap"],
+        )
+        self.assertIn(
+            "native_source_limitation:dcf.net_debt_bridge_missing",
+            dcf["results"][0]["data_gap"],
+        )
+
+        placeholder_rows = _complete_method_snapshots()
+        policy = next(
+            row for row in placeholder_rows if row["snapshot_type"] == "policy"
+        )
+        policy["facts"]["_uzi_raw_result"]["data"] = {"placeholder": True}
+        ai = execute_native_method("ai_readiness", placeholder_rows, ["600000"], {})
+        self.assertEqual(ai["quality_status"], "degraded")
+        self.assertIn("dimension_missing:13_policy", ai["results"][0]["data_gap"])
+
+        preview_rows = [
+            row
+            for row in _complete_method_snapshots()
+            if row["snapshot_type"] != "research"
+        ]
+        preview = execute_native_method(
+            "earnings_preview", preview_rows, ["600000"], {}
+        )
+        self.assertEqual(preview["quality_status"], "degraded")
+        self.assertIn(
+            "native_warning:earnings_preview.consensus_missing",
+            preview["results"][0]["data_gap"],
+        )
+
+    def test_decision_methods_do_not_label_insufficient_inputs_available(self) -> None:
+        rows = _complete_method_snapshots()
+        comps = execute_native_method("comps", rows, ["600000"], {})
+        self.assertEqual(comps["quality_status"], "degraded")
+        self.assertIn(
+            "observation_missing:comps.peer_count",
+            comps["results"][0]["data_gap"],
+        )
+
+        porter_rows = _complete_method_snapshots()
+        market = next(
+            row for row in porter_rows if row["snapshot_type"] == "market"
+        )["facts"]["_uzi_raw_result"]["data"]
+        market.pop("market_cap_yi", None)
+        porter = execute_native_method("porter_bcg", porter_rows, ["600000"], {})
+        self.assertEqual(porter["quality_status"], "degraded")
+        self.assertIn(
+            "observation_missing:market_cap_yi",
+            porter["results"][0]["data_gap"],
+        )
+
+        lbo_rows = _complete_method_snapshots()
+        fundamental = next(
+            row for row in lbo_rows if row["snapshot_type"] == "fundamental"
+        )
+        fundamental["facts"]["_uzi_raw_result"]["data"] = {"placeholder": True}
+        lbo = execute_native_method("quick_lbo", lbo_rows, ["600000"], {})
+        self.assertEqual(lbo["quality_status"], "degraded")
+        self.assertIn("dimension_missing:1_financials", lbo["results"][0]["data_gap"])
+
+    def test_portfolio_public_aliases_and_pinned_defaults_reach_native_code(self) -> None:
+        returns = execute_native_method(
+            "returns_attribution",
+            [],
+            [],
+            {
+                "portfolio_holdings": [
+                    {"symbol": "AAA", "return_pct": 5},
+                    {"symbol": "BBB"},
+                ]
+            },
+        )
+        self.assertEqual(returns["quality_status"], "degraded")
+        self.assertNotIn("native_exception:KeyError", returns["data_gap"])
+        self.assertIn("BBB", returns["results"][0]["result"]["missing_return_tickers"])
+
+        rebalance = execute_native_method(
+            "holding_rebalance",
+            [],
+            [],
+            {"portfolio_holdings": [{"symbol": "AAA"}, {"symbol": "BBB"}]},
+        )
+        self.assertEqual(rebalance["quality_status"], "degraded")
+        self.assertIsInstance(rebalance["results"][0]["result"], dict)
+
+        strategic = execute_native_method(
+            "portfolio_rebalance",
+            [],
+            [],
+            {
+                "portfolio_holdings": [
+                    {"symbol": "AAA", "value": 100000, "asset_class": "A股蓝筹"}
+                ],
+                "asset_class_targets": {"A股蓝筹": 80, "现金": 20},
+            },
+        )
+        self.assertEqual(strategic["quality_status"], "available")
+        self.assertEqual(
+            {row["asset_class"] for row in strategic["results"][0]["result"]["drift_rows"]},
+            {"A股蓝筹", "现金"},
+        )
+
+    def test_accretion_accepts_loss_target_but_rejects_nonpositive_shape(self) -> None:
+        target = {
+            "ticker": "LOSS",
+            "name": "亏损标的",
+            "shares_yi": 10,
+            "price": 5,
+            "net_income_yi": -2,
+        }
+        assumptions = {
+            "target": target,
+            "premium_pct": 0.3,
+            "cash_pct": 0.5,
+            "synergies_yi": 0,
+            "new_debt_rate": 0.05,
+        }
+        accepted = execute_native_method(
+            "accretion_dilution",
+            _complete_method_snapshots(),
+            ["600000"],
+            {"method_assumptions": {"accretion_dilution": assumptions}},
+        )
+        self.assertEqual(accepted["quality_status"], "available")
+        self.assertIsInstance(accepted["results"][0]["result"], dict)
+
+        invalid = {**assumptions, "target": {**target, "price": 0}}
+        rejected = execute_native_method(
+            "accretion_dilution",
+            _complete_method_snapshots(),
+            ["600000"],
+            {"method_assumptions": {"accretion_dilution": invalid}},
+        )
+        self.assertIsNone(rejected["results"][0]["result"])
+        self.assertIn(
+            "explicit_assumption_invalid:target.price",
+            rejected["results"][0]["data_gap"],
+        )
+
+    def test_consensus_model_and_peer_baselines_are_auditable(self) -> None:
+        zero_consensus_rows = _complete_method_snapshots()
+        research = next(
+            row for row in zero_consensus_rows if row["snapshot_type"] == "research"
+        )["facts"]["_uzi_raw_result"]["data"]
+        research["consensus_rev_yi"] = 0
+        research["consensus_ni_yi"] = 0
+        implicit = execute_native_method(
+            "earnings_review", zero_consensus_rows, ["600000"], {}
+        )
+        self.assertEqual(implicit["quality_status"], "degraded")
+        self.assertIn(
+            "native_fallback_used:earnings_review.consensus",
+            implicit["results"][0]["data_gap"],
+        )
+
+        explicit = execute_native_method(
+            "earnings_review",
+            _complete_method_snapshots(),
+            ["600000"],
+            {
+                "method_assumptions": {
+                    "earnings_review": {"consensus": {"rev": 0, "ni": 0}}
+                }
+            },
+        )
+        self.assertIsNone(explicit["results"][0]["result"])
+        self.assertEqual(
+            explicit["results"][0]["data_gap"],
+            [
+                "explicit_assumption_invalid:consensus.rev",
+                "explicit_assumption_invalid:consensus.ni",
+            ],
+        )
+
+        model_rows = _complete_method_snapshots()
+        financial = next(
+            row for row in model_rows if row["snapshot_type"] == "fundamental"
+        )["facts"]["_uzi_raw_result"]["data"]
+        financial.pop("revenue_history", None)
+        financial.pop("gross_margin", None)
+        model = execute_native_method(
+            "model_update",
+            model_rows,
+            ["600000"],
+            {"model_updates": {"rev_growth": 20, "gross_margin": 40}},
+        )
+        self.assertEqual(model["quality_status"], "degraded")
+        self.assertIn(
+            "observation_missing:model_update.rev_growth_baseline",
+            model["results"][0]["data_gap"],
+        )
+        self.assertIn(
+            "observation_missing:model_update.gross_margin_baseline",
+            model["results"][0]["data_gap"],
+        )
+
+        peer_rows = _complete_method_snapshots()
+        peer_data = next(
+            row for row in peer_rows if row["snapshot_type"] == "similar_stocks"
+        )["facts"]["_uzi_raw_result"]["data"]
+        peer_data["similar_stocks"] = [
+            {"ticker": "AAA", "name": "同行甲"},
+            {"ticker": "BBB", "name": "同行乙"},
+        ]
+        comps = execute_native_method("comps", peer_rows, ["600000"], {})
+        self.assertEqual(comps["quality_status"], "degraded")
+        self.assertIn(
+            "observation_missing:comps.peer_valuation_metrics",
+            comps["results"][0]["data_gap"],
+        )
+
+    def test_pinned_proxies_and_fixed_defaults_are_disclosed(self) -> None:
+        rows = _complete_method_snapshots()
+        lbo = execute_native_method(
+            "quick_lbo",
+            rows,
+            ["600000"],
+            {
+                "method_assumptions": {
+                    "quick_lbo": _stock_inputs()["method_assumptions"]["quick_lbo"]
+                }
+            },
+        )
+        self.assertEqual(lbo["quality_status"], "degraded")
+        self.assertIn(
+            "native_proxy_used:quick_lbo.ebitda_from_net_income",
+            lbo["results"][0]["data_gap"],
+        )
+
+        dd = execute_native_method("dd_checklist", rows, ["600000"], {})
+        self.assertIn(
+            "native_source_limitation:dd_checklist.roe_last_alias",
+            dd["results"][0]["data_gap"],
+        )
+        porter = execute_native_method("porter_bcg", rows, ["600000"], {})
+        self.assertIn(
+            "native_defaults_used:porter_bcg.supplier_buyer_power",
+            porter["results"][0]["data_gap"],
+        )
+
+    def test_unknown_nonsemantic_fields_cannot_make_screen_or_ai_available(self) -> None:
+        value_rows = [
+            _row("market", {"code": "600000", "pe_ttm": 10, "pb": 1}),
+            _row("fundamental", {"foo": "bar"}),
+        ]
+        value = execute_native_method(
+            "quantitative_screen",
+            value_rows,
+            ["600000"],
+            {"method_assumptions": {"quantitative_screen": {"style": "value"}}},
+        )
+        self.assertEqual(value["quality_status"], "degraded")
+        self.assertIn(
+            "observation_missing:1_financials.operating_cash_flow_yi",
+            value["results"][0]["data_gap"],
+        )
+
+        dash_value = execute_native_method(
+            "quantitative_screen",
+            [
+                _row(
+                    "market",
+                    {
+                        "code": "600000",
+                        "pe_ttm": 10,
+                        "pb": 1,
+                        "dividend_yield_ttm": "—",
+                    },
+                ),
+                _row(
+                    "fundamental",
+                    {
+                        "operating_cash_flow_yi": "—",
+                        "financial_health": {"debt_ratio": "—"},
+                    },
+                ),
+            ],
+            ["600000"],
+            {"method_assumptions": {"quantitative_screen": {"style": "value"}}},
+        )
+        self.assertEqual(dash_value["quality_status"], "degraded")
+        self.assertIn(
+            "observation_missing:dividend_yield",
+            dash_value["results"][0]["data_gap"],
+        )
+
+        quality_rows = [
+            _row("fundamental", {"foo": "bar"}),
+            _row("moat", {"foo": "bar"}),
+        ]
+        quality = execute_native_method(
+            "quantitative_screen", quality_rows, ["600000"], {}
+        )
+        self.assertEqual(quality["quality_status"], "degraded")
+        self.assertIn(
+            "observation_missing:1_financials.roe_history_5y",
+            quality["results"][0]["data_gap"],
+        )
+
+        snapshot_by_dimension = {
+            "0_basic": "market",
+            "1_financials": "fundamental",
+            "5_chain": "chain",
+            "7_industry": "industry",
+            "11_governance": "governance",
+            "13_policy": "policy",
+            "14_moat": "moat",
+            "15_events": "events",
+            "17_sentiment": "sentiment",
+            "18_trap": "trap",
+        }
+        ai_rows = [
+            _row(snapshot_type, {"foo": "bar"})
+            for snapshot_type in snapshot_by_dimension.values()
+        ]
+        ai = execute_native_method("ai_readiness", ai_rows, ["600000"], {})
+        self.assertEqual(ai["quality_status"], "degraded")
+        self.assertIn(
+            "observation_missing:0_basic.market_cap",
+            ai["results"][0]["data_gap"],
+        )
+
+        dash_history_rows = _complete_method_snapshots()
+        financial = next(
+            row
+            for row in dash_history_rows
+            if row["snapshot_type"] == "fundamental"
+        )["facts"]["_uzi_raw_result"]["data"]
+        financial["revenue_history"] = ["—", "—"]
+        financial["net_profit_history"] = ["—", "—"]
+        financial["roe_history"] = ["—"] * 5
+        for method_id in (
+            "earnings_review",
+            "earnings_preview",
+            "initiation_report",
+            "ic_memo",
+        ):
+            with self.subTest(method_id=method_id):
+                payload = execute_native_method(
+                    method_id, dash_history_rows, ["600000"], {}
+                )
+                self.assertNotEqual(payload["quality_status"], "available")
+                self.assertTrue(
+                    any(
+                        "1_financials" in gap
+                        for gap in payload["results"][0]["data_gap"]
+                    )
+                )
+
+    def test_method_gates_do_not_require_dimensions_the_pinned_function_does_not_use(self) -> None:
+        rows = _complete_method_snapshots()
+        cases = {
+            "thesis_tracker": ({"valuation"}, "degraded"),
+            "quantitative_screen": ({"market", "kline", "valuation"}, "available"),
+            "sector_review": ({"market"}, "available"),
+            "dd_checklist": ({"market"}, "degraded"),
+        }
+        for method_id, (removed_types, expected_status) in cases.items():
+            with self.subTest(method_id=method_id):
+                expected = execute_native_method(method_id, rows, ["600000"], {})
+                reduced = execute_native_method(
+                    method_id,
+                    [row for row in rows if row["snapshot_type"] not in removed_types],
+                    ["600000"],
+                    {},
+                )
+                self.assertEqual(expected["quality_status"], expected_status)
+                self.assertEqual(reduced["quality_status"], expected_status)
+                self.assertEqual(
+                    reduced["results"][0]["result"],
+                    expected["results"][0]["result"],
+                )
+
+    def test_earnings_requires_real_or_explicit_consensus(self) -> None:
+        rows = [
+            row
+            for row in _complete_method_snapshots()
+            if row["snapshot_type"] != "research"
+        ]
+        missing = execute_native_method("earnings_review", rows, ["600000"], {})
+        self.assertEqual(missing["quality_status"], "degraded")
+        self.assertIsInstance(missing["results"][0]["result"], dict)
+        self.assertEqual(
+            missing["results"][0]["data_gap"],
+            ["native_fallback_used:earnings_review.consensus"],
+        )
+
+        consensus = {"rev": 1350, "ni": 135}
+        explicit = execute_native_method(
+            "earnings_review",
+            rows,
+            ["600000"],
+            {"method_assumptions": {"earnings_review": {"consensus": consensus}}},
+        )
+        self.assertEqual(explicit["quality_status"], "available")
+        self.assertEqual(explicit["results"][0]["result"]["consensus"], consensus)
+
+        malformed = execute_native_method(
+            "earnings_review",
+            rows,
+            ["600000"],
+            {"method_assumptions": {"earnings_review": {"consensus": {}}}},
+        )
+        self.assertEqual(
+            malformed["results"][0]["data_gap"],
+            [
+                "explicit_assumption_missing:consensus.rev",
+                "explicit_assumption_missing:consensus.ni",
+            ],
+        )
+
+        wrong_types = execute_native_method(
+            "earnings_review",
+            rows,
+            ["600000"],
+            {
+                "method_assumptions": {
+                    "earnings_review": {"consensus": {"rev": "1350", "ni": "135"}}
+                }
+            },
+        )
+        self.assertEqual(
+            wrong_types["results"][0]["data_gap"],
+            [
+                "explicit_assumption_invalid:consensus.rev",
+                "explicit_assumption_invalid:consensus.ni",
+            ],
+        )
+        wrong_shape = execute_native_method(
+            "earnings_review",
+            rows,
+            ["600000"],
+            {"method_assumptions": {"earnings_review": {"consensus": []}}},
+        )
+        self.assertEqual(
+            wrong_shape["results"][0]["data_gap"],
+            ["explicit_assumption_invalid:consensus"],
+        )
+
+        placeholder_rows = _complete_method_snapshots()
+        research = next(
+            row for row in placeholder_rows if row["snapshot_type"] == "research"
+        )
+        research["facts"]["_uzi_raw_result"]["data"]["consensus_rev_yi"] = "—"
+        placeholder = execute_native_method(
+            "earnings_review", placeholder_rows, ["600000"], {}
+        )
+        self.assertEqual(
+            placeholder["results"][0]["data_gap"],
+            ["native_fallback_used:earnings_review.consensus"],
+        )
+
+    def test_portfolio_defaults_and_missing_returns_are_preserved_but_degraded(self) -> None:
         holdings = [{"ticker": "600000.SH", "weight": 1.0, "return_pct": None}]
         returns = execute_native_method("returns_attribution", [], [], {"portfolio_holdings": holdings})
-        self.assertEqual(returns["quality_status"], "data_gap")
-        self.assertIn("return_pct_missing", returns["data_gap"])
+        self.assertEqual(returns["quality_status"], "degraded")
+        self.assertIsInstance(returns["results"][0]["result"], dict)
+        self.assertIn("native_warning:missing_return:600000.SH", returns["data_gap"])
         rebalance = execute_native_method("holding_rebalance", [], [], {"portfolio_holdings": holdings})
-        self.assertIn("accept_uzi_native_fee_schedule_required", rebalance["data_gap"])
+        self.assertEqual(rebalance["quality_status"], "degraded")
+        self.assertIsInstance(rebalance["results"][0]["result"], dict)
+        self.assertIn("native_defaults_used:holding_rebalance.equal_weight", rebalance["data_gap"])
+        self.assertIn("native_defaults_used:holding_rebalance.fee_schedule", rebalance["data_gap"])
 
 
 if __name__ == "__main__":

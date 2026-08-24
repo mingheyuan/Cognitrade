@@ -1,7 +1,7 @@
-"""Agent-driven UZI Deep panel role-play owned by the Finance DomainPack.
+"""Agent-driven UZI full-workflow panel role-play owned by the Finance DomainPack.
 
-The latest UZI workflow treats the deterministic rule engine as reference
-material only for ``deep`` research.  This module preserves that boundary
+The latest UZI SKILL.md treats the deterministic rule engine as reference
+material only whenever the full Agent workflow is selected.  This module preserves that boundary
 without importing or executing the external UZI project: persona YAML is
 vendored as Pack data, Agent OS supplies the configured LLM provider, and the
 validated overrides are written into the panel Artifact.
@@ -13,10 +13,12 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from dataclasses import dataclass
+from hashlib import sha256
 import json
+import logging
 from pathlib import Path
 import re
-from threading import Event
+from threading import Event, get_ident
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -26,7 +28,9 @@ from domain_packs.finance_ashare.subagents.uzi_panel_profiles import get_profile
 from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_structured
 
 
-LATEST_UZI_SOURCE_COMMIT = "0acf25122cabf493e7bc442faff62ceceb7f2f02"
+LATEST_UZI_SOURCE_COMMIT = "b004d7a988ca53a4805bf36784af091fa1209f22"
+_LOGGER = logging.getLogger("uvicorn.error")
+_ROLEPLAY_STAGE_CACHE_SCHEMA_VERSION = "uzi-3.9.4-roleplay-stage-v1"
 PERSONAS_DIR = (
     Path(__file__).resolve().parents[1]
     / "vendor"
@@ -144,11 +148,19 @@ def apply_deep_agent_roleplay(
     features: dict[str, Any],
     llm_provider: Any | None,
     cancellation: Event | None = None,
+    required: bool | None = None,
 ) -> dict[str, Any]:
-    """Apply all-or-nothing Agent role-play overrides to a Deep panel."""
+    """Apply all-or-nothing Agent role-play overrides to a UZI panel.
+
+    ``required=None`` preserves the profile-native compatibility behavior
+    (Deep only).  Cognitrade's full Agent OS path passes ``required=True`` for
+    Lite, Medium and Deep, matching the interactive SKILL.md hard gate.
+    """
 
     result = deepcopy(panel)
-    if str(result.get("profile") or "") != "deep":
+    profile = str(result.get("profile") or "deep").strip().lower()
+    roleplay_required = profile == "deep" if required is None else bool(required)
+    if not roleplay_required:
         result["roleplay"] = {
             "required": False,
             "status": "not_requested",
@@ -177,27 +189,60 @@ def apply_deep_agent_roleplay(
     batches = _nonempty_batches(votes)
     completed: list[AgentRoleplayBatch] = []
     errors: list[str] = []
-    with ThreadPoolExecutor(max_workers=min(5, len(batches) or 1), thread_name_prefix="uzi-roleplay") as pool:
+    pending_batches: list[tuple[str, list[dict[str, Any]], str, Path | None]] = []
+    for label, group_votes in batches:
+        user_prompt = _batch_user_prompt(label, group_votes)
+        cache_path = _roleplay_stage_cache_path(
+            llm_provider,
+            profile=profile,
+            group_label=label,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        cached = _load_roleplay_stage_cache(cache_path)
+        if cached is not None:
+            try:
+                _validate_batch_members(
+                    cached,
+                    [str(row.get("investor_id") or "") for row in group_votes],
+                    expected_group_label=label,
+                )
+            except Exception as exc:
+                _discard_roleplay_stage_cache(cache_path, exc)
+            else:
+                completed.append(cached)
+                continue
+        pending_batches.append((label, group_votes, user_prompt, cache_path))
+    with ThreadPoolExecutor(
+        max_workers=_configured_workers(llm_provider, len(pending_batches), ceiling=5),
+        thread_name_prefix="uzi-roleplay",
+    ) as pool:
         futures = {
             pool.submit(
                 _evaluate_batch,
                 llm_provider,
                 system_prompt=system_prompt,
                 group_label=label,
-                votes=group_votes,
-            ): label
-            for label, group_votes in batches
+                user_prompt=user_prompt,
+                research_profile=profile,
+            ): (label, group_votes, cache_path)
+            for label, group_votes, user_prompt, cache_path in pending_batches
         }
         for future in as_completed(futures):
             if cancellation is not None and cancellation.is_set():
                 for pending in futures:
                     pending.cancel()
                 raise RuntimeError("deep_agent_roleplay_cancelled")
-            label = futures[future]
+            label, group_votes, cache_path = futures[future]
             try:
                 batch = future.result()
-                _validate_batch_members(batch, [str(row.get("investor_id") or "") for row in dict(batches)[label]])
+                _validate_batch_members(
+                    batch,
+                    [str(row.get("investor_id") or "") for row in group_votes],
+                    expected_group_label=label,
+                )
                 completed.append(batch)
+                _write_roleplay_stage_cache(cache_path, batch)
             except Exception as exc:  # one failed group invalidates the Deep gate
                 errors.append(f"{label}:{exc.__class__.__name__}:{str(exc)[:300]}")
 
@@ -248,7 +293,11 @@ def apply_deep_agent_roleplay(
     }
     result["rule_mode"] = "uzi_rule_reference_plus_agent_roleplay"
     result["quality_status"] = "available" if result.get("evaluated_rule_count") else "degraded"
-    result["data_gap"] = [gap for gap in list(result.get("data_gap") or []) if gap != "deep_agent_roleplay_required"]
+    result["data_gap"] = [
+        gap
+        for gap in list(result.get("data_gap") or [])
+        if gap not in {"agent_roleplay_required", "deep_agent_roleplay_required"}
+    ]
     _recompute_panel_aggregates(result)
     return result
 
@@ -258,8 +307,24 @@ def _evaluate_batch(
     *,
     system_prompt: str,
     group_label: str,
-    votes: list[dict[str, Any]],
+    user_prompt: str,
+    research_profile: str,
 ) -> AgentRoleplayBatch:
+    return parse_uzi_structured(
+        provider,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        schema=AgentRoleplayBatch,
+        temperature=0.1,
+        research_profile=research_profile,
+        uzi_stage=f"roleplay_{group_label}",
+    )
+
+
+def _batch_user_prompt(
+    group_label: str,
+    votes: list[dict[str, Any]],
+) -> str:
     persona_blocks = []
     rule_reference = []
     for vote in votes:
@@ -275,7 +340,7 @@ def _evaluate_batch(
                 "rule_reasoning": vote.get("reasoning"),
             }
         )
-    user_prompt = (
+    return (
         f"负责分组：{group_label}\n\n"
         "逐一扮演下面列出的每位评委。规则引擎只是可审计参考，不是最终判断。"
         "flagship 必须优先遵守 YAML persona 的 key_metrics、avoids 与 voice；stub 只能依据规则和已给数据，"
@@ -287,23 +352,114 @@ def _evaluate_batch(
         + "\n\nRULE_ENGINE_REFERENCE:\n"
         + json.dumps(rule_reference, ensure_ascii=False, sort_keys=True)
     )
-    return parse_uzi_structured(
-        provider,
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        schema=AgentRoleplayBatch,
-        temperature=0.1,
-    )
 
 
 def _system_prompt(snapshot_json: str) -> str:
     return (
-        "你是 UZI Deep 的投资者角色评审执行器。只使用下方冻结的真实特征快照和后续 persona/规则参考。"
+        "你是 UZI 完整 Agent 工作流的投资者角色评审执行器。只使用下方冻结的真实特征快照和后续 persona/规则参考。"
         "缺失数据必须写成缺口，禁止补值、禁止把历史 persona 材料当成当前持仓，禁止输出真人投资建议。"
         "同一研究的所有分组共用本 system message，保持字节级稳定。\n"
         f"UZI_SOURCE_COMMIT={LATEST_UZI_SOURCE_COMMIT}\n"
         f"FROZEN_FEATURE_SNAPSHOT={snapshot_json}"
     )
+
+
+def _configured_workers(provider: Any, task_count: int, *, ceiling: int) -> int:
+    settings = getattr(provider, "settings", None)
+    configured = getattr(settings, "uzi_llm_max_concurrency", ceiling)
+    try:
+        limit = int(configured)
+    except (TypeError, ValueError):
+        limit = ceiling
+    return max(1, min(task_count or 1, ceiling, max(limit, 1)))
+
+
+def _roleplay_stage_cache_path(
+    provider: Any,
+    *,
+    profile: str,
+    group_label: str,
+    system_prompt: str,
+    user_prompt: str,
+) -> Path | None:
+    settings = getattr(provider, "settings", None)
+    workspace_root = getattr(settings, "workspace_root", None)
+    if workspace_root is None:
+        return None
+    identity = {
+        "schema_version": _ROLEPLAY_STAGE_CACHE_SCHEMA_VERSION,
+        "uzi_source_commit": LATEST_UZI_SOURCE_COMMIT,
+        "profile": profile,
+        "group_label": group_label,
+        "model_provider": str(getattr(settings, "provider_name", "")),
+        "model": str(getattr(settings, "default_model", "")),
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+    }
+    digest = sha256(
+        json.dumps(
+            identity,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    return Path(workspace_root) / "cache" / "uzi_roleplay_stages" / f"{digest}.json"
+
+
+def _load_roleplay_stage_cache(path: Path | None) -> AgentRoleplayBatch | None:
+    if path is None or not path.exists():
+        return None
+    try:
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        if envelope.get("schema_version") != _ROLEPLAY_STAGE_CACHE_SCHEMA_VERSION:
+            return None
+        return AgentRoleplayBatch.model_validate(envelope.get("payload"))
+    except Exception as exc:
+        _discard_roleplay_stage_cache(path, exc)
+        return None
+
+
+def _discard_roleplay_stage_cache(path: Path | None, exc: Exception) -> None:
+    _LOGGER.warning(
+        "Ignoring invalid UZI roleplay stage cache: path=%s error=%s:%s",
+        path,
+        exc.__class__.__name__,
+        str(exc)[:300],
+    )
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _write_roleplay_stage_cache(
+    path: Path | None,
+    payload: AgentRoleplayBatch,
+) -> None:
+    if path is None:
+        return
+    envelope = {
+        "schema_version": _ROLEPLAY_STAGE_CACHE_SCHEMA_VERSION,
+        "payload": payload.model_dump(mode="json"),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{get_ident()}.tmp")
+        temporary.write_text(
+            json.dumps(envelope, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    except OSError as exc:
+        _LOGGER.warning(
+            "Unable to persist UZI roleplay stage cache: path=%s error=%s:%s",
+            path,
+            exc.__class__.__name__,
+            str(exc)[:300],
+        )
 
 
 def _prompt_features(features: dict[str, Any]) -> dict[str, Any]:
@@ -354,10 +510,20 @@ def _nonempty_batches(votes: list[dict[str, Any]]) -> list[tuple[str, list[dict[
     return result
 
 
-def _validate_batch_members(batch: AgentRoleplayBatch, expected_ids: list[str]) -> None:
+def _validate_batch_members(
+    batch: AgentRoleplayBatch,
+    expected_ids: list[str],
+    *,
+    expected_group_label: str | None = None,
+) -> None:
     actual_ids = [vote.investor_id for vote in batch.votes]
     if batch.group_label.strip() == "":
         raise ValueError("group_label is empty")
+    if expected_group_label is not None and batch.group_label != expected_group_label:
+        raise ValueError(
+            f"group label mismatch; expected={expected_group_label!r}; "
+            f"actual={batch.group_label!r}"
+        )
     if len(actual_ids) != len(set(actual_ids)):
         raise ValueError("duplicate investor_id in roleplay batch")
     if set(actual_ids) != set(expected_ids):
@@ -376,8 +542,8 @@ def _roleplay_gap(
     completed_group_count: int = 0,
 ) -> dict[str, Any]:
     gaps = list(result.get("data_gap") or [])
-    if "deep_agent_roleplay_required" not in gaps:
-        gaps.append("deep_agent_roleplay_required")
+    if "agent_roleplay_required" not in gaps:
+        gaps.append("agent_roleplay_required")
     result["quality_status"] = "data_gap"
     result["data_gap"] = gaps
     result["per_investor_override"] = {}
@@ -390,7 +556,7 @@ def _roleplay_gap(
         "completed_group_count": completed_group_count,
         "errors": errors,
     }
-    result["risk_flags"] = list(dict.fromkeys([*list(result.get("risk_flags") or []), "deep_roleplay_incomplete"]))
+    result["risk_flags"] = list(dict.fromkeys([*list(result.get("risk_flags") or []), "agent_roleplay_incomplete"]))
     return result
 
 
@@ -403,7 +569,7 @@ def _recompute_panel_aggregates(result: dict[str, Any]) -> None:
     result["skipped_seat_count"] = sum(row.get("signal") == "skip" for row in votes)
     result["disagreement"] = {
         "exists": len({str(row.get("signal") or "") for row in active}) > 1,
-        "summary": "Deep Agent 角色评审对同一冻结证据形成不同方法论判断。" if active else "没有足够证据形成 Deep Agent 判断。",
+        "summary": "完整 Agent 角色评审对同一冻结证据形成不同方法论判断。" if active else "没有足够证据形成 Agent 判断。",
     }
     result["confidence"] = (
         round(sum(float(row.get("confidence") or 0.0) for row in active) / len(active), 4)
@@ -418,6 +584,9 @@ def build_native_panel_overrides(
     features: dict[str, Any],
     llm_provider: Any | None,
     cancellation: Event | None = None,
+    school: str | None = None,
+    profile: str = "deep",
+    required: bool | None = None,
 ) -> dict[str, Any]:
     """Generate Agent OS overrides for the exact upstream ``investors`` list.
 
@@ -428,17 +597,23 @@ def build_native_panel_overrides(
     """
 
     native = deepcopy(panel)
-    native["profile"] = "deep"
+    native["profile"] = profile
+    selected_school = str(school or "").strip().upper()
     native["votes"] = [
         deepcopy(row)
         for row in list(native.get("investors") or [])
         if isinstance(row, dict)
+        and (
+            not selected_school
+            or str(row.get("school") or row.get("group") or "") == selected_school
+        )
     ]
     evaluated = apply_deep_agent_roleplay(
         native,
         features=features,
         llm_provider=llm_provider,
         cancellation=cancellation,
+        required=required,
     )
     return {
         "per_investor_override": dict(evaluated.get("per_investor_override") or {}),

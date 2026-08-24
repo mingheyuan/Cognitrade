@@ -60,7 +60,7 @@ _RUN_TRANSITIONS: dict[str, frozenset[str]] = {
     "paused": frozenset({"running", "cancelled", "failed", "timed_out"}),
     "waiting_approval": frozenset({"running", "paused", "gated", "failed", "cancelled", "timed_out"}),
     "completed": frozenset({"paused", "completed_partial"}),
-    "completed_partial": frozenset({"paused"}),
+    "completed_partial": frozenset({"paused", "completed"}),
     "gated": frozenset({"paused"}),
     "failed": frozenset({"paused"}),
     "cancelled": frozenset({"paused"}),

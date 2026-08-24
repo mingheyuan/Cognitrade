@@ -106,6 +106,7 @@
           },
           "target_fund_period": {"type": ["string", "null"]},
           "target_fund_source_ref": {"type": ["string", "null"]},
+          "target_fund_published_at": {"type": ["string", "null"]},
           "lookthrough_holdings": {
             "type": "array",
             "items": {"$ref": "#/$defs/disclosedSecurityHolding"}

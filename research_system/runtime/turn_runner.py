@@ -17,6 +17,7 @@ from research_system.runtime.core.tool_registry import CoreToolContext, build_co
 from research_system.runtime.event_store import append_canonical_event
 from research_system.runtime.follow_up import FollowUpRuntime
 from research_system.runtime.hooks import HookRuntime, LifecycleInput, StopHookInput
+from research_system.runtime.presentation.display import runtime_status_message
 from research_system.runtime.roles import ChildTurnRuntime, RoleRegistry
 from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
 from research_system.runtime.storage.runs.run_store import RunStore
@@ -432,9 +433,6 @@ class RegularTask:
     def __init__(self, executor: RegularExecutor) -> None:
         self.executor = executor
 
-    def start_or_resume(self, context: TurnContext) -> TaskOutcome:
-        return self.executor.execute(context)
-
     def start(self, context: TurnContext) -> TaskOutcome:
         context.resume = False
         return self.executor.execute(context)
@@ -442,22 +440,6 @@ class RegularTask:
     def resume(self, context: TurnContext) -> TaskOutcome:
         context.resume = True
         return self.executor.execute(context)
-
-    def cancel(self, context: TurnContext, reason: str) -> TaskOutcome:
-        control = read_json(context.root / "execution_control.json") or {}
-        write_json(
-            context.root / "execution_control.json",
-            {
-                **control,
-                "pause_requested": False,
-                "cancel_requested": True,
-                "cancel_reason": reason,
-                "updated_at": _utc_now().isoformat(),
-            },
-        )
-        context.resume = True
-        return self.executor.execute(context)
-
 
 class ReviewExecutor:
     """Review the current Turn's active artifacts in the same lifecycle."""
@@ -755,17 +737,11 @@ class ReviewTask(RegularTask):
         super().__init__(executor)
         self.review_executor = review_executor
 
-    def start_or_resume(self, context: TurnContext) -> TaskOutcome:
-        return self._execute_guarded(context) or self.review_executor.execute(context)
-
     def start(self, context: TurnContext) -> TaskOutcome:
         return self._execute_guarded(context) or self.review_executor.execute(context)
 
     def resume(self, context: TurnContext) -> TaskOutcome:
         return self._execute_guarded(context) or self.review_executor.execute(context)
-
-    def cancel(self, context: TurnContext, reason: str) -> TaskOutcome:
-        return _special_control_outcome(context, "cancelled", reason)
 
     @staticmethod
     def _execute_guarded(context: TurnContext) -> TaskOutcome | None:
@@ -781,17 +757,11 @@ class CompactTask(RegularTask):
         super().__init__(executor)
         self.compact_executor = compact_executor
 
-    def start_or_resume(self, context: TurnContext) -> TaskOutcome:
-        return self._execute_guarded(context) or self.compact_executor.execute(context)
-
     def start(self, context: TurnContext) -> TaskOutcome:
         return self._execute_guarded(context) or self.compact_executor.execute(context)
 
     def resume(self, context: TurnContext) -> TaskOutcome:
         return self._execute_guarded(context) or self.compact_executor.execute(context)
-
-    def cancel(self, context: TurnContext, reason: str) -> TaskOutcome:
-        return _special_control_outcome(context, "cancelled", reason)
 
     @staticmethod
     def _execute_guarded(context: TurnContext) -> TaskOutcome | None:
@@ -1010,26 +980,6 @@ class TaskFactory:
         if task_type == "compact":
             return CompactTask(regular.executor, compact_executor)
         return regular
-
-    @staticmethod
-    def restore(
-        *,
-        turn: TurnSnapshot,
-        task_snapshot: Any,
-        regular: RegularTask,
-        review_executor: ReviewExecutor | None = None,
-        compact_executor: CompactExecutor | None = None,
-    ) -> TurnTask:
-        if str(getattr(task_snapshot, "execution_mode", turn.execution_mode)) != turn.execution_mode:
-            raise ValueError("TaskSnapshot execution mode does not match Turn")
-        return TaskFactory.build(
-            turn.config,
-            regular,
-            review_executor=review_executor or ReviewExecutor(),
-            compact_executor=compact_executor or CompactExecutor(),
-            active_task_type=str(getattr(task_snapshot, "task_type", "") or "") or None,  # type: ignore[arg-type]
-        )
-
 
 class TurnRunner:
     """Own the root Turn lifecycle around Core and Graph execution."""
@@ -1682,12 +1632,19 @@ class TurnRunner:
                 )
                 outcome = task.resume(context) if resume else task.start(context)
             if context.deadline_at is not None and monotonic() >= context.deadline_at:
-                outcome = outcome.model_copy(
-                    update={
-                        "status": "timed_out",
-                    "error": "Turn 超过了配置的超时时间。",
-                    }
-                )
+                if outcome.status not in RUN_TERMINAL_STATUSES:
+                    outcome = outcome.model_copy(
+                        update={
+                            "status": "timed_out",
+                            "error": "Turn 超过了配置的超时时间。",
+                        }
+                    )
+                else:
+                    self._emit(
+                        context,
+                        "turn_deadline_exceeded_after_terminal",
+                        terminal_status=outcome.status,
+                    )
             self._finish_turn(context, outcome)
             if outcome.status in {"cancelled", "timed_out"}:
                 context.hook_runtime.run_lifecycle(
@@ -1795,34 +1752,6 @@ class TurnRunner:
         )
         return self.finalize(outcome=outcome, response_factory=response_factory)
 
-    def start_or_resume(
-        self,
-        *,
-        request: RequestEnvelope,
-        decision: RequestIntakeDecision,
-        run_id: str,
-        thread_id: str,
-        execution_mode: TurnExecutionMode,
-        response_factory: Callable[[Any], ResponseEnvelope],
-        operation: str = "start",
-        turn_config: TurnConfig | None = None,
-        event_callback: Callable[[dict[str, Any]], None] | None = None,
-    ) -> ResponseEnvelope:
-        if operation not in {"start", "resume"}:
-            raise ValueError(f"unsupported Turn operation: {operation}")
-        return self.run(
-            request=request,
-            decision=decision,
-            run_id=run_id,
-            thread_id=thread_id,
-            execution_mode=execution_mode,
-            turn_config=turn_config,
-            response_factory=response_factory,
-            event_callback=event_callback,
-            resume=operation == "resume",
-            recover=operation == "resume",
-        )
-
     def resume(
         self,
         run_id: str,
@@ -1904,11 +1833,43 @@ class TurnRunner:
             if isinstance(item, dict) and item.get("child_turn_id")
         ] if isinstance(payload, dict) else []
         response_status = response.status
-        if persisted_status in {"timed_out", "cancelled", "failed", "gated"}:
+        persisted_response_statuses = {
+            "running",
+            "paused",
+            "waiting_approval",
+            "gated",
+            "completed",
+            "completed_partial",
+            "cancelled",
+            "failed",
+            "timed_out",
+        }
+        if persisted_status in persisted_response_statuses and not (response.status == "needs_clarification" and persisted_status == "paused"):
             response_status = persisted_status  # type: ignore[assignment]
+        response_message = response.message
+        response_progress = response.progress
+        response_result = dict(response.result) if response.result is not None else None
+        if response_status != response.status:
+            response_message = runtime_status_message(response_status)
+            terminal_response = response_status in RUN_TERMINAL_STATUSES
+            response_progress = response.progress.model_copy(
+                update={
+                    "current_phase": "terminal" if terminal_response else response_status,
+                    "latest_event": f"turn_{response_status}",
+                    "status_message": response_message,
+                    "percent": 100 if terminal_response else response.progress.percent,
+                }
+            )
+            if response_result is not None:
+                for status_key in ("status", "execution_status", "delivery_status"):
+                    if status_key in response_result:
+                        response_result[status_key] = response_status
+                response_result["turn_status"] = response_status
         response = response.model_copy(
             update={
                 "status": response_status,
+                "message": response_message,
+                "progress": response_progress,
                 "turn_id": response.turn_id or turn_id,
                 "thread_id": response.thread_id or thread_id,
                 "task_type": response.task_type or task_type or "regular",
@@ -1921,6 +1882,7 @@ class TurnRunner:
                 ),
                 "child_turn_ids": list(response.child_turn_ids or outcome.child_turn_ids or child_turn_ids),
                 "continuation": response.continuation or outcome.continuation,
+                "result": response_result,
             }
         )
         if response.result is not None:
@@ -2437,6 +2399,46 @@ class TurnRunner:
         if response.run_id:
             root = self.run_store.load_run_paths(response.run_id).root
             write_json(root / "response.json", response.model_dump(mode="json"))
+            updated_at = _utc_now().isoformat()
+            run_state = read_json(root / "run_state.json")
+            if not isinstance(run_state, dict):
+                run_state = {}
+            run_state.update(
+                {
+                    "run_id": response.run_id,
+                    "request_id": response.request_id,
+                    "intent": response.intent or run_state.get("intent"),
+                    "mode": response.mode or run_state.get("mode"),
+                    "status": response.status,
+                    "thread_id": response.thread_id,
+                    "active_turn_id": response.turn_id,
+                    "updated_at": updated_at,
+                }
+            )
+            write_json(root / "run_state.json", run_state)
+            summary = read_json(root / "summary.json")
+            if not isinstance(summary, dict):
+                summary = {}
+            summary.update(
+                {
+                    "run_id": response.run_id,
+                    "request_id": response.request_id,
+                    "intent": response.intent or summary.get("intent"),
+                    "mode": response.mode or summary.get("mode"),
+                    "status": response.status,
+                    "message": response.message,
+                    "thread_id": response.thread_id,
+                    "turn_id": response.turn_id,
+                    "artifact_ids": list(response.artifact_ids),
+                    "final_artifact_ids": list(response.final_artifact_ids),
+                }
+            )
+            write_json(root / "summary.json", summary)
+
+    def reconcile_persisted_response(self, response: ResponseEnvelope) -> None:
+        """Idempotently repair canonical status files from the response commit."""
+
+        self._persist_response(response)
 
     def _prepare_resume_control(self, context: TurnContext) -> None:
         """Consume a prior pause request while preserving a pending cancel.
@@ -2478,69 +2480,6 @@ class TurnRunner:
 
     def cancel(self, run_id: str, *, reason: str = "cancel requested") -> TurnSnapshot:
         return self._request_control(run_id, "cancel", reason)
-
-    def enqueue_follow_up(
-        self,
-        run_id: str,
-        *,
-        text: str,
-        source: str = "user",
-        operation_id: str | None = None,
-        delivery_phase: str = "current_turn",
-    ):
-        """Queue external input with the same mailbox audit as model input."""
-        return self._enqueue_follow_up(
-            run_id,
-            text=text,
-            source=source,
-            operation_id=operation_id,
-            delivery_phase=delivery_phase,
-        )
-
-    def _enqueue_follow_up(
-        self,
-        run_id: str,
-        *,
-        text: str,
-        source: str,
-        operation_id: str | None,
-        delivery_phase: str,
-    ):
-        """Write one mailbox item through FollowUpRuntime's shared lease."""
-        root = self.run_store.load_run_paths(run_id).root
-        payload = read_json(root / "turn_state.json")
-        if not isinstance(payload, dict):
-            raise ValueError(f"Turn state is missing: {run_id}")
-        turn = TurnSnapshot.model_validate(payload)
-        event_turn = turn
-
-        def emit_followup(event_type: str, event_payload: dict[str, Any]) -> None:
-            nonlocal event_turn
-            event_turn = self._append_snapshot_event(
-                event_turn,
-                event_type,
-                actor="turn_runner.api",
-                **{
-                    key: value
-                    for key, value in event_payload.items()
-                    if key not in {"run_id", "thread_id", "turn_id"}
-                },
-            )
-
-        runtime = FollowUpRuntime(
-            root=root,
-            run_id=run_id,
-            turn_id=turn.turn_id,
-            config=turn.config.follow_up_config,
-            emitter=emit_followup,
-        )
-        return runtime.enqueue(
-            source=source,
-            kind="user_input" if source == "user" else "inter_agent_communication",
-            text=text,
-            operation_id=operation_id,
-            delivery_phase=delivery_phase,
-        )
 
     def followup_task(
         self,

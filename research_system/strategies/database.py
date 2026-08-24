@@ -9,6 +9,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from research_system.strategies.models import Base
+# Import the market-data models for their shared Base metadata registration.
+# Keeping one metadata graph makes create_schema and Alembic behave identically.
+from research_system.market_data import models as _market_data_models  # noqa: F401
 
 
 REQUIRED_STRATEGY_TABLES = frozenset(
@@ -74,10 +77,14 @@ class StrategyDatabase:
 
     def bootstrap_or_validate(self, *, allow_bootstrap: bool) -> None:
         existing = set(inspect(self.engine).get_table_names())
-        if REQUIRED_STRATEGY_TABLES.issubset(existing):
-            return
         if allow_bootstrap and self.is_sqlite:
+            # SQLite development/test databases can already contain the legacy
+            # strategy tables while missing tables introduced by a later
+            # metadata revision (for example the market-data center). Running
+            # create_all is idempotent and fills those additive gaps.
             self.create_schema()
+            existing = set(inspect(self.engine).get_table_names())
+        if REQUIRED_STRATEGY_TABLES.issubset(existing):
             return
         missing = ", ".join(sorted(REQUIRED_STRATEGY_TABLES - existing))
         raise StrategyDatabaseError(

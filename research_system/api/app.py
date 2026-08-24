@@ -35,6 +35,7 @@ from research_system.api.routes import (
     dashboard,
     finance,
     fund_holding_reports,
+    market_data_center,
     report_signals,
     runs,
     strategy_backtests,
@@ -46,6 +47,11 @@ from research_system.api.routes import (
 from research_system.api.sse import RunEventSource
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.agent_os import AgentOS
+from research_system.market_data.report_inputs import (
+    DatabaseReportInputGateway,
+    ReportInputService,
+)
+from research_system.market_data.service import MarketDataCenterService
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.services.memory.maintenance import MemoryExpirationScheduler
 from research_system.strategies.database import StrategyDatabase, resolve_database_url
@@ -84,7 +90,7 @@ async def _call_with_idempotency(request: Request, call_next):
     key = str(request.headers.get("Idempotency-Key") or "").strip()
     if (
         not key
-        or request.method.upper() not in {"POST", "PATCH", "DELETE"}
+        or request.method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}
         or not request.url.path.startswith("/api/v2/finance")
     ):
         return await call_next(request)
@@ -215,6 +221,7 @@ def create_app(
     chat_service_factory: Callable[[Settings], Any] | None = None,
     event_source_factory: Callable[[Settings, ApiConfig], Any] | None = None,
     finance_market_data_factory: Callable[[Settings], Any] | None = None,
+    market_data_center_factory: Callable[[Settings, Any], Any] | None = None,
     paper_trading_factory: Callable[[Settings, Any], Any] | None = None,
     backtesting_factory: Callable[[Settings, Any], Any] | None = None,
     strategy_service_factory: Callable[[Settings], Any] | None = None,
@@ -233,6 +240,12 @@ def create_app(
     build_finance_market_data = finance_market_data_factory or (
         lambda current_settings: FinanceMarketDataService(
             cache_root=current_settings.workspace_root / "cache"
+        )
+    )
+    build_market_data_center = market_data_center_factory or (
+        lambda current_settings, database: MarketDataCenterService(
+            database,
+            current_settings,
         )
     )
     build_paper_trading = paper_trading_factory or (
@@ -300,6 +313,7 @@ def create_app(
         strategy_verification = None
         strategy_paper_execution = None
         api_idempotency = None
+        market_data_service = None
         effective_settings = settings or Settings.from_env(resolved_repo_root)
         effective_settings.validate()
         resolved_api_config.validate()
@@ -338,6 +352,24 @@ def create_app(
             strategy_service = build_strategy_service(effective_settings)
             strategy_database = getattr(strategy_service, "database", None)
             if strategy_database is not None:
+                market_data_service = build_market_data_center(
+                    effective_settings,
+                    strategy_database,
+                )
+                report_inputs = ReportInputService(
+                    DatabaseReportInputGateway(strategy_database)
+                )
+                bind_report_inputs = getattr(run_service, "bind_report_inputs", None)
+                if callable(bind_report_inputs):
+                    bind_report_inputs(report_inputs)
+                bind_market_data = getattr(finance_market_data, "bind_market_data_center", None)
+                if callable(bind_market_data):
+                    bind_market_data(market_data_service)
+                # Restart only jobs that were explicitly persisted by a user or
+                # enabled subscription. This does not create new acquisition.
+                start_market_data = getattr(market_data_service, "start", None)
+                if callable(start_market_data):
+                    start_market_data()
                 signal_engine = build_signal_engine(strategy_database)
                 strategy_verification = build_strategy_verification(strategy_database)
                 strategy_paper_execution = build_strategy_paper_execution(
@@ -368,6 +400,7 @@ def create_app(
                 chat_service=chat_service,
                 event_source=build_event_source(effective_settings, resolved_api_config),
                 finance_market_data=finance_market_data,
+                market_data_center=market_data_service,
                 paper_trading=paper_trading,
                 backtesting=backtesting,
                 strategies=strategy_service,
@@ -386,6 +419,9 @@ def create_app(
         finally:
             application.state.api_runtime = None
             memory_scheduler.stop()
+            close_market_data = getattr(market_data_service, "close", None)
+            if callable(close_market_data):
+                close_market_data()
             close_strategy_backtesting = getattr(strategy_backtesting, "close", None)
             if callable(close_strategy_backtesting):
                 close_strategy_backtesting()
@@ -412,7 +448,7 @@ def create_app(
         LocalizedCORSMiddleware,
         allow_origins=list(resolved_api_config.cors_origins),
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=[
             "Authorization",
             "Content-Type",
@@ -460,6 +496,9 @@ def create_app(
         prefix="/api/v2",
         dependencies=[Depends(require_principal)],
     )
+    # Register static market-data-center routes before the legacy
+    # ``/finance/market-data/{symbol}`` path to avoid dynamic-path capture.
+    finance_v2.include_router(market_data_center.router)
     finance_v2.include_router(finance.router)
     finance_v2.include_router(strategies.router)
     finance_v2.include_router(report_signals.router)

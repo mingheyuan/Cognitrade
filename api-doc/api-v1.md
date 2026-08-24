@@ -87,15 +87,16 @@ The response identifies the canonical protocol and graph state:
 
 The installed `finance_ashare` Pack accepts these intents through the same
 endpoint: `stock_check`, `stock_compare`, `stock_screen`, `fund_research`,
-`portfolio_research`, `sector_research`, `review_thesis`, and
-`distill_kol_logic`. When `intent` is omitted, Pack Task Intake resolves it
+`uzi_returns`, `uzi_rebalance`, `uzi_portfolio_rebalance_method`,
+`uzi_portfolio_batch`,
+`sector_research`, `review_thesis`, and `distill_kol_logic`. When `intent` is omitted, Pack Task Intake resolves it
 from the query or returns a structured
 clarification instead of silently defaulting to stock analysis.
 
-`stock_check`, `stock_compare`, `stock_screen`, `sector_research`, and
+`stock_check`, `stock_compare`, `uzi_portfolio_batch`, `stock_screen`, `sector_research`, and
 `review_thesis` require an explicit `constraints.research_profile`. The only
 accepted values are `lite`, `medium`, and `deep`; there is no server default
-and the removed `quick` profile is rejected. Their UZI 3.9.2 execution
+and the removed `quick` profile is rejected. Their UZI 3.9.4 execution
 contracts are:
 
 | profile | Fetchers | Panel | Institutional methods | DDGS budget | Playwright fallback |
@@ -103,6 +104,21 @@ contracts are:
 | `lite` | 7 / 20 | 10 | 1 | 0 | off |
 | `medium` | 20 / 20 | 51 | 17 | 30 | opt-in, 6 dimensions |
 | `deep` | 20 / 20 | 66 Agent role-play seats | 18 | 60 | 10 dimensions after explicit sensitive-source enablement; includes Bull-Bear debate |
+
+`stock_check`, `uzi_analyze_stock`, `stock_compare`, and
+`uzi_portfolio_batch` optionally accept `constraints.school` with exactly one
+value from `A` through `I`. This is the native UZI `--school` hard gate: seats
+outside the selected school stay `skip`, Agent role-play and panel insights
+must not cross schools, and `synthesis.school_lock` drives the native report
+banner. `stock_compare` is the native `--versus` flow and accepts 2–4 symbols.
+
+`uzi_portfolio_batch` is the native `--portfolio` flow over
+`constraints.portfolio_holdings`. `ticker` is required; `weight` and `note` are
+optional. When every weight is missing UZI uses equal weights. When only some
+weights are present UZI distributes the remaining weight and then normalizes
+the complete portfolio. The intent produces one gated analysis per holding and
+the native portfolio HTML; any component with a remaining critical blocks the
+portfolio export.
 
 `stock_screen` additionally requires an explicit
 `constraints.investment_cycle` (`short_term`, `mid_term`, or `long_term`). The
@@ -303,30 +319,33 @@ rejected at API validation and are never coerced into a plausible scenario.
 }
 ```
 
-`portfolio_research` produces `returns_attribution` and `holding_rebalance`
-Artifacts from explicit holdings. When `requested_methods` contains
-`portfolio_rebalance`, every holding must provide `asset_class` and
-`asset_class_targets` must exactly cover those classes; the additional output
-is `portfolio_rebalance`.
+The former aggregate `portfolio_research` entry has been removed. Each UZI
+portfolio method has an independent intent and produces one
+`uzi_native_method_result` Artifact:
+
+- `uzi_returns` performs return attribution; each holding must provide its
+  observed `return_pct`, otherwise the missing contribution remains a data gap.
+- `uzi_rebalance` performs holding-level rebalance and requires explicit
+  `rebalance_targets` plus `accept_uzi_native_fee_schedule: true`.
+- `uzi_portfolio_rebalance_method` performs strategic asset-class rebalance;
+  every holding must provide `asset_class`, and `asset_class_targets` must
+  exactly cover those classes.
 
 ```http
 POST /api/v1/runs
 Content-Type: application/json
 
 {
-  "intent": "portfolio_research",
-  "user_query": "对持仓做收益归因和再平衡",
+  "intent": "uzi_rebalance",
+  "user_query": "按目标权重对持仓做再平衡",
   "constraints": {
     "portfolio_holdings": [
       {"ticker": "600519", "weight": 60, "return_pct": 8, "value": 600000, "market": "A", "price": 1500},
       {"ticker": "300750", "weight": 40, "return_pct": -2, "value": 400000, "market": "A", "price": 200}
     ],
-    "benchmark_return": 3,
     "rebalance_targets": {"600519": 50, "300750": 50},
     "drift_threshold": 5,
-    "fee_model": {
-      "A": {"commission_rate": 0.00025, "buy_stamp_rate": 0, "sell_stamp_rate": 0.0005}
-    }
+    "accept_uzi_native_fee_schedule": true
   }
 }
 ```
@@ -342,7 +361,8 @@ portfolio: missing classifications or targets produce `data_gap`.
 
 ### UZI native report export
 
-Completed UZI single-stock runs expose the exact vendored UZI 3.9.2 report
+Completed UZI single-stock, `--versus`, and `--portfolio` runs expose the exact
+vendored UZI 3.9.4 presentation
 derived only from immutable `uzi_native_analysis` ArtifactBoard records. HTML
 and PDF share that same visible DOM/CSS/JavaScript. Cognitrade metadata remains
 in API headers and Artifact sidecars. The renderer never invokes the old UZI
@@ -360,7 +380,16 @@ Accept: application/pdf
 Authorization: Bearer <COGNITRADE_API_TOKEN>
 ```
 
-`format` is exactly `html` or `pdf`. HTML is self-contained and escapes every
+Single-stock reports additionally expose UZI's native side outputs:
+
+```text
+format=share-card  -> image/png, #share-card at scale 2
+format=war-report  -> image/png, #war-report at scale 2
+format=one-liner   -> text/plain, native one-liner wording
+```
+
+`format` is exactly `html`, `pdf`, `share-card`, `war-report`, or `one-liner`.
+The three side-output formats apply only to a single-stock report. HTML is self-contained and escapes every
 Artifact value before insertion. PDF is rendered from that same HTML by the
 deployment's bundled Chromium, so HTML and PDF cannot silently diverge. A run
 without an active UZI `research_report` returns `409 uzi_report_unavailable`;
@@ -507,7 +536,6 @@ Unversioned `/api/*` business routes do not exist.
 
 ```text
 VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
-VITE_COGNITRADE_API_TOKEN=<COGNITRADE_API_TOKEN>
 ```
 
 The Vite frontend submits Task Intake requests through FastAPI, uses fetch-SSE

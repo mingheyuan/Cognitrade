@@ -38,6 +38,7 @@ class AgentOSRunService:
         self._worker_id = f"api-worker:{generate_ulid()}"
         self._chat_completion_callback = None
         self._fund_holding_reports = None
+        self._report_inputs = None
         self._lease_seconds = max(
             float(getattr(agent_os.settings, "run_timeout_seconds", 300.0)) * 2.0,
             60.0,
@@ -52,12 +53,50 @@ class AgentOSRunService:
         """Bind the Pack-specific batch facade without changing Agent OS execution."""
         self._fund_holding_reports = service
 
+    def bind_report_inputs(self, service) -> None:
+        """Bind the DB-backed formal-report Bundle preflight boundary."""
+        self._report_inputs = service
+        binder = getattr(self.agent_os, "bind_resolved_request_preflight", None)
+        if callable(binder):
+            binder(service.freeze_request)
+        recover = getattr(self._fund_holding_reports, "recover_pending_batches", None)
+        if callable(recover):
+            # FundHoldingReportService is constructed before the strategy DB in
+            # the API lifespan.  DB-backed child recovery must start only after
+            # this trust boundary is available, otherwise an old projected
+            # request could bypass parent-Bundle revocation checks.
+            recover()
+
+    @property
+    def report_input_service(self):
+        return self._report_inputs
+
+    def _require_fund_child_lineage(
+        self,
+        run_id: str,
+        *,
+        user_id: str | None,
+        tenant_id: str | None,
+    ) -> None:
+        """Apply one fail-closed guard to every hidden-child delivery surface."""
+
+        holding_reports = self._fund_holding_reports
+        if holding_reports is None or not holding_reports.is_hidden_child(run_id):
+            return
+        holding_reports.require_child_report_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+
     def run(self, request: RequestEnvelope, *, run_id: str | None = None) -> ResponseEnvelope:
+        request = self._freeze_report_inputs(request)
         if bool((request.constraints or {}).get("background")):
             return self.submit_background(request)
         return self.agent_os.handle_request(request, run_id=run_id)
 
     def submit_background(self, request: RequestEnvelope) -> ResponseEnvelope:
+        request = self._freeze_report_inputs(request)
         run_id = generate_ulid()
         self.agent_os.prepare_run(
             request,
@@ -85,6 +124,12 @@ class AgentOSRunService:
                 "background": True,
             },
         )
+
+    def _freeze_report_inputs(self, request: RequestEnvelope) -> RequestEnvelope:
+        service = self._report_inputs
+        if service is None:
+            return request
+        return service.freeze_request(request)
 
     def close(self) -> None:
         # A worker may have completed the Turn state transition but still be
@@ -424,6 +469,11 @@ class AgentOSRunService:
                 tenant_id=tenant_id,
             )
             return {**detail, "run_id": run_id, "events": self._execution_events(run_id)}
+        self._require_fund_child_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         detail = self.agent_os.inspect_run(run_id)
         if detail.get("mode") == "pending":
             return {
@@ -472,6 +522,11 @@ class AgentOSRunService:
                 user_id=user_id,
                 tenant_id=tenant_id,
             )
+        self._require_fund_child_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         return self.agent_os.inspect_run(run_id)
 
     def artifacts(
@@ -493,6 +548,11 @@ class AgentOSRunService:
                 user_id=user_id,
                 tenant_id=tenant_id,
             )
+        self._require_fund_child_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         detail = self.agent_os.inspect_run(run_id)
         artifacts = list(detail.get("artifacts") or [])
         if artifact_type:
@@ -578,6 +638,11 @@ class AgentOSRunService:
         holding_reports = self._fund_holding_reports
         if holding_reports is not None and holding_reports.is_batch(run_id):
             return holding_reports.trace(run_id, user_id=user_id, tenant_id=tenant_id)
+        self._require_fund_child_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         detail = self.agent_os.inspect_run(run_id)
         if detail.get("mode") == "pending":
             return {
@@ -868,6 +933,11 @@ class AgentOSRunService:
                 "scope_thread_ids": [thread_id],
                 "snapshot": state,
             }
+        self._require_fund_child_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         detail = self.agent_os.inspect_run(run_id)
         if detail.get("mode") == "pending":
             request = detail.get("request") or {}
@@ -1022,6 +1092,11 @@ class AgentOSRunService:
                     ]
                 },
             }
+        self._require_fund_child_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         detail = self.agent_os.inspect_run(run_id)
         if detail.get("mode") == "pending":
             return {
@@ -1147,6 +1222,11 @@ class AgentOSRunService:
         tenant_id: str | None = None,
     ) -> ResponseEnvelope:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        self._require_fund_child_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         request = self._request_envelope(run_id)
         return self._response(request, self.agent_os.rerun_from(run_id, from_node))
 
@@ -1156,6 +1236,11 @@ class AgentOSRunService:
         result: ExecutionRunResult,
     ) -> ResponseEnvelope:
         snapshot = result.snapshot
+        self._require_fund_child_lineage(
+            snapshot.run_id,
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
+        )
         response_status = snapshot.status
         artifacts = self.agent_os.inspect_run(snapshot.run_id).get("artifacts") or []
         final_ids = set(result.final_artifact_ids)

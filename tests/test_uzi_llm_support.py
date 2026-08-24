@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from domain_packs.finance_ashare.subagents.uzi_llm_support import (
+    DEFAULT_UZI_LLM_BUY_ZONE_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_UZI_LLM_MAX_CONCURRENCY,
+    DEFAULT_UZI_LLM_PROFILE_REQUEST_TIMEOUT_SECONDS,
+    DEFAULT_UZI_LLM_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_UZI_LLM_RETRY_BASE_SECONDS,
     DEFAULT_UZI_LLM_RETRY_MAX_SECONDS,
-    DEFAULT_UZI_LLM_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_UZI_LLM_TRANSIENT_RETRIES,
     parse_uzi_structured,
+    resolve_uzi_llm_request_timeout,
 )
 
 
@@ -71,10 +74,38 @@ class UziLlmSupportTests(unittest.TestCase):
 
     def test_default_budget_matches_medium_uzi_profile(self) -> None:
         self.assertEqual(DEFAULT_UZI_LLM_REQUEST_TIMEOUT_SECONDS, 480.0)
+        self.assertEqual(
+            DEFAULT_UZI_LLM_PROFILE_REQUEST_TIMEOUT_SECONDS,
+            {"lite": 240.0, "medium": 600.0, "deep": 900.0},
+        )
+        self.assertEqual(DEFAULT_UZI_LLM_BUY_ZONE_REQUEST_TIMEOUT_SECONDS, 300.0)
         self.assertEqual(DEFAULT_UZI_LLM_MAX_CONCURRENCY, 2)
         self.assertEqual(DEFAULT_UZI_LLM_TRANSIENT_RETRIES, 6)
         self.assertEqual(DEFAULT_UZI_LLM_RETRY_BASE_SECONDS, 2.0)
         self.assertEqual(DEFAULT_UZI_LLM_RETRY_MAX_SECONDS, 60.0)
+
+    def test_profile_and_small_buy_zone_receive_separate_budgets(self) -> None:
+        provider = _TimeoutAwareProvider(321)
+        provider.settings.uzi_llm_lite_request_timeout_seconds = 240
+        provider.settings.uzi_llm_medium_request_timeout_seconds = 600
+        provider.settings.uzi_llm_deep_request_timeout_seconds = 900
+        provider.settings.uzi_llm_buy_zone_request_timeout_seconds = 300
+
+        self.assertEqual(
+            resolve_uzi_llm_request_timeout(
+                provider,
+                research_profile="deep",
+                uzi_stage="dimensions_1_5",
+            ),
+            900.0,
+        )
+        parse_uzi_structured(
+            provider,
+            research_profile="deep",
+            uzi_stage="buy_zone_youzi",
+            schema=dict,
+        )
+        self.assertEqual(provider.received_timeout, 300.0)
 
     @patch("domain_packs.finance_ashare.subagents.uzi_llm_support.random", return_value=0.0)
     @patch("domain_packs.finance_ashare.subagents.uzi_llm_support.sleep")
@@ -95,6 +126,27 @@ class UziLlmSupportTests(unittest.TestCase):
         self.assertEqual(
             [call.args[0] for call in sleep_mock.call_args_list],
             [2.0, 4.0, 8.0, 16.0, 32.0, 60.0],
+        )
+
+    @patch("domain_packs.finance_ashare.subagents.uzi_llm_support.random", return_value=0.0)
+    @patch("domain_packs.finance_ashare.subagents.uzi_llm_support.sleep")
+    def test_transient_api_connection_error_retries_before_returning_to_quality_gate(
+        self,
+        sleep_mock,
+        _random_mock,
+    ) -> None:
+        provider = _TransientProvider(
+            failures=2,
+            message="llm_request_failed: APIConnectionError: Connection error.",
+        )
+
+        result = parse_uzi_structured(provider, schema=dict)
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(provider.calls, 3)
+        self.assertEqual(
+            [call.args[0] for call in sleep_mock.call_args_list],
+            [2.0, 4.0],
         )
 
     @patch("domain_packs.finance_ashare.subagents.uzi_llm_support.sleep")

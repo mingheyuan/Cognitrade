@@ -59,7 +59,7 @@ export type ApiConnectionSettings = {
   token: string
 }
 
-export type RunReportFormat = 'html' | 'pdf'
+export type RunReportFormat = 'html' | 'pdf' | 'share-card' | 'war-report' | 'one-liner'
 
 export type RunReportExport = {
   blob: Blob

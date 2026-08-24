@@ -14,6 +14,7 @@ from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
 from research_system.runtime.agent_os import AgentOS
 from research_system.runtime.platform.settings import Settings
+from tests.market_data.test_pit_core import seed_strict_bundle
 
 
 class _SnapshotSkill:
@@ -47,6 +48,22 @@ def _offline_agent_os(settings: Settings) -> AgentOS:
 
 
 class FinancePackMigrationCompletionTests(unittest.TestCase):
+    def test_profileless_quick_scan_uses_command_collection_policy(self) -> None:
+        result = snapshot_collector.collect_snapshot_bundle(
+            query="快速扫描",
+            symbols=[],
+            snapshot_types=[],
+            intent="quick_scan",
+            research_profile=None,
+        )
+
+        recovery = result["collection"]["uzi_recovery"]
+        self.assertEqual(recovery["qualitative_stage"]["profile"], "uzi_command")
+        self.assertEqual(
+            recovery["qualitative_stage"]["disabled_reason"],
+            "standalone_uzi_command",
+        )
+
     def test_normal_finance_collector_uses_pack_owned_skill_implementations(self) -> None:
         skill_types = [
             *snapshot_collector._SYMBOL_SKILLS.values(),
@@ -198,6 +215,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
             root = Path(temporary_directory)
             settings = Settings.from_env(repository_root).model_copy(
                 update={
+                    "workspace_root": root,
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
@@ -210,6 +228,10 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     agent_os_factory=_offline_agent_os,
                 )
             ) as client:
+                as_of = seed_strict_bundle(
+                    client.app.state.api_runtime.strategies.database,
+                    "600000.SH",
+                )
                 headers = {"Authorization": "Bearer migration-completion"}
                 prior = client.post(
                     "/api/v1/runs",
@@ -220,6 +242,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                         "constraints": {
                             "research_profile": "lite",
                             "investment_cycle": "short_term",
+                            "analysis_as_of_date": as_of.isoformat(),
                         },
                         "slots": {"snapshots": snapshots},
                     },
@@ -241,7 +264,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
 
             self.assertEqual(prior["status"], "gated")
         self.assertEqual(review_response.status_code, 200, review_response.text)
-        self.assertEqual(review_response.json()["status"], "completed_partial")
+        self.assertEqual(review_response.json()["status"], "completed")
         review_artifact = next(
             artifact for artifact in replay["artifacts"] if artifact["artifact_type"] == "thesis_review"
         )
@@ -294,6 +317,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
             root = Path(temporary_directory)
             settings = Settings.from_env(repository_root).model_copy(
                 update={
+                    "workspace_root": root,
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
@@ -306,6 +330,10 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     agent_os_factory=_offline_agent_os,
                 )
             ) as client:
+                as_of = seed_strict_bundle(
+                    client.app.state.api_runtime.strategies.database,
+                    "600000.SH",
+                )
                 headers = {"Authorization": "Bearer specialized-intents"}
 
                 screen = client.post(
@@ -341,7 +369,10 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     json={
                         "intent": "stock_check",
                         "user_query": "分析 600000",
-                        "constraints": {"research_profile": "lite"},
+                        "constraints": {
+                            "research_profile": "lite",
+                            "analysis_as_of_date": as_of.isoformat(),
+                        },
                         "slots": {"snapshots": snapshots},
                     },
                 )
@@ -370,12 +401,13 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     replay = client.get(f"/api/v1/runs/{run_id}/replay", headers=headers)
                     self.assertEqual(replay.status_code, 200, replay.text)
                     payload = replay.json()
-                    self.assertEqual(payload["snapshot"]["status"], "completed_partial")
+                    self.assertEqual(payload["snapshot"]["status"], "completed")
                     artifact_types = {row["artifact_type"] for row in payload["artifacts"]}
                     self.assertTrue(
                         {
                             specialist_artifact_type,
                             "research_report",
+                            "main_agent_synthesis",
                             "assistant_message",
                         }.issubset(artifact_types),
                             (run_id, artifact_types),

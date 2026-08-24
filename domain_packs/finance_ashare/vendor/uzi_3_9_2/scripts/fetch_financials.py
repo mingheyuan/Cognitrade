@@ -39,10 +39,165 @@ def _to_float(v) -> float:
         return 0.0
 
 
+def _to_float_or_none(v) -> float | None:
+    """Parse a numeric cell while preserving a legitimate zero."""
+    try:
+        if v in (None, "", "--", "-"):
+            return None
+        return float(str(v).replace(",", "").replace("%", ""))
+    except (ValueError, TypeError):
+        return None
+
+
+def _mx_search_table(result: dict) -> tuple[dict, dict]:
+    """Return the first MX search table and its label map."""
+    if not isinstance(result, dict) or result.get("error"):
+        return {}, {}
+    data = result.get("data") or {}
+    inner = data.get("data") if isinstance(data.get("data"), dict) else data
+    search = (inner or {}).get("searchDataResultDTO") or {}
+    dto_list = search.get("dataTableDTOList") or []
+    if not dto_list or not isinstance(dto_list[0], dict):
+        return {}, {}
+    dto = dto_list[0]
+    table = dto.get("rawTable") or dto.get("table") or {}
+    name_map = dto.get("nameMap") or {}
+    if isinstance(name_map, list):
+        name_map = {str(i): value for i, value in enumerate(name_map)}
+    return (table if isinstance(table, dict) else {}), name_map
+
+
+def _parse_mx_roe_series(result: dict) -> dict:
+    """Extract an oldest-to-newest annual weighted-ROE series."""
+    table, name_map = _mx_search_table(result)
+    heads = table.get("headName") or []
+    series_key = next(
+        (
+            key
+            for key in table
+            if key != "headName"
+            and (
+                "ROE" in str(name_map.get(key) or name_map.get(str(key)) or key).upper()
+                or "净资产收益率" in str(name_map.get(key) or name_map.get(str(key)) or key)
+            )
+        ),
+        None,
+    )
+    if series_key is None:
+        series_key = next(
+            (
+                key
+                for key, values in table.items()
+                if key != "headName" and isinstance(values, list) and values
+            ),
+            None,
+        )
+    if series_key is None:
+        return {}
+
+    import re
+
+    by_year: dict[str, float] = {}
+    for index, raw in enumerate(table.get(series_key) or []):
+        head = str(heads[index]) if index < len(heads) else ""
+        if "季" in head or "中报" in head:
+            continue
+        match = re.search(r"(20\d{2})", head)
+        value = _to_float_or_none(raw)
+        if match and value is not None:
+            by_year[match.group(1)] = round(value, 2)
+    if not by_year:
+        return {}
+
+    years = sorted(by_year)[-6:]
+    history = [by_year[year] for year in years]
+    return {
+        "roe_history": history,
+        "financial_years": years,
+        "roe": f"{history[-1]:.1f}%",
+    }
+
+
+def _fetch_roe_history_via_mx(code: str, name_hint: str = "") -> dict:
+    """Fetch annual weighted ROE through MX when the primary source fails."""
+    try:
+        from lib.mx_api import MXClient
+        client = MXClient()
+    except Exception:
+        return {}
+    if not client.available:
+        return {}
+
+    label = name_hint.strip() or code
+    for query in (
+        f"{label} 近五年加权净资产收益率",
+        f"{code} 近五年加权净资产收益率ROE",
+        f"{code} 历年年报净资产收益率ROE(加权)",
+    ):
+        try:
+            parsed = _parse_mx_roe_series(client.query(query))
+        except Exception:
+            continue
+        if parsed.get("roe_history"):
+            parsed["_mx_roe_query"] = query
+            return parsed
+    return {}
+
+
+def _fetch_financial_health_via_mx(code: str, name_hint: str = "") -> dict:
+    """Fetch balance-sheet quality ratios through MX."""
+    try:
+        from lib.mx_api import MXClient
+        client = MXClient()
+    except Exception:
+        return {}
+    if not client.available:
+        return {}
+
+    label = name_hint.strip() or code
+    try:
+        result = client.query(f"{label} 流动比率 资产负债率 总资产净利率 销售净利率")
+    except Exception:
+        return {}
+    table, name_map = _mx_search_table(result)
+    heads = [str(head) for head in (table.get("headName") or [])]
+    annual_index = next(
+        (i for i, head in enumerate(heads) if "年报" in head and "季" not in head and "中报" not in head),
+        0,
+    )
+    health: dict = {}
+    for key, values in table.items():
+        if key == "headName" or not isinstance(values, list) or not values:
+            continue
+        label_text = str(name_map.get(key) or name_map.get(str(key)) or key)
+        raw = values[annual_index] if annual_index < len(values) else values[0]
+        value = _to_float_or_none(raw)
+        if value is None:
+            continue
+        if "流动比率" in label_text:
+            health["current_ratio"] = value
+        elif "资产负债率" in label_text:
+            health["debt_ratio"] = value
+        elif "总资产净利率" in label_text or "ROA" in label_text.upper():
+            health["roic"] = value
+        elif "销售净利率" in label_text or ("净利率" in label_text and "总资产" not in label_text):
+            health["net_margin_pct"] = value
+    return health
+
+
 def _to_yi(v) -> float:
     """Convert raw (often 元) to 亿."""
     n = _to_float(v)
     return round(n / 1e8, 2)
+
+
+def _drop_all_zero_histories(out: dict) -> None:
+    """Drop histories that only contain parser-produced zero placeholders."""
+    for key in ("revenue_history", "net_profit_history"):
+        values = out.get(key) or []
+        if values and not any(abs(_to_float(value)) > 1e-9 for value in values):
+            out.pop(key, None)
+            out.setdefault("_zero_history_dropped", []).append(key)
 
 
 def _apply_operating_cash_flow(out: dict, df_cf) -> None:
@@ -97,6 +252,7 @@ def _fetch_a_share(ti) -> dict:
             out["revenue_history"] = _row("营业总收入")
             out["net_profit_history"] = _row("归属于母公司所有者的净利润") or _row("净利润")
             out["financial_years"] = [str(c)[:4] for c in period_cols_annual]
+            _drop_all_zero_histories(out)
     except Exception as e:
         out["_abstract_error"] = str(e)
 
@@ -108,7 +264,7 @@ def _fetch_a_share(ti) -> dict:
             df_ind = df_ind.sort_values(date_col)
             # filter to year-end rows (12-31)
             df_annual = df_ind[df_ind[date_col].astype(str).str.endswith("12-31")]
-            if len(df_annual) < 3:  # fallback to all rows
+            if df_annual.empty:
                 df_annual = df_ind
 
             for col_key, target in [
@@ -121,18 +277,19 @@ def _fetch_a_share(ti) -> dict:
                     break
 
             last = df_ind.iloc[-1]
+            last_annual = df_annual.iloc[-1]
             # Financial health
             health = {}
-            for src_key, dst_key, unit_div in [
-                ("流动比率", "current_ratio", 1),
-                ("资产负债率(%)", "debt_ratio", 1),
-                ("总资产净利率(%)", "roic", 1),
-                ("销售净利率(%)", "net_margin_pct", 1),
+            for src_key, dst_key, source_row in [
+                ("流动比率", "current_ratio", last),
+                ("资产负债率(%)", "debt_ratio", last),
+                ("总资产净利率(%)", "roic", last_annual),
+                ("销售净利率(%)", "net_margin_pct", last_annual),
             ]:
                 if src_key in df_ind.columns:
-                    v = _to_float(last.get(src_key))
+                    v = _to_float(source_row.get(src_key))
                     if v:
-                        health[dst_key] = v / unit_div
+                        health[dst_key] = v
             if health:
                 out["financial_health"] = health
 
@@ -162,16 +319,18 @@ def _fetch_a_share(ti) -> dict:
 
             # Net margin / ROE 汇总 summary strings
             if "加权净资产收益率(%)" in df_ind.columns:
-                out["roe"] = f"{_to_float(last['加权净资产收益率(%)']):.1f}%"
+                out["roe"] = f"{_to_float(last_annual['加权净资产收益率(%)']):.1f}%"
+                out["roe_mrq"] = f"{_to_float(last['加权净资产收益率(%)']):.1f}%"
             if "销售净利率(%)" in df_ind.columns:
-                out["net_margin"] = f"{_to_float(last['销售净利率(%)']):.1f}%"
+                out["net_margin"] = f"{_to_float(last_annual['销售净利率(%)']):.1f}%"
+            out["financial_period"] = str(last_annual.get(date_col))[:10]
 
             # v3.8.0 · DuPont 杜邦分解 · ROE = 净利率 × 总资产周转率 × 权益乘数
             # 价值派(巴菲特/张磊)看 ROE 的"质量来源"：margin 驱动=高质量 · 纯杠杆驱动=风险
             try:
-                _dp_nm = _to_float(last.get("销售净利率(%)")) if "销售净利率(%)" in df_ind.columns else None
-                _dp_to = _to_float(last.get("总资产周转率(次)")) if "总资产周转率(次)" in df_ind.columns else None
-                _dp_dr = _to_float(last.get("资产负债率(%)")) if "资产负债率(%)" in df_ind.columns else None
+                _dp_nm = _to_float(last_annual.get("销售净利率(%)")) if "销售净利率(%)" in df_ind.columns else None
+                _dp_to = _to_float(last_annual.get("总资产周转率(次)")) if "总资产周转率(次)" in df_ind.columns else None
+                _dp_dr = _to_float(last_annual.get("资产负债率(%)")) if "资产负债率(%)" in df_ind.columns else None
                 _dp_em = (100.0 / (100.0 - _dp_dr)) if (_dp_dr not in (None, 0) and _dp_dr < 100) else None
                 if _dp_nm is not None and _dp_to is not None and _dp_em is not None:
                     _dp_roe = _dp_nm * _dp_to * _dp_em  # net_margin% × turnover × em → ROE%
@@ -193,6 +352,25 @@ def _fetch_a_share(ti) -> dict:
                 pass
     except Exception as e:
         out["_indicator_error"] = str(e)
+
+    if not out.get("roe_history"):
+        mx_roe = _fetch_roe_history_via_mx(code, getattr(ti, "raw", "") or "")
+        if mx_roe.get("roe_history"):
+            out["roe_history"] = mx_roe["roe_history"]
+            if mx_roe.get("financial_years") and not out.get("financial_years"):
+                out["financial_years"] = mx_roe["financial_years"]
+            if mx_roe.get("roe") and not out.get("roe"):
+                out["roe"] = mx_roe["roe"]
+            out["_roe_source"] = "mx_api"
+            out.pop("_indicator_error", None)
+
+    if not out.get("financial_health"):
+        mx_health = _fetch_financial_health_via_mx(code, getattr(ti, "raw", "") or "")
+        if mx_health:
+            out["financial_health"] = mx_health
+            out["_financial_health_source"] = "mx_api"
+            if not out.get("net_margin") and mx_health.get("net_margin_pct") is not None:
+                out["net_margin"] = f"{mx_health['net_margin_pct']:.1f}%"
 
     # ─── 3. 营收增速 summary
     try:

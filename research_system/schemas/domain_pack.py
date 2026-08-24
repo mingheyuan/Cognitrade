@@ -126,6 +126,7 @@ class IntentDefinition(BaseModel):
     optional_slots: list[str] = Field(default_factory=list)
     candidate_capabilities: list[str] = Field(default_factory=list)
     output_artifact_types: list[str] = Field(default_factory=list)
+    report_requires_bundle: bool = False
     clarification_questions: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")

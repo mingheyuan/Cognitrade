@@ -1,7 +1,7 @@
 """UZI 3.9.4 reality-check and A-share seat-range capability.
 
 This is a pure DomainPack migration of the logic from UZI source commit
-``0acf25122cabf493e7bc442faff62ceceb7f2f02``.  It intentionally has no
+``b004d7a988ca53a4805bf36784af091fa1209f22``.  It intentionally has no
 dependency on an installed UZI runtime.
 """
 

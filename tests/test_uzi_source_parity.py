@@ -262,7 +262,7 @@ class UziSourceParityTests(unittest.TestCase):
         self.assertEqual(config["catalog"]["source_count"], 73)
         self.assertEqual(
             config["catalog"]["commit"],
-            "0acf25122cabf493e7bc442faff62ceceb7f2f02",
+            "b004d7a988ca53a4805bf36784af091fa1209f22",
         )
         self.assertEqual(config["catalog"]["version"], "3.9.4")
         self.assertEqual(set(config["sources"]), EXPECTED_UZI_SOURCE_IDS)

@@ -171,7 +171,7 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 - [x] 每个方法补齐 input contract、quality gate、fixture 和等价性级别；
 - [x] Tier‑1 的逐持仓 rebalance 已与旧组合再平衡语义拆开；旧组合再平衡仍单独保留在账本；
 - [x] Tier‑1 五方法全部提供专属 Capability、Artifact、质量门、测试与 Web 视图；
-- [x] 新增 `portfolio_research`，组合收益缺失不补零、费用模型不硬编码、等权目标标记为策略假设；
+- [x] 删除重复的 `portfolio_research` 聚合入口；收益归因、持仓再平衡、资产配置再平衡分别由 `uzi_returns`、`uzi_rebalance`、`uzi_portfolio_rebalance_method` 直连 UZI 原生能力，缺失输入保持数据缺口；
 
 ### Phase D：20 个命令的 Web/Intent 等价交付
 
@@ -179,7 +179,7 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 - [x] 首次覆盖、财报、催化剂、thesis、DD、IC Memo 等转为独立 Artifact 交付链；
 - [x] 组合、对比、归因与两类再平衡接入 Agent OS 与现有 Web 边界；
 - [x] 不迁入 UZI CLI、缓存、HTML 服务或临时兼容入口；原生报告版式以 Pack-owned 模板迁入，并从 ArtifactBoard 导出 HTML/PDF。
-- [x] 股票权益基金可从冻结的 `fund_snapshot` 显式创建持仓股票报告父批次；普通基金使用直接披露、ETF 联接使用已审计穿透持仓，最多十个独立 `stock_check` 子运行按专用默认 5 并发执行。父批次保留重试、取消、续跑、历史版本与 PDF ZIP，子报告带基金来源上下文且不参与股票评分；基金级持仓综合 HTML/PDF 不在本阶段生成。
+- [x] 股票权益基金可从冻结的 `fund_snapshot` 显式创建持仓股票报告父批次；普通基金使用直接披露、ETF 联接使用已审计穿透持仓，最多十个独立 `stock_check` 子运行按专用默认 2 并发执行。父批次保留重试、取消、续跑、历史版本与 PDF ZIP，子报告带基金来源上下文且不参与股票评分；基金级持仓综合 HTML/PDF 不在本阶段生成。
 
 ### Phase E：Provider 完整性与敏感源开关
 
@@ -221,8 +221,7 @@ provider 失败时保留失败阶段和异常类型。前端只展示用户可�
 - DomainPack 清单：`domain_packs/finance_ashare/domain.yaml`
 - 基金方法：`domain_packs/finance_ashare/subagents/fund_methodology.py`
 - UZI 方法：`domain_packs/finance_ashare/subagents/uzi_methodology.py`
-- UZI 独立方法产品：`domain_packs/finance_ashare/subagents/uzi_method_products.py`
-- UZI Tier‑1 与组合方法：`domain_packs/finance_ashare/subagents/uzi_tier1_methodology.py`
+- UZI 原生方法：`domain_packs/finance_ashare/subagents/uzi_392_native_methods.py`
 - UZI 规则：`domain_packs/finance_ashare/subagents/uzi_panel_rules.py`
 - 22 维真实源核验：`python -m research_system.runtime.diagnostics.status.uzi_provider_smoke --symbol 600519 --sector 白酒`
 - 70 源精确目录：`research_system/adapters/vendors/uzi_source_catalog.py`

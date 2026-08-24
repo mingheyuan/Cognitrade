@@ -471,7 +471,10 @@ class TurnExtensionTests(unittest.TestCase):
             )
             resumed = runner.resume(run_id)
 
-            self.assertEqual(first.status, "running")
+            self.assertEqual(first.status, "paused")
+            self.assertNotEqual(first.message, "continuation required")
+            self.assertEqual(first.progress.current_phase, "paused")
+            self.assertEqual(first.progress.latest_event, "turn_paused")
             self.assertEqual(resumed.status, "completed")
             self.assertEqual(adapter.calls, 1)
             self.assertEqual(

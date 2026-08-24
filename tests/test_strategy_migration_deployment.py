@@ -161,6 +161,107 @@ class StrategyDeploymentPreflightTests(unittest.TestCase):
             finally:
                 database.close()
 
+    def test_sqlite_0004_upgrade_preserves_existing_collection_children(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            database_path = workspace / "migrated.sqlite3"
+            database_url = f"sqlite:///{database_path}"
+            environment = {
+                **os.environ,
+                "COGNITRADE_DATABASE_URL": database_url,
+            }
+            baseline = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "alembic",
+                    "-c",
+                    "alembic.ini",
+                    "upgrade",
+                    "20260820_0003",
+                ],
+                cwd=REPO_ROOT,
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(baseline.returncode, 0, baseline.stdout)
+            with sqlite3.connect(database_path) as connection:
+                connection.execute("PRAGMA foreign_keys=ON")
+                connection.execute(
+                    """
+                    INSERT INTO market_data_collection_jobs (
+                        id, tenant_id, user_id, idempotency_key, origin,
+                        job_type, mode, status, symbols_json, dimensions_json,
+                        start_date, end_date, max_concurrency,
+                        publish_when_complete, request_json, progress_json,
+                        checkpoint_json, requested_by, cancel_requested,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "existing-job", "tenant", "user", "existing-key", "manual",
+                        "historical_backfill", "missing_or_stale", "queued",
+                        '["600519.SH"]', '["0_basic"]', "2026-08-20", "2026-08-20",
+                        5, 1, "{}", "{}", "{}", "tester", 0,
+                        "2026-08-20 00:00:00", "2026-08-20 00:00:00",
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO market_data_collection_tasks (
+                        id, job_id, symbol, market, exchange_timezone, dimension,
+                        start_date, end_date, status, attempt_count, max_attempts,
+                        retryable, checkpoint_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "existing-task", "existing-job", "600519.SH", "CN_EQUITY",
+                        "Asia/Shanghai", "0_basic", "2026-08-20", "2026-08-20",
+                        "queued", 0, 3, 1, "{}", "2026-08-20 00:00:00",
+                        "2026-08-20 00:00:00",
+                    ),
+                )
+
+            upgraded = subprocess.run(
+                [sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"],
+                cwd=REPO_ROOT,
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(upgraded.returncode, 0, upgraded.stdout)
+            with sqlite3.connect(database_path) as connection:
+                columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(market_data_collection_jobs)"
+                    )
+                }
+                self.assertIn("parent_job_id", columns)
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM market_data_collection_tasks "
+                        "WHERE id='existing-task' AND job_id='existing-job'"
+                    ).fetchone()[0],
+                    1,
+                )
+                self.assertEqual(
+                    connection.execute("PRAGMA foreign_key_check").fetchall(), []
+                )
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT version_num FROM alembic_version"
+                    ).fetchone()[0],
+                    "20260820_0004",
+                )
+
     def test_migrated_database_object_store_and_policy_pass(self) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)

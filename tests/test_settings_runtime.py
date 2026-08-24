@@ -55,8 +55,19 @@ class SettingsRuntimeTests(unittest.TestCase):
             self.assertEqual(settings.baostock_socket_timeout_seconds, 9)
             self.assertEqual(settings.fund_holding_report_max_auto_retries, 4)
             self.assertEqual(settings.strategy_backfill_batch_timeout_seconds, 28800)
+            self.assertFalse(settings.market_data_auto_collection_enabled)
+            self.assertEqual(settings.market_data_collection_concurrency, 5)
+            self.assertEqual(settings.fund_holding_report_concurrency, 2)
             self.assertEqual(settings.workspace_root, resolved_root / "workspace")
             self.assertEqual(settings.config_root, resolved_root / "workspace" / "config")
+
+    def test_market_data_collection_concurrency_is_limited_to_five(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir)).model_copy(
+                update={"market_data_collection_concurrency": 6}
+            )
+            with self.assertRaisesRegex(ValueError, "between 1 and 5"):
+                settings.validate()
 
 
 if __name__ == "__main__":

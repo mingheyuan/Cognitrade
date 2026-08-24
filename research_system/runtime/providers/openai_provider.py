@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import json
 import re
 from typing import Any, TypeVar
@@ -134,6 +133,7 @@ class OpenAIProvider:
         force_json: bool = False,
         timeout_seconds: float | None = None,
         max_retries: int | None = None,
+        max_continuation_attempts: int | None = None,
     ) -> str:
         client = self._client_instance()
         request_client = client.with_options(max_retries=max_retries) if max_retries is not None else client
@@ -146,11 +146,16 @@ class OpenAIProvider:
         )
         if request_timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
+        continuation_attempts = (
+            self._MAX_CONTINUATION_ATTEMPTS
+            if max_continuation_attempts is None
+            else max(int(max_continuation_attempts), 0)
+        )
         try:
             parts: list[str] = []
             previous_response_id: str | None = None
             current_input = prompt
-            for _ in range(self._MAX_CONTINUATION_ATTEMPTS + 1):
+            for _ in range(continuation_attempts + 1):
                 response = request_client.responses.create(
                     model=self.settings.default_model,
                     instructions=system_prompt,
@@ -323,49 +328,6 @@ class OpenAIProvider:
     @classmethod
     def _strip_public_progress(cls, text: str) -> str:
         return cls._PUBLIC_PROGRESS_PATTERN.sub("", str(text or "")).strip()
-
-    def stream_complete(
-        self,
-        *,
-        system_prompt: str,
-        user_prompt: str,
-        on_text_delta: Callable[[str], None],
-        on_reasoning_summary: Callable[[str], None] | None = None,
-        temperature: float = 0.2,
-        reasoning_effort: str | None = None,
-    ) -> str:
-        client = self._client_instance()
-        effective_reasoning_effort = reasoning_effort or self.settings.openai_reasoning_effort
-        try:
-            parts: list[str] = []
-            previous_response_id: str | None = None
-            current_input = user_prompt
-            for _ in range(self._MAX_CONTINUATION_ATTEMPTS + 1):
-                part_text, final_response = self.response_support.stream_response_part(
-                    client=client,
-                    system_prompt=system_prompt,
-                    user_input=current_input,
-                    previous_response_id=previous_response_id,
-                    temperature=temperature,
-                    reasoning_effort=effective_reasoning_effort,
-                    on_text_delta=on_text_delta,
-                    on_reasoning_summary=on_reasoning_summary,
-                )
-                if part_text:
-                    parts.append(part_text)
-                if not self.response_support.should_continue_response(final_response):
-                    return "".join(parts)
-                previous_response_id = self.response_support.response_id(final_response)
-                if not previous_response_id:
-                    return "".join(parts)
-                current_input = self._CONTINUATION_PROMPT
-            return "".join(parts)
-        except LLMProviderError:
-            raise
-        except APITimeoutError as exc:
-            raise LLMProviderError(f"llm_request_timeout: {self.request_timeout_seconds}s") from exc
-        except Exception as exc:
-            raise LLMProviderError(f"llm_request_failed: {exc.__class__.__name__}: {exc}") from exc
 
     def embed_texts(
         self,

@@ -7,6 +7,7 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from research_system.strategies.models import Base
+from research_system.market_data import models as _market_data_models  # noqa: F401
 
 
 config = context.config
@@ -40,8 +41,15 @@ def run_migrations_online() -> None:
         future=True,
     )
     with connectable.connect() as connection:
-        if connection.dialect.name == "sqlite":
-            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        sqlite = connection.dialect.name == "sqlite"
+        if sqlite:
+            # SQLite batch migrations rebuild a table by copying it and then
+            # dropping the original. Existing child rows would make that drop
+            # fail while foreign-key enforcement is enabled. Disable enforcement
+            # only on this migration connection, then verify the complete graph
+            # before turning it back on. Application connections still enable
+            # foreign_keys independently in StrategyDatabase.
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
             connection.exec_driver_sql("PRAGMA busy_timeout=30000")
             # SQLAlchemy 2 starts an implicit transaction for PRAGMA calls.
             # Finish it before Alembic opens its own migration transaction;
@@ -55,6 +63,17 @@ def run_migrations_online() -> None:
         )
         with context.begin_transaction():
             context.run_migrations()
+        if sqlite:
+            connection.commit()
+            violations = connection.exec_driver_sql("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise RuntimeError(
+                    "SQLite migration left foreign-key violations: "
+                    + repr(violations[:20])
+                )
+            connection.commit()
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            connection.commit()
 
 
 if context.is_offline_mode():

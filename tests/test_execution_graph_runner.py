@@ -274,7 +274,10 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
                 registry=self.registry,
                 run_root=Path(temporary_directory),
             )
-            runner.request_pause()
+            write_json(
+                runner.control_path,
+                {"pause_requested": True, "cancel_requested": False},
+            )
             paused = runner.run(
                 graph=self._legal_graph(),
                 run_id="legal-run",
@@ -438,7 +441,10 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(waiting.snapshot.status, "waiting_approval")
-            runner.request_cancel()
+            write_json(
+                runner.control_path,
+                {"pause_requested": False, "cancel_requested": True},
+            )
             cancelled = runner.resume()
             self.assertEqual(cancelled.snapshot.status, "cancelled")
 

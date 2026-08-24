@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import importlib
+import json
 import os
 from pathlib import Path
 import re
 from tempfile import TemporaryDirectory
+from threading import Lock
+from time import sleep
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+
+from jsonschema import Draft202012Validator
 
 from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
     AgentAnalysisPayload,
@@ -14,12 +20,18 @@ from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
     AgentDimensionPayload,
     AgentNarrativeCorePayload,
     _canonical_evidence_path,
+    _deep_methods_compatible_raw,
     _normalize_evidence_paths,
     _normalize_payload_paths,
+    _research_workflow_compatible_features,
     _safe_error_detail,
+    _self_review_compatible_raw,
+    _snapshot_rows_for_symbol,
+    _workflow_dimension_keys,
     execute_native_analysis,
 )
 from tests.test_uzi_392_native_methods import _snapshots
+from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import Uzi392FetcherRuntime
 
 
 _LITE_DIMENSIONS = {
@@ -182,7 +194,332 @@ class _RepairingEvidenceProvider(_LiteAgentProvider):
         return result
 
 
+class _RepairingBuyZoneProvider(_LiteAgentProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.youzi_calls = 0
+
+    def parse(self, **kwargs):
+        result = super().parse(**kwargs)
+        if (
+            kwargs.get("schema") is AgentBuyZonePayload
+            and " youzi 买入区间" in str(kwargs.get("user_prompt") or "")
+        ):
+            self.youzi_calls += 1
+            if self.youzi_calls == 1:
+                result["zone"]["basis_fields"] = [
+                    "raw.dimensions.1_financials.data.revenue_history[0]"
+                ]
+        return result
+
+
+class _RepairingNarrativeProvider(_LiteAgentProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.narrative_calls = 0
+
+    def parse(self, **kwargs):
+        result = super().parse(**kwargs)
+        if kwargs.get("schema") is AgentNarrativeCorePayload:
+            self.narrative_calls += 1
+            if self.narrative_calls == 1:
+                result["panel_evidence_paths"] = [
+                    "panel.consensus_final"
+                ]
+        return result
+
+
+class _ConcurrencyProvider(_LiteAgentProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self._active_lock = Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def parse(self, **kwargs):
+        with self._active_lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            sleep(0.02)
+            return super().parse(**kwargs)
+        finally:
+            with self._active_lock:
+                self.active -= 1
+
+
 class Uzi392AnalysisGateTests(unittest.TestCase):
+    def test_independent_agent_stages_honor_configured_parallelism(self) -> None:
+        provider = _ConcurrencyProvider()
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="lite",
+            llm_provider=provider,
+        )
+
+        self.assertTrue(result["report_allowed"])
+        self.assertEqual(provider.max_active, 2)
+
+    def test_full_agent_workflow_expands_lite_to_all_dimensions_and_hard_gates(self) -> None:
+        self.assertEqual(len(_workflow_dimension_keys("lite", full_agent_workflow=True)), 20)
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="lite",
+            llm_provider=None,
+            full_agent_workflow=True,
+        )
+
+        analysis = result["results"][0]
+        self.assertEqual(result["agent_workflow_mode"], "full")
+        self.assertFalse(result["report_allowed"])
+        self.assertTrue(analysis["roleplay"]["required"])
+        self.assertTrue(analysis["qualitative_execution"]["required"])
+        self.assertEqual(len(analysis["self_review"]["enabled_dimensions"]), 20)
+
+    def test_nullable_moat_is_only_normalized_for_the_legacy_idea_screen(self) -> None:
+        features = {"moat_known": False, "moat_total": None, "fcf_positive": None}
+
+        compatible = _research_workflow_compatible_features(features)
+
+        self.assertIsNone(features["moat_total"])
+        self.assertEqual(compatible["moat_total"], 0)
+        self.assertIsNone(compatible["fcf_positive"])
+
+    def test_nullable_moat_scores_are_normalized_only_for_deep_methods(self) -> None:
+        raw = {"dimensions": {"14_moat": {"data": {"scores": None}}}}
+
+        compatible = _deep_methods_compatible_raw(raw)
+
+        self.assertIsNone(raw["dimensions"]["14_moat"]["data"]["scores"])
+        self.assertEqual(
+            compatible["dimensions"]["14_moat"]["data"]["scores"],
+            {},
+        )
+
+    def test_lite_analysis_accepts_nullable_optional_moat_scores(self) -> None:
+        rows = _lite_snapshots()
+        rows.append(
+            {
+                "snapshot_type": "moat",
+                "symbol": "600000",
+                "facts": {
+                    "_uzi_raw_result": {
+                        "data": {"scores": None},
+                        "sources": [{"provider": "fixture"}],
+                    }
+                },
+            }
+        )
+
+        result = execute_native_analysis(
+            rows,
+            ["600000"],
+            profile="lite",
+            llm_provider=_LiteAgentProvider(),
+        )
+
+        analysis = result["results"][0]
+        self.assertIsNone(
+            analysis["raw"]["dimensions"]["14_moat"]["data"]["scores"]
+        )
+        self.assertNotIn("computation_error", analysis)
+        self.assertTrue(result["report_allowed"])
+
+    def test_multi_symbol_qualitative_rows_are_isolated(self) -> None:
+        rows = [
+            {
+                "snapshot_type": "policy",
+                "symbol": "600519",
+                "facts": {"evidence": [{"url": "https://example.test/maotai"}]},
+            },
+            {
+                "snapshot_type": "policy",
+                "symbol": "000858.SZ",
+                "facts": {"evidence": [{"url": "https://example.test/wuliangye"}]},
+            },
+            {
+                "snapshot_type": "macro",
+                "symbol": None,
+                "facts": {"evidence": [{"url": "https://example.test/global"}]},
+            },
+        ]
+
+        selected = _snapshot_rows_for_symbol(rows, "600519.SH")
+
+        self.assertEqual(
+            [row.get("symbol") for row in selected],
+            ["600519", None],
+        )
+        self.assertNotIn("wuliangye", str(selected))
+
+    def test_multi_symbol_analysis_keeps_success_when_a_peer_pipeline_fails(self) -> None:
+        successful = {
+            "symbol": "600519",
+            "raw": {"ticker": "600519.SH", "dimensions": {}},
+            "self_review": {
+                "critical_count": 0,
+                "warning_count": 0,
+                "issues": [],
+            },
+            "report_allowed": True,
+            "recovery_history": [],
+        }
+        with patch(
+            "domain_packs.finance_ashare.subagents.uzi_392_analysis._execute_symbol",
+            side_effect=[successful, RuntimeError("https://provider.test?q=1&token=secret")],
+        ):
+            result = execute_native_analysis(
+                [],
+                ["600519", "000858"],
+                profile="lite",
+                llm_provider=None,
+            )
+
+        self.assertEqual(len(result["results"]), 2)
+        self.assertTrue(result["results"][0]["report_allowed"])
+        self.assertFalse(result["results"][1]["report_allowed"])
+        self.assertEqual(result["results"][1]["self_review"]["critical_count"], 1)
+        self.assertNotIn("secret", str(result["results"][1]))
+        self.assertEqual(result["quality_status"], "degraded")
+        self.assertFalse(result["report_allowed"])
+        schema = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "domain_packs/finance_ashare/artifact_schemas/uzi_native_analysis.json"
+            ).read_text(encoding="utf-8")
+        )
+        Draft202012Validator(schema).validate(result)
+
+    def test_multi_root_collection_failure_skips_native_analysis(self) -> None:
+        snapshots = [{
+            "snapshot_type": "capital_flow",
+            "symbol": "000858",
+            "facts": {
+                "availability": "data_gap",
+                "_uzi_symbol_route_failed": True,
+            },
+            "quality_status": "data_gap",
+        }]
+        with patch(
+            "domain_packs.finance_ashare.subagents.uzi_392_analysis._execute_symbol",
+        ) as execute_symbol:
+            result = execute_native_analysis(
+                snapshots,
+                ["000858"],
+                profile="lite",
+                llm_provider=None,
+            )
+
+        execute_symbol.assert_not_called()
+        failed = result["results"][0]
+        self.assertFalse(failed["report_allowed"])
+        self.assertEqual(failed["computation_error"], "RootCollectionError: analysis_unavailable")
+        self.assertEqual(result["quality_status"], "quality_gate_blocked")
+
+    def test_multi_symbol_recovery_history_is_scoped_and_not_duplicated(self) -> None:
+        received: dict[str, list[dict]] = {}
+
+        def execute_symbol(_rows, symbol, **kwargs):
+            received[symbol] = list(kwargs["recovery_history"])
+            return {
+                "symbol": symbol,
+                "raw": {"ticker": symbol, "dimensions": {}},
+                "self_review": {"critical_count": 0, "warning_count": 0, "issues": []},
+                "report_allowed": True,
+                "recovery_history": [
+                    *kwargs["recovery_history"],
+                    {"stage": "self_review", "symbol": symbol, "status": "passed"},
+                ],
+            }
+
+        source_history = [
+            {"stage": "global", "status": "completed"},
+            {"stage": "fetch", "symbol": "600519.SH", "status": "recovered"},
+            {"stage": "fetch", "symbol": "000858.SZ", "status": "recovered"},
+        ]
+        with patch(
+            "domain_packs.finance_ashare.subagents.uzi_392_analysis._execute_symbol",
+            side_effect=execute_symbol,
+        ):
+            result = execute_native_analysis(
+                [],
+                ["600519", "000858"],
+                profile="lite",
+                llm_provider=None,
+                recovery_history=source_history,
+            )
+
+        self.assertEqual(
+            received["600519"],
+            [{"stage": "fetch", "symbol": "600519.SH", "status": "recovered"}],
+        )
+        self.assertEqual(
+            received["000858"],
+            [{"stage": "fetch", "symbol": "000858.SZ", "status": "recovered"}],
+        )
+        self.assertEqual(
+            sum(1 for row in result["recovery_history"] if row["stage"] == "global"),
+            1,
+        )
+        self.assertEqual(len(result["recovery_history"]), 5)
+
+    def test_self_review_view_normalizes_nullable_strings_and_dcf_key_only(self) -> None:
+        raw = {
+            "dimensions": {
+                "0_basic": {"data": {"industry": None}},
+                "7_industry": {
+                    "data": {"cninfo_metrics": {"industry_name_match": None}}
+                },
+                "20_valuation_models": {
+                    "data": {"dcf": {"intrinsic_per_share": 42.5}}
+                },
+            }
+        }
+
+        compatible = _self_review_compatible_raw(raw)
+
+        self.assertIsNone(raw["dimensions"]["0_basic"]["data"]["industry"])
+        self.assertEqual(compatible["dimensions"]["0_basic"]["data"]["industry"], "")
+        self.assertEqual(
+            compatible["dimensions"]["7_industry"]["data"]["cninfo_metrics"][
+                "industry_name_match"
+            ],
+            "",
+        )
+        self.assertEqual(
+            compatible["dimensions"]["20_valuation_models"]["data"]["dcf"][
+                "intrinsic_value_per_share"
+            ],
+            42.5,
+        )
+        self.assertNotIn(
+            "intrinsic_value_per_share",
+            raw["dimensions"]["20_valuation_models"]["data"]["dcf"],
+        )
+        Uzi392FetcherRuntime(
+            workspace_root=Path(__file__).resolve().parents[1] / "workspace"
+        )
+        self_review = importlib.import_module("lib.self_review")
+        ctx = {
+            "raw": compatible,
+            "dims": compatible["dimensions"],
+            "syn": {},
+            "panel": {},
+            "market": "A",
+        }
+        self.assertEqual(self_review.check_industry_mapping_sanity(ctx), [])
+        self.assertEqual(self_review.check_metals_materials_populated(ctx), [])
+        self.assertFalse(
+            any(
+                "DCF 内在价值" in issue.issue
+                for issue in self_review.check_valuation_sanity(ctx)
+            )
+        )
+
     def test_unknown_dimension_evidence_retries_only_the_failed_stage(self) -> None:
         provider = _RepairingEvidenceProvider()
 
@@ -195,6 +532,58 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
 
         self.assertTrue(result["report_allowed"])
         self.assertEqual(provider.dimension_calls, 3)
+        self.assertTrue(
+            any(
+                "MECHANICAL_EVIDENCE_REPAIR=" in prompt
+                for prompt in provider.user_prompts
+            )
+        )
+
+    def test_unknown_buy_zone_evidence_retries_only_the_failed_stage(self) -> None:
+        provider = _RepairingBuyZoneProvider()
+        progress: list[dict] = []
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="lite",
+            llm_provider=provider,
+            progress_callback=progress.append,
+        )
+
+        self.assertTrue(result["report_allowed"])
+        self.assertEqual(provider.calls, 8)
+        self.assertEqual(provider.youzi_calls, 2)
+        self.assertEqual(
+            sum(
+                row.get("stage") == "buy_zone_youzi_repair"
+                for row in progress
+            ),
+            1,
+        )
+
+    def test_unknown_narrative_evidence_retries_only_narrative_stage(self) -> None:
+        provider = _RepairingNarrativeProvider()
+        progress: list[dict] = []
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="lite",
+            llm_provider=provider,
+            progress_callback=progress.append,
+        )
+
+        self.assertTrue(result["report_allowed"])
+        self.assertEqual(provider.calls, 8)
+        self.assertEqual(provider.narrative_calls, 2)
+        self.assertEqual(
+            sum(
+                row.get("stage") == "narrative_core_repair"
+                for row in progress
+            ),
+            1,
+        )
         self.assertTrue(
             any(
                 "MECHANICAL_EVIDENCE_REPAIR=" in prompt
@@ -247,7 +636,7 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
             if "完全缺失" in str(issue.get("issue") or "")
         }
         self.assertEqual(missing_dimensions, set())
-        self.assertEqual(len(analysis["panel"]["investors"]), 10)
+        self.assertEqual(len(analysis["panel"]["investors"]), 66)
         self.assertEqual(
             set(analysis["agent_analysis"]["dim_commentary"]),
             _LITE_DIMENSIONS,
@@ -300,8 +689,29 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         self.assertTrue(any(row.get("stage") == "self_review" for row in progress))
         self.assertTrue(all(0 <= int(row.get("progress_percent") or 0) <= 100 for row in progress))
 
+    def test_school_lock_applies_to_native_panel_synthesis_and_agent_prompt(self) -> None:
+        provider = _LiteAgentProvider()
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="lite",
+            school="A",
+            llm_provider=provider,
+        )
+
+        analysis = result["results"][0]
+        self.assertEqual(result["school"], "A")
+        self.assertEqual(analysis["synthesis"]["school_lock"], {"group": "A", "label": "价值派"})
+        self.assertTrue(all(
+            row.get("signal") == "skip"
+            for row in analysis["panel"]["investors"]
+            if row.get("group") != "A"
+        ))
+        self.assertTrue(all("UZI_SCHOOL=A" in prompt for prompt in provider.system_prompts))
+
     def test_native_panel_obeys_all_profile_seat_counts(self) -> None:
-        for profile, expected in (("lite", 10), ("medium", 51), ("deep", 66)):
+        for profile, expected in (("lite", 66), ("medium", 66), ("deep", 66)):
             with self.subTest(profile=profile):
                 result = execute_native_analysis(
                     _lite_snapshots(),
@@ -311,16 +721,18 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
                 )
                 panel = result["results"][0]["panel"]
                 self.assertEqual(len(panel["investors"]), expected)
+                short_total = panel["short_consensus"]["total"]
+                self.assertEqual(short_total, 2)
                 self.assertEqual(
-                    sum(panel["signal_distribution"].values()),
+                    sum(panel["signal_distribution"].values()) + short_total,
                     expected,
                 )
                 self.assertEqual(
-                    sum(panel["vote_distribution"].values()),
+                    sum(panel["vote_distribution"].values()) + short_total,
                     expected,
                 )
 
-    def test_transport_timeout_is_not_retried_as_agent_content_repair(self) -> None:
+    def test_lite_transport_timeout_is_a_native_warning_without_content_retry(self) -> None:
         provider = _LiteAgentProvider(timeout=True)
 
         result = execute_native_analysis(
@@ -331,19 +743,21 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         )
 
         analysis = result["results"][0]
-        self.assertEqual(provider.calls, 1)
-        self.assertEqual(len(analysis["recovery_history"]), 1)
-        self.assertEqual(
-            analysis["recovery_history"][0]["exhausted_reason"],
-            "no_remaining_agent_recovery_action",
+        self.assertGreaterEqual(provider.calls, 1)
+        self.assertLessEqual(
+            provider.calls,
+            provider.settings.uzi_llm_max_concurrency,
         )
+        self.assertEqual(len(analysis["recovery_history"]), 1)
+        self.assertEqual(analysis["recovery_history"][0]["status"], "passed")
+        self.assertTrue(result["report_allowed"])
         timeout_issues = [
             issue
             for issue in analysis["self_review"]["issues"]
             if issue.get("evidence") == "llm_transport_timeout"
         ]
         self.assertEqual(len(timeout_issues), 1)
-        self.assertFalse(result["report_allowed"])
+        self.assertEqual(timeout_issues[0]["severity"], "warning")
 
     def test_medium_transport_timeout_does_not_retry_for_downstream_qualitative_stage(self) -> None:
         provider = _LiteAgentProvider(timeout=True)
@@ -356,8 +770,12 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         )
 
         analysis = result["results"][0]
-        self.assertEqual(provider.calls, 1)
-        self.assertEqual(provider.reasoning_efforts, ["high"])
+        self.assertGreaterEqual(provider.calls, 1)
+        self.assertLessEqual(
+            provider.calls,
+            provider.settings.uzi_llm_max_concurrency,
+        )
+        self.assertTrue(all(effort == "high" for effort in provider.reasoning_efforts))
         self.assertEqual(len(analysis["recovery_history"]), 1)
         self.assertEqual(
             analysis["recovery_history"][0]["exhausted_reason"],
@@ -371,6 +789,9 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
                 "required": True,
                 "status": "incomplete",
                 "agent_reviewed": False,
+                "errors": [
+                    "B · Industry-Events:ValueError:qualitative evidence URL not in frozen bundle"
+                ],
             },
             "qualitative_deep_dive": {},
         }
@@ -428,6 +849,10 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
 
         self.assertEqual(provider.calls, 9)
         self.assertEqual(qualitative_mock.call_count, 2)
+        self.assertEqual(
+            qualitative_mock.call_args_list[1].kwargs["repair_feedback"],
+            ["B · Industry-Events:ValueError:qualitative evidence URL not in frozen bundle"],
+        )
         history = result["results"][0]["recovery_history"]
         self.assertFalse(history[0]["reused_agent_analysis"])
         self.assertTrue(history[1]["reused_agent_analysis"])

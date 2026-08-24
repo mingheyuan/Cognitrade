@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import os
 from pathlib import Path
 import unittest
@@ -14,6 +15,7 @@ from domain_packs.finance_ashare.subagents.uzi_panel_rules import (
     coverage_stats,
     evaluate_investor,
 )
+from domain_packs.finance_ashare.vendor.uzi_3_9_2 import Uzi392FetcherRuntime
 from domain_packs.finance_ashare.tools.uzi_data_recovery import (
     assess_integrity,
     collect_qualitative_agent_evidence,
@@ -69,9 +71,13 @@ class UziRuleSourceParityTests(unittest.TestCase):
         profile = select_profile({"research_profile": "medium"})
         self.assertEqual(profile["selected"], "medium")
         self.assertEqual(profile["ddg_budget"], 30)
-        self.assertEqual(profile["investors_count"], 51)
+        self.assertEqual(profile["investors_count"], 66)
+        self.assertEqual(profile["declared_investors_count"], 51)
         self.assertEqual(profile["playwright_mode"], "opt-in")
         self.assertEqual(len(profile["playwright_dimensions"]), 6)
+        self.assertEqual(profile["agent_workflow"]["mode"], "full")
+        self.assertTrue(profile["agent_workflow"]["persona_roleplay_required"])
+        self.assertTrue(profile["agent_workflow"]["qualitative_deep_dive_required"])
 
     def test_all_three_profiles_match_the_pinned_uzi_contract(self) -> None:
         lite = select_profile({"research_profile": "lite"})
@@ -85,7 +91,11 @@ class UziRuleSourceParityTests(unittest.TestCase):
         self.assertEqual(len(medium["fetchers_enabled"]), 20)
         self.assertEqual(set(medium["fetchers_enabled"]), set(deep["fetchers_enabled"]))
         self.assertEqual([lite["ddg_budget"], medium["ddg_budget"], deep["ddg_budget"]], [0, 30, 60])
-        self.assertEqual([lite["investors_count"], medium["investors_count"], deep["investors_count"]], [10, 51, 66])
+        self.assertEqual([lite["investors_count"], medium["investors_count"], deep["investors_count"]], [66, 66, 66])
+        self.assertEqual(
+            [lite["declared_investors_count"], medium["declared_investors_count"], deep["declared_investors_count"]],
+            [10, 51, 51],
+        )
         self.assertEqual(
             [len(lite["institutional_methods"]), len(medium["institutional_methods"]), len(deep["institutional_methods"])],
             [1, 17, 18],
@@ -98,6 +108,17 @@ class UziRuleSourceParityTests(unittest.TestCase):
             [len(lite["playwright_dimensions"]), len(medium["playwright_dimensions"]), len(deep["playwright_dimensions"])],
             [0, 6, 10],
         )
+
+    def test_executable_panel_ignores_stale_profile_seat_metadata(self) -> None:
+        Uzi392FetcherRuntime(workspace_root=Path(__file__).resolve().parents[1])
+        score_fns = importlib.import_module("lib.pipeline.score_fns")
+
+        panel = score_fns.generate_panel(
+            {},
+            {"ticker": "600519.SH", "dimensions": {}},
+        )
+
+        self.assertEqual(len(panel["investors"]), 66)
 
     def test_snapshot_bundle_rejects_removed_or_unknown_profiles(self) -> None:
         for profile in ("quick", "unknown"):
@@ -164,6 +185,52 @@ class UziRuleSourceParityTests(unittest.TestCase):
         )
         self.assertEqual(explicit_timeout.deadline_policy, "default")
         self.assertEqual(explicit_timeout.timeout_seconds, 30)
+
+        fund_decision = decision.model_copy(update={"intent": "fund_research"})
+        fund_config = agent_os._domain_turn_config(
+            request=RequestEnvelope(
+                intent="fund_research",
+                user_query="分析偏股混合基金",
+                constraints={"investment_cycle": "3y"},
+            ),
+            decision=fund_decision,
+            execution_mode="graph",
+        )
+        self.assertEqual(fund_config.deadline_policy, "default")
+        self.assertEqual(fund_config.timeout_seconds, settings.run_timeout_seconds)
+
+        explicit_fund_timeout = agent_os._domain_turn_config(
+            request=RequestEnvelope(
+                intent="fund_research",
+                user_query="最多等待 30 秒",
+                constraints={
+                    "investment_cycle": "3y",
+                    "turn_config": {"timeout_seconds": 30},
+                },
+            ),
+            decision=fund_decision,
+            execution_mode="graph",
+        )
+        self.assertEqual(explicit_fund_timeout.deadline_policy, "default")
+        self.assertEqual(explicit_fund_timeout.timeout_seconds, 30)
+
+        explicit_default_policy = agent_os._domain_turn_config(
+            request=RequestEnvelope(
+                intent="fund_research",
+                user_query="使用调用方默认时限",
+                constraints={
+                    "investment_cycle": "3y",
+                    "turn_config": {"deadline_policy": "default"},
+                },
+            ),
+            decision=fund_decision,
+            execution_mode="graph",
+        )
+        self.assertEqual(explicit_default_policy.deadline_policy, "default")
+        self.assertEqual(
+            explicit_default_policy.timeout_seconds,
+            settings.run_timeout_seconds,
+        )
 
     def test_source_semantics_skip_only_rules_that_cannot_evaluate_missing_data(self) -> None:
         features = {
@@ -321,7 +388,7 @@ class UziFallbackParityTests(unittest.TestCase):
         self.assertTrue(snapshots[0]["fallback_applied"])
         self.assertEqual(snapshots[0]["quality_status"], "degraded")
 
-    def test_task25_agent_evidence_runs_all_six_dimensions_in_three_groups(self) -> None:
+    def test_full_lite_task25_agent_evidence_runs_all_six_dimensions_in_three_groups(self) -> None:
         snapshots = [
             {
                 "snapshot_type": snapshot_type,
@@ -366,7 +433,7 @@ class UziFallbackParityTests(unittest.TestCase):
                 snapshots,
                 query="研究贵州茅台",
                 symbols=["600519"],
-                profile="deep",
+                profile="lite",
                 settings=_settings(mx_api_key=None),
             )
 

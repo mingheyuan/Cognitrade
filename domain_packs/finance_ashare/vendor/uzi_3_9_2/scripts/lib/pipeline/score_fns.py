@@ -355,6 +355,7 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
 
     for inv in INVESTORS:
         inv_id = inv["id"]
+        mandate = inv.get("mandate", "long")
         verdict_obj = _evaluate_investor(inv_id, features)
 
         sig = verdict_obj["signal"]
@@ -371,7 +372,11 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
             comment = f"不在能力圈范围内，不做评价。\n{headline}"
             reasoning = verdict_obj.get("rationale", "")
         else:
-            verdict = _score_to_verdict(score, sig)
+            verdict = (
+                "做空候选" if mandate == "short" and sig == "bearish"
+                else "无明确做空逻辑" if mandate == "short"
+                else _score_to_verdict(score, sig)
+            )
 
             # Persona voice layer
             ctx = {
@@ -391,13 +396,15 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
 
         v_key = {"强烈买入": "strongly_buy", "买入": "buy", "关注": "watch",
                  "观望": "wait", "回避": "avoid", "不适合": "skip"}.get(verdict, "n_a")
-        vote_dist[v_key] = vote_dist.get(v_key, 0) + 1
-        sig_dist[sig] = sig_dist.get(sig, 0) + 1
+        if mandate != "short":
+            vote_dist[v_key] = vote_dist.get(v_key, 0) + 1
+            sig_dist[sig] = sig_dist.get(sig, 0) + 1
 
         investors_out.append({
             "investor_id": inv_id,
             "name": inv["name"],
             "group": inv["group"],
+            "mandate": mandate,
             "avatar": f"avatars/{inv_id}.svg",
             "signal": sig,
             "confidence": confidence,
@@ -437,9 +444,10 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
     SCORE_WEIGHT = 0.65   # score 均值权重（连续分 · 区分度）
     VOTE_WEIGHT  = 0.35   # vote 比例权重（离散投票 · 稳定性）
     POLARIZE_K = 1.30     # 极化系数 · >1 让两端拉开 · 50 为中心
-    active_count = len(investors_out) - sig_dist.get("skip", 0)
     bullish = sig_dist.get("bullish", 0)
     neutral = sig_dist.get("neutral", 0)
+    bearish = sig_dist.get("bearish", 0)
+    active_count = bullish + neutral + bearish
 
     def _polarize(c: float, k: float = POLARIZE_K) -> float:
         """极化拉伸 · 50 为中心 · 距离 * k · 裁剪到 [0, 100].
@@ -451,12 +459,31 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
         return max(0.0, min(100.0, 50.0 + (c - 50.0) * k))
 
     # 分量 1 · score 均值（active only · skip 不计）
-    active_scores = [m["score"] for m in investors_out if m.get("signal") != "skip"]
+    active_scores = [
+        m["score"] for m in investors_out
+        if m.get("mandate") != "short" and m.get("signal") != "skip"
+    ]
     score_mean = (sum(active_scores) / len(active_scores)) if active_scores else 50.0
     # 分量 2 · vote 比例（原 v2.11 公式）
     vote_weighted = (bullish + NEUTRAL_WEIGHT * neutral) / max(active_count, 1) * 100
     consensus_raw = SCORE_WEIGHT * score_mean + VOTE_WEIGHT * vote_weighted
     consensus = _polarize(consensus_raw)
+
+    short_book = [m for m in investors_out if m.get("mandate") == "short"]
+    short_active = [m for m in short_book if m.get("signal") != "skip"]
+    short_scores = [m["score"] for m in short_active]
+    short_consensus = {
+        "total": len(short_book),
+        "active": len(short_active),
+        "skip": len(short_book) - len(short_active),
+        "short_candidates": sum(1 for m in short_active if m.get("signal") == "bearish"),
+        "no_short_thesis": sum(1 for m in short_active if m.get("signal") in ("bullish", "neutral")),
+        "avg_score": round(sum(short_scores) / len(short_scores), 1) if short_scores else 50.0,
+        "top_short_candidates": [
+            {"id": m["investor_id"], "name": m["name"], "score": m["score"], "headline": m["headline"]}
+            for m in sorted(short_active, key=lambda item: item["score"])[:5]
+        ],
+    }
 
     # v2.15.4+ · 按流派打分（v2.15.5 同步升级为混合公式）
     # 譬如白马消费股：价值派 85 分（重仓），技术派 30 分（趋势破位）·
@@ -487,13 +514,14 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
 
     school_scores: dict[str, dict] = {}
     for g in sorted(by_group.keys()):
-        members = by_group[g]
+        all_members = by_group[g]
+        members = [m for m in all_members if m.get("mandate") != "short"]
         n_members = len(members)
         active_m = [m for m in members if m.get("signal") != "skip"]
         n_active = len(active_m)
-        g_bull = sum(1 for m in members if m.get("signal") == "bullish")
-        g_neu  = sum(1 for m in members if m.get("signal") == "neutral")
-        g_bear = sum(1 for m in members if m.get("signal") == "bearish")
+        g_bull = sum(1 for m in active_m if m.get("signal") == "bullish")
+        g_neu  = sum(1 for m in active_m if m.get("signal") == "neutral")
+        g_bear = sum(1 for m in active_m if m.get("signal") == "bearish")
         g_skip = sum(1 for m in members if m.get("signal") == "skip")
 
         # v2.15.5 · 流派级混合公式（与总盘保持一致 · 同样极化）
@@ -518,6 +546,7 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
             "desc": meta["desc"],
             "n_members": n_members,
             "n_active": n_active,
+            "short_excluded": len(all_members) - n_members,
             "consensus": round(s_consensus, 1),
             "avg_score": round(s_score_mean, 1),  # alias · 兼容 v2.15.4 字段
             "vote_consensus": round(s_vote, 1),   # v2.15.5 · vote 分量（可视化展开用）
@@ -530,14 +559,38 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
             "dominant_signal": dominant,
         }
 
+    active_long = [
+        investor for investor in investors_out
+        if investor.get("mandate") != "short" and investor.get("signal") != "skip"
+    ]
+    hollow_ids = [
+        investor.get("investor_id") for investor in active_long
+        if (investor.get("score") or 0) == 0
+        and not investor.get("pass")
+        and not investor.get("fail")
+    ]
+    hollow_pct = round(len(hollow_ids) / len(active_long) * 100, 0) if active_long else 0
+    consensus_valid = hollow_pct < 20
+
     return {
         "ticker": raw["ticker"],
         "panel_consensus": round(consensus, 1),
+        "consensus_valid": consensus_valid,
+        "hollow_verdicts": len(hollow_ids),
+        "hollow_pct": hollow_pct,
+        "hollow_ids": hollow_ids,
+        "consensus_warning": (
+            None if consensus_valid else
+            f"共识分不可采信：{len(hollow_ids)}/{len(active_long)} 位多头评委（{hollow_pct:.0f}%）"
+            "没有任何有效规则证据。"
+        ),
         "vote_distribution": vote_dist,
         "signal_distribution": sig_dist,
         "investors": investors_out,
         # v2.15.4 · 按流派分数 · 7 个 school 各自 consensus/avg_score/verdict
         "school_scores": school_scores,
+        "long_active": active_count,
+        "short_consensus": short_consensus,
         # v2.15.5 · 诊断字段 · 混合公式各分量 + 极化前后值
         "consensus_formula": {
             "version": "v2.15.5 · polarize(0.65*score_mean + 0.35*vote_weighted, k=1.3)",
@@ -554,6 +607,7 @@ def generate_panel(dims_scored: dict, raw: dict) -> dict:
             "bearish": sig_dist.get("bearish", 0),
             "skip": sig_dist.get("skip", 0),
             "active": active_count,
+            "short_excluded": len(short_book),
         },
     }
 
@@ -1197,7 +1251,15 @@ def generate_synthesis(raw: dict, dims_scored: dict, panel: dict, agent_analysis
     # Dashboard — core_conclusion: agent override > script
     ytd_return = (kline.get("kline_stats") or {}).get("ytd_return", "—")
     agent_core_conclusion = narrative_override.get("core_conclusion") or ""
-    core_conclusion = agent_core_conclusion or f"{name} · {int(overall)} 分 · {verdict_label}。51 位大佬里 {panel['signal_distribution']['bullish']} 人看多，YTD {ytd_return}。{punchline}"
+    long_active = panel.get("long_active") or sum(
+        panel.get("signal_distribution", {}).get(key, 0)
+        for key in ("bullish", "neutral", "bearish")
+    )
+    core_conclusion = agent_core_conclusion or (
+        f"{name} · {int(overall)} 分 · {verdict_label}。"
+        f"{long_active} 位多头评委里 {panel['signal_distribution']['bullish']} 人看多，"
+        f"YTD {ytd_return}。{punchline}"
+    )
 
     # v2.2 · dim_commentary: prefer agent-written, fallback to AUTO-SUMMARY (v2.6.1)
     # 关键修复：原 fallback 只生成 "[脚本占位]" 字符串，导致直跑模式下报告里
@@ -1258,6 +1320,7 @@ def generate_synthesis(raw: dict, dims_scored: dict, panel: dict, agent_analysis
         "school_lock": school_lock,
         # v2.15.4 · 按流派分数也带到 synthesis · 让报告层无须回拉 panel.json
         "school_scores": panel.get("school_scores", {}),
+        "short_consensus": panel.get("short_consensus", {}),
         "dim_commentary": dim_commentary_final,  # agent-written > stub
         "institutional_modeling": {
             "dcf_intrinsic": dcf_summary.get("dcf_intrinsic"),

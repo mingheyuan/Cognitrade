@@ -1,5 +1,5 @@
 domain_id: finance_ashare
-version: 0.6.0
+version: 0.7.0
 description: A-share evidence-backed professional research pack.
 artifact_types:
   - artifact_type: user_request
@@ -7,7 +7,6 @@ artifact_types:
   - artifact_type: stock_snapshot_bundle
   - artifact_type: snapshot
   - artifact_type: evidence_set
-  - artifact_type: financial_analysis
   - artifact_type: screening_result
   - artifact_type: sector_analysis
   - artifact_type: thesis_review
@@ -16,40 +15,13 @@ artifact_types:
   - artifact_type: distillation_review
   - artifact_type: research_report
   - artifact_type: main_agent_synthesis
-  - artifact_type: valuation_model
-  - artifact_type: investor_panel_review
-  - artifact_type: risk_scan
   - artifact_type: quick_scan
   - artifact_type: uzi_native_method_result
   - artifact_type: uzi_native_command_result
   - artifact_type: uzi_native_analysis
-  - artifact_type: institutional_analysis
-  - artifact_type: research_workflow
-  - artifact_type: deep_analysis
-  - artifact_type: uzi_dimension_coverage
   - artifact_type: fund_snapshot
   - artifact_type: fund_analysis
   - artifact_type: fund_holding_report_batch
-  - artifact_type: ai_readiness
-  - artifact_type: earnings_preview
-  - artifact_type: model_update
-  - artifact_type: returns_attribution
-  - artifact_type: holding_rebalance
-  - artifact_type: portfolio_rebalance
-  - artifact_type: three_statement_model
-  - artifact_type: quick_lbo
-  - artifact_type: accretion_dilution
-  - artifact_type: segmental_model
-  - artifact_type: initiation_report
-  - artifact_type: earnings_review
-  - artifact_type: catalyst_calendar
-  - artifact_type: thesis_tracker
-  - artifact_type: morning_note
-  - artifact_type: ic_memo
-  - artifact_type: porter_bcg
-  - artifact_type: dd_checklist
-  - artifact_type: unit_economics
-  - artifact_type: value_creation_plan
 skills:
   - skill_name: market_snapshot_skill
     version: "1"
@@ -181,8 +153,10 @@ intake:
   minimum_confidence: 0.65
   intents:
     - intent_id: stock_check
-      description: Run the complete pinned UZI 3.9.4 analysis and strict quality gate on one or more companies.
+      report_requires_bundle: true
+      description: Run the complete pinned UZI 3.9.4 analysis and strict quality gate on one company.
       required_slots: [symbols, research_profile]
+      optional_slots: [school]
       candidate_capabilities:
         - finance.query.normalize
         - finance.ashare.snapshot.collect
@@ -190,8 +164,10 @@ intake:
         - finance.uzi.native.report.compose
       output_artifact_types: [research_report]
     - intent_id: uzi_analyze_stock
+      report_requires_bundle: true
       description: Run the pinned UZI /analyze-stock command as an independent Agent OS capability.
       required_slots: [symbols, research_profile]
+      optional_slots: [school]
       candidate_capabilities:
         - finance.query.normalize
         - finance.ashare.snapshot.collect
@@ -199,6 +175,7 @@ intake:
         - finance.uzi.native.report.compose
       output_artifact_types: [research_report]
     - intent_id: quick_scan
+      report_requires_bundle: true
       description: Run the pinned UZI 3.9.4 four-dimension stock quick scan and return concise Markdown.
       required_slots: [symbols]
       candidate_capabilities:
@@ -207,144 +184,180 @@ intake:
         - finance.uzi.quick_scan.compose
       output_artifact_types: [quick_scan]
     - intent_id: uzi_dcf
+      report_requires_bundle: true
       description: Run the pinned UZI /dcf command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.dcf]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_panel_only
+      report_requires_bundle: true
       description: Run the pinned UZI /panel-only rule-engine panel without the full report pipeline.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.command.panel_only]
       output_artifact_types: [uzi_native_command_result]
     - intent_id: uzi_scan_trap
+      report_requires_bundle: true
       description: Run the pinned UZI /scan-trap eight-signal command with explicit evidence coverage.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.command.scan_trap]
       output_artifact_types: [uzi_native_command_result]
     - intent_id: uzi_segmental_model
+      report_requires_bundle: true
       description: Run the pinned UZI /segmental-model discovery and validation phases.
       required_slots: [symbols]
       optional_slots: [segmental_model]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.command.segmental_model]
       output_artifact_types: [uzi_native_command_result]
     - intent_id: uzi_comps
+      report_requires_bundle: true
       description: Run the pinned UZI /comps command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.comps]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_lbo
-      description: Run the pinned UZI /lbo command with explicit transaction assumptions.
-      required_slots: [symbols, method_assumptions]
+      report_requires_bundle: true
+      description: Run the pinned UZI /lbo command, preserving its optional transaction defaults when assumptions are omitted.
+      required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.quick_lbo]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_initiate
+      report_requires_bundle: true
       description: Run the pinned UZI /initiate command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.initiation_report]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_earnings
+      report_requires_bundle: true
       description: Run the pinned UZI /earnings command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.earnings_review]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_catalysts
+      report_requires_bundle: true
       description: Run the pinned UZI /catalysts command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.catalyst_calendar]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_thesis
+      report_requires_bundle: true
       description: Run the pinned UZI /thesis command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.thesis_tracker]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_screen
+      report_requires_bundle: true
       description: Run the pinned UZI /screen command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.quantitative_screen]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_dd
+      report_requires_bundle: true
       description: Run the pinned UZI /dd command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.dd_checklist]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_ic_memo
+      report_requires_bundle: true
       description: Run the pinned UZI /ic-memo command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.ic_memo]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_ai_readiness
+      report_requires_bundle: true
       description: Run the pinned UZI /ai-readiness command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.ai_readiness]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_earnings_preview
+      report_requires_bundle: true
       description: Run the pinned UZI /earnings-preview command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.earnings_preview]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_model_update
-      description: Run the pinned UZI /model-update command with explicit updated assumptions.
-      required_slots: [symbols, model_updates]
+      report_requires_bundle: true
+      description: Run the pinned UZI /model-update command, including its native demo mode when updates are omitted.
+      required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.model_update]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_three_statement_method
-      description: Run the pinned UZI three-statement method with all forecast assumptions explicit.
-      required_slots: [symbols, method_assumptions]
+      report_requires_bundle: true
+      description: Run the pinned UZI three-statement method, preserving native defaults for omitted forecast assumptions.
+      required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.three_statement]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_accretion_dilution_method
-      description: Run the pinned UZI merger accretion/dilution method with explicit transaction inputs.
+      report_requires_bundle: true
+      description: Run the pinned UZI merger accretion/dilution method with an explicit target and optional native deal-term defaults.
       required_slots: [symbols, method_assumptions]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.accretion_dilution]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_morning_note_method
+      report_requires_bundle: true
       description: Run the pinned UZI morning-note method.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.morning_note]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_sector_review_method
+      report_requires_bundle: true
       description: Run the pinned UZI sector-review method.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.sector_review]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_porter_bcg_method
+      report_requires_bundle: true
       description: Run the pinned UZI Porter/BCG decision method.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.porter_bcg]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_unit_economics_method
-      description: Run the pinned UZI unit-economics method only after explicit acceptance of its native defaults.
-      required_slots: [symbols, method_assumptions]
+      report_requires_bundle: true
+      description: Run the pinned UZI unit-economics method and disclose its native proxy assumptions as degraded evidence.
+      required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.unit_economics]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_value_creation_plan_method
-      description: Run the pinned UZI value-creation-plan method only after explicit acceptance of its native defaults.
-      required_slots: [symbols, method_assumptions]
+      report_requires_bundle: true
+      description: Run the pinned UZI value-creation-plan method and disclose its native proxy assumptions as degraded evidence.
+      required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.value_creation_plan]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_portfolio_rebalance_method
-      description: Run the pinned UZI strategic portfolio-rebalance method with explicit asset-class targets.
-      required_slots: [portfolio_holdings, asset_class_targets]
+      description: Run the pinned UZI strategic portfolio-rebalance method, using its native balanced allocation when targets are omitted.
+      required_slots: [portfolio_holdings]
       candidate_capabilities: [finance.query.normalize, finance.uzi.native.portfolio_rebalance]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_returns
-      description: Run the pinned UZI /returns command without zero-filling missing returns.
+      description: Run the pinned UZI /returns command, preserving its missing-return warning and zero-contribution behavior.
       required_slots: [portfolio_holdings]
       candidate_capabilities: [finance.query.normalize, finance.uzi.native.returns_attribution]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_rebalance
-      description: Run the pinned UZI /rebalance command with explicit acceptance of its native fee schedule.
+      description: Run the pinned UZI /rebalance command with native equal-weight targets and fee schedule when omitted.
       required_slots: [portfolio_holdings]
       candidate_capabilities: [finance.query.normalize, finance.uzi.native.holding_rebalance]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: stock_compare
-      description: Compare two or more A-share companies on a consistent evidence basis.
+      report_requires_bundle: true
+      description: Run the pinned UZI --versus flow for two to four A-share companies on a consistent evidence basis.
       required_slots: [symbols, research_profile]
+      optional_slots: [school]
       candidate_capabilities:
         - finance.query.normalize
         - finance.ashare.snapshot.collect
         - finance.uzi.native.analyze_stock
         - finance.stock.compare.report.compose
+      output_artifact_types: [research_report]
+    - intent_id: uzi_portfolio_batch
+      report_requires_bundle: true
+      description: Run the pinned UZI --portfolio flow over explicit holdings, with native weight normalization and portfolio HTML.
+      required_slots: [portfolio_holdings, research_profile]
+      optional_slots: [portfolio_name, school]
+      candidate_capabilities:
+        - finance.query.normalize
+        - finance.ashare.snapshot.collect
+        - finance.uzi.native.analyze_stock
+        - finance.uzi.portfolio.report.compose
       output_artifact_types: [research_report]
     - intent_id: stock_screen
       description: Screen an A-share universe and produce traceable candidates.
@@ -366,16 +379,6 @@ intake:
         - finance.fund.analyze
         - finance.fund.report.compose
       output_artifact_types: [fund_analysis, research_report]
-    - intent_id: portfolio_research
-      description: Attribute an explicitly supplied portfolio and evaluate policy-driven rebalancing without fabricating returns, weights or costs.
-      required_slots: [portfolio_holdings]
-      optional_slots: [benchmark_return, rebalance_targets, asset_class_targets, drift_threshold, fee_model, requested_methods]
-      candidate_capabilities:
-        - finance.query.normalize
-        - finance.uzi.tier1.returns_attribution
-        - finance.uzi.tier1.holding_rebalance
-        - finance.uzi.portfolio.rebalance
-      output_artifact_types: [returns_attribution, holding_rebalance]
     - intent_id: sector_research
       description: Research a sector or industry using current evidence.
       required_slots: [sector, research_profile]
@@ -525,6 +528,12 @@ capabilities:
     implementation: subagents.runtime:execute_uzi_native_full_analysis
     consumes:
       - *finance_snapshot_input
+      - artifact_type: normalized_query
+        required: false
+        multiple: false
+      - artifact_type: stock_snapshot_bundle
+        required: false
+        multiple: false
     produces:
       - artifact_type: uzi_native_analysis
     requires_llm: true
@@ -561,6 +570,21 @@ capabilities:
     reliability: 0.99
     cache_scope: run
     tags: [intent:stock_compare]
+  - subagent_type: uzi_native_portfolio_report_composer
+    capability: finance.uzi.portfolio.report.compose
+    capability_version: "1"
+    methodology_version: "3.9.4-source-parity"
+    implementation: subagents.runtime:compose_uzi_portfolio_delivery
+    consumes:
+      - artifact_type: normalized_query
+      - artifact_type: uzi_native_analysis
+    produces:
+      - artifact_type: research_report
+    cost_class: low
+    latency_class: low
+    reliability: 0.99
+    cache_scope: run
+    tags: [uzi:native, intent:uzi_portfolio_batch]
   - subagent_type: uzi_native_dcf_analyst
     capability: finance.uzi.native.dcf
     capability_version: "1"
@@ -821,413 +845,14 @@ capabilities:
     parallel_safe: true
     cache_scope: run
     tags: [uzi:native, method:portfolio_rebalance]
-  - subagent_type: uzi_cashflow_resilience_analyst
-    capability: finance.uzi.method.cashflow_resilience
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-products-v1"
-    implementation: subagents.runtime:evaluate_uzi_cashflow_resilience
-    consumes:
-      - *finance_snapshot_input
-    produces:
-      - artifact_type: financial_analysis
-    cost_class: low
-    latency_class: low
-    reliability: 0.84
-    parallel_safe: true
-    cache_scope: run
-  - subagent_type: uzi_valuation_analyst
-    capability: finance.uzi.valuation.evaluate
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-v1"
-    implementation: subagents.runtime:evaluate_uzi_valuation
-    consumes:
-      - *finance_snapshot_input
-    produces:
-      - artifact_type: valuation_model
-    cost_class: low
-    latency_class: low
-    reliability: 0.9
-    parallel_safe: true
-    cache_scope: run
-    freshness_ttl_seconds: 86400
-    data_period_policy: {kind: latest_available_financial_period}
-    tags: [profile:lite, profile:medium, profile:deep]
-  - subagent_type: uzi_panel_reviewer
-    capability: finance.uzi.panel.review
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-v1"
-    implementation: subagents.runtime:evaluate_uzi_panel
-    consumes:
-      - *finance_snapshot_input
-    produces:
-      - artifact_type: investor_panel_review
-    cost_class: medium
-    latency_class: low
-    reliability: 0.86
-    parallel_safe: true
-    cache_scope: run
-    freshness_ttl_seconds: 86400
-    tags: [profile:lite, profile:medium, profile:deep]
-  - subagent_type: uzi_risk_scanner
-    capability: finance.uzi.risk.scan
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-v1"
-    implementation: subagents.runtime:evaluate_uzi_risk
-    consumes:
-      - *finance_snapshot_input
-    produces:
-      - artifact_type: risk_scan
-    cost_class: low
-    latency_class: low
-    reliability: 0.82
-    parallel_safe: true
-    cache_scope: global
-    freshness_ttl_seconds: 3600
-    tags: [profile:lite, profile:medium, profile:deep]
-  - subagent_type: uzi_institutional_analyst
-    capability: finance.uzi.institutional.evaluate
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-v1"
-    implementation: subagents.runtime:evaluate_uzi_institutional
-    consumes:
-      - *finance_snapshot_input
-      - artifact_type: valuation_model
-        required: false
-    produces:
-      - artifact_type: institutional_analysis
-    cost_class: medium
-    latency_class: medium
-    reliability: 0.82
-    parallel_safe: true
-    cache_scope: global
-    freshness_ttl_seconds: 86400
-    tags: [profile:medium, profile:deep]
-  - subagent_type: uzi_workflow_analyst
-    capability: finance.uzi.workflow.evaluate
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-v1"
-    implementation: subagents.runtime:evaluate_uzi_workflow
-    consumes:
-      - *finance_snapshot_input
-      - artifact_type: valuation_model
-        required: false
-    produces:
-      - artifact_type: research_workflow
-    cost_class: medium
-    latency_class: medium
-    reliability: 0.82
-    parallel_safe: true
-    cache_scope: global
-    freshness_ttl_seconds: 86400
-    tags: [profile:medium, profile:deep]
-  - subagent_type: uzi_deep_analyst
-    capability: finance.uzi.deep.evaluate
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-v1"
-    implementation: subagents.runtime:evaluate_uzi_deep
-    consumes:
-      - *finance_snapshot_input
-      - artifact_type: institutional_analysis
-      - artifact_type: research_workflow
-    produces:
-      - artifact_type: deep_analysis
-    cost_class: high
-    latency_class: high
-    reliability: 0.78
-    parallel_safe: true
-    cache_scope: run
-    freshness_ttl_seconds: 43200
-    tags: [profile:deep]
-  - subagent_type: uzi_dimension_coverage_analyzer
-    capability: finance.uzi.dimensions.cover
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-v1"
-    implementation: subagents.runtime:evaluate_uzi_dimension_coverage
-    consumes:
-      - *finance_snapshot_input
-      - artifact_type: institutional_analysis
-        required: false
-      - artifact_type: research_workflow
-        required: false
-      - artifact_type: deep_analysis
-        required: false
-    produces:
-      - artifact_type: uzi_dimension_coverage
-    cost_class: low
-    latency_class: low
-    reliability: 0.98
-    parallel_safe: true
-    cache_scope: global
-    freshness_ttl_seconds: 3600
-    tags: [profile:medium, profile:deep]
-  - subagent_type: uzi_ai_readiness_analyst
-    capability: finance.uzi.tier1.ai_readiness
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-tier1-v1"
-    implementation: subagents.runtime:evaluate_uzi_ai_readiness
-    consumes:
-      - *finance_snapshot_input
-    produces:
-      - artifact_type: ai_readiness
-    cost_class: low
-    latency_class: low
-    reliability: 0.84
-    parallel_safe: true
-    cache_scope: run
-    freshness_ttl_seconds: 86400
-    tags: [profile:lite, profile:medium, profile:deep]
-  - subagent_type: uzi_earnings_preview_analyst
-    capability: finance.uzi.tier1.earnings_preview
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-tier1-v1"
-    implementation: subagents.runtime:evaluate_uzi_earnings_preview
-    consumes:
-      - *finance_snapshot_input
-    produces:
-      - artifact_type: earnings_preview
-    cost_class: low
-    latency_class: low
-    reliability: 0.84
-    parallel_safe: true
-    cache_scope: run
-    freshness_ttl_seconds: 86400
-    tags: [profile:lite, profile:medium, profile:deep]
-  - subagent_type: uzi_model_update_analyst
-    capability: finance.uzi.tier1.model_update
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-tier1-v1"
-    implementation: subagents.runtime:evaluate_uzi_model_update
-    consumes:
-      - *finance_snapshot_input
-      - artifact_type: valuation_model
-        required: false
-    produces:
-      - artifact_type: model_update
-    cost_class: low
-    latency_class: low
-    reliability: 0.82
-    parallel_safe: true
-    cache_scope: run
-    freshness_ttl_seconds: 86400
-    tags: [profile:lite, profile:medium, profile:deep]
-  - subagent_type: uzi_returns_attribution_analyst
-    capability: finance.uzi.tier1.returns_attribution
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-tier1-v1"
-    implementation: subagents.runtime:evaluate_uzi_returns_attribution
-    consumes:
-      - artifact_type: normalized_query
-    produces:
-      - artifact_type: returns_attribution
-    cost_class: low
-    latency_class: low
-    reliability: 0.98
-    parallel_safe: true
-    cache_scope: run
-    tags: [intent:portfolio_research]
-  - subagent_type: uzi_holding_rebalance_analyst
-    capability: finance.uzi.tier1.holding_rebalance
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-tier1-v1"
-    implementation: subagents.runtime:evaluate_uzi_holding_rebalance
-    consumes:
-      - artifact_type: normalized_query
-    produces:
-      - artifact_type: holding_rebalance
-    cost_class: low
-    latency_class: low
-    reliability: 0.98
-    parallel_safe: true
-    cache_scope: run
-    tags: [intent:portfolio_research]
-  - subagent_type: uzi_portfolio_rebalance_analyst
-    capability: finance.uzi.portfolio.rebalance
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-tier1-v1"
-    implementation: subagents.runtime:evaluate_uzi_portfolio_rebalance
-    consumes:
-      - artifact_type: normalized_query
-    produces:
-      - artifact_type: portfolio_rebalance
-    cost_class: low
-    latency_class: low
-    reliability: 0.98
-    parallel_safe: true
-    cache_scope: run
-    tags: [intent:portfolio_research]
-  - subagent_type: uzi_three_statement_analyst
-    capability: finance.uzi.method.three_statement
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-products-v1"
-    implementation: subagents.runtime:evaluate_uzi_three_statement
-    consumes: [*finance_snapshot_input]
-    produces: [{artifact_type: three_statement_model}]
-    cost_class: low
-    latency_class: low
-    reliability: 0.84
-    parallel_safe: true
-    cache_scope: run
-  - subagent_type: uzi_quick_lbo_analyst
-    capability: finance.uzi.method.quick_lbo
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-products-v1"
-    implementation: subagents.runtime:evaluate_uzi_quick_lbo
-    consumes: [*finance_snapshot_input]
-    produces: [{artifact_type: quick_lbo}]
-    cost_class: low
-    latency_class: low
-    reliability: 0.84
-    parallel_safe: true
-    cache_scope: run
-  - subagent_type: uzi_accretion_dilution_analyst
-    capability: finance.uzi.method.accretion_dilution
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-products-v1"
-    implementation: subagents.runtime:evaluate_uzi_accretion_dilution
-    consumes: [*finance_snapshot_input]
-    produces: [{artifact_type: accretion_dilution}]
-    cost_class: low
-    latency_class: low
-    reliability: 0.84
-    parallel_safe: true
-    cache_scope: run
-  - subagent_type: uzi_segmental_analyst
-    capability: finance.uzi.method.segmental
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-products-v1"
-    implementation: subagents.runtime:evaluate_uzi_segmental
-    consumes: [*finance_snapshot_input]
-    produces: [{artifact_type: segmental_model}]
-    cost_class: low
-    latency_class: low
-    reliability: 0.84
-    parallel_safe: true
-    cache_scope: run
-  - subagent_type: uzi_initiation_report_analyst
-    capability: finance.uzi.method.initiation_report
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-products-v1"
-    implementation: subagents.runtime:evaluate_uzi_initiation_report
-    consumes: [*finance_snapshot_input]
-    produces: [{artifact_type: initiation_report}]
-    cost_class: medium
-    latency_class: low
-    reliability: 0.82
-    parallel_safe: true
-    cache_scope: run
-  - subagent_type: uzi_earnings_review_analyst
-    capability: finance.uzi.method.earnings_review
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-products-v1"
-    implementation: subagents.runtime:evaluate_uzi_earnings_review
-    consumes: [*finance_snapshot_input]
-    produces: [{artifact_type: earnings_review}]
-    cost_class: low
-    latency_class: low
-    reliability: 0.84
-    parallel_safe: true
-    cache_scope: run
-  - subagent_type: uzi_catalyst_calendar_analyst
-    capability: finance.uzi.method.catalyst_calendar
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-products-v1"
-    implementation: subagents.runtime:evaluate_uzi_catalyst_calendar
-    consumes: [*finance_snapshot_input]
-    produces: [{artifact_type: catalyst_calendar}]
-    cost_class: low
-    latency_class: low
-    reliability: 0.84
-    parallel_safe: true
-    cache_scope: run
-  - subagent_type: uzi_thesis_tracker_analyst
-    capability: finance.uzi.method.thesis_tracker
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-products-v1"
-    implementation: subagents.runtime:evaluate_uzi_thesis_tracker
-    consumes: [*finance_snapshot_input]
-    produces: [{artifact_type: thesis_tracker}]
-    cost_class: low
-    latency_class: low
-    reliability: 0.84
-    parallel_safe: true
-    cache_scope: run
-  - subagent_type: uzi_morning_note_analyst
-    capability: finance.uzi.method.morning_note
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-products-v1"
-    implementation: subagents.runtime:evaluate_uzi_morning_note
-    consumes: [*finance_snapshot_input]
-    produces: [{artifact_type: morning_note}]
-    cost_class: low
-    latency_class: low
-    reliability: 0.84
-    parallel_safe: true
-    cache_scope: run
-  - subagent_type: uzi_ic_memo_analyst
-    capability: finance.uzi.method.ic_memo
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-products-v1"
-    implementation: subagents.runtime:evaluate_uzi_ic_memo
-    consumes: [*finance_snapshot_input]
-    produces: [{artifact_type: ic_memo}]
-    cost_class: medium
-    latency_class: low
-    reliability: 0.82
-    parallel_safe: true
-    cache_scope: run
-  - subagent_type: uzi_porter_bcg_analyst
-    capability: finance.uzi.method.porter_bcg
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-products-v1"
-    implementation: subagents.runtime:evaluate_uzi_porter_bcg
-    consumes: [*finance_snapshot_input]
-    produces: [{artifact_type: porter_bcg}]
-    cost_class: low
-    latency_class: low
-    reliability: 0.82
-    parallel_safe: true
-    cache_scope: run
-  - subagent_type: uzi_dd_checklist_analyst
-    capability: finance.uzi.method.dd_checklist
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-products-v1"
-    implementation: subagents.runtime:evaluate_uzi_dd_checklist
-    consumes: [*finance_snapshot_input]
-    produces: [{artifact_type: dd_checklist}]
-    cost_class: medium
-    latency_class: low
-    reliability: 0.82
-    parallel_safe: true
-    cache_scope: run
-  - subagent_type: uzi_unit_economics_analyst
-    capability: finance.uzi.method.unit_economics
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-products-v1"
-    implementation: subagents.runtime:evaluate_uzi_unit_economics
-    consumes: [*finance_snapshot_input]
-    produces: [{artifact_type: unit_economics}]
-    cost_class: low
-    latency_class: low
-    reliability: 0.82
-    parallel_safe: true
-    cache_scope: run
-  - subagent_type: uzi_value_creation_plan_analyst
-    capability: finance.uzi.method.value_creation_plan
-    capability_version: "1"
-    methodology_version: "cognitrade-extension-products-v1"
-    implementation: subagents.runtime:evaluate_uzi_value_creation_plan
-    consumes: [*finance_snapshot_input]
-    produces: [{artifact_type: value_creation_plan}]
-    cost_class: low
-    latency_class: low
-    reliability: 0.82
-    parallel_safe: true
-    cache_scope: run
   - subagent_type: stock_screen_analyzer
     capability: finance.stock.screen
     implementation: subagents.runtime:screen_stocks
     consumes:
       - *finance_snapshot_input
+      - artifact_type: stock_snapshot_bundle
+        required: false
+        multiple: false
     produces:
       - artifact_type: screening_result
     parallel_safe: true
@@ -1239,6 +864,9 @@ capabilities:
     implementation: subagents.runtime:research_sector
     consumes:
       - *finance_snapshot_input
+      - artifact_type: stock_snapshot_bundle
+        required: false
+        multiple: false
     produces:
       - artifact_type: sector_analysis
     parallel_safe: true
@@ -1362,62 +990,6 @@ quality_gates:
     evaluator_capability: finance.uzi.native.report.gate
     blocking: true
     description: Native UZI reports require critical_count=0 and report_allowed=true.
-  - gate_id: finance.valuation.input
-    artifact_type: valuation_model
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Valuation outputs must expose input quality and assumption status.
-    config:
-      allowed_quality_statuses: [available, degraded, assumption_only, data_gap]
-  - gate_id: finance.methodology.input
-    artifact_type: institutional_analysis
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Institutional method outputs must expose input quality and assumptions.
-    config:
-      allowed_quality_statuses: [available, degraded, assumption_only, data_gap]
-  - gate_id: finance.financial.input
-    artifact_type: financial_analysis
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Reusable financial methods must expose input quality and assumptions.
-    config:
-      allowed_quality_statuses: [available, degraded, assumption_only, data_gap]
-  - gate_id: finance.workflow.input
-    artifact_type: research_workflow
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Research workflow outputs must expose source coverage and gaps.
-    config:
-      allowed_quality_statuses: [available, degraded, assumption_only, data_gap]
-  - gate_id: finance.deep.input
-    artifact_type: deep_analysis
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Deep analysis outputs must expose method and evidence limitations.
-    config:
-      allowed_quality_statuses: [available, degraded, assumption_only, data_gap]
-  - gate_id: finance.dimension.coverage
-    artifact_type: uzi_dimension_coverage
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Dimension coverage must separate source dimensions from derived products.
-    config:
-      allowed_quality_statuses: [available, degraded, data_gap]
-  - gate_id: finance.panel.lineage
-    artifact_type: investor_panel_review
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Panel outputs must preserve methodology lineage and evidence status.
-    config:
-      allowed_quality_statuses: [available, degraded, data_gap]
-  - gate_id: finance.risk.evidence
-    artifact_type: risk_scan
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Risk outputs must distinguish observed signals from data gaps.
-    config:
-      allowed_quality_statuses: [available, degraded, data_gap]
   - gate_id: finance.screening.quality
     artifact_type: screening_result
     evaluator_capability: finance.methodology.quality.gate
@@ -1446,131 +1018,6 @@ quality_gates:
     description: Thesis review must preserve claim-level evidence, counterevidence and gaps.
     config:
       allowed_quality_statuses: [available, degraded, data_gap]
-  - gate_id: finance.tier1.ai_readiness
-    artifact_type: ai_readiness
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: AI readiness gates must distinguish observed pass/fail evidence from missing provider data.
-    config:
-      allowed_quality_statuses: [available, degraded, data_gap]
-  - gate_id: finance.tier1.earnings_preview
-    artifact_type: earnings_preview
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Earnings previews must separate reported facts, consensus observations and labeled scenarios.
-    config:
-      allowed_quality_statuses: [available, degraded, assumption_only, data_gap]
-  - gate_id: finance.tier1.model_update
-    artifact_type: model_update
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Model updates require explicit user assumptions and cannot infer demo deltas from missing inputs.
-    config:
-      allowed_quality_statuses: [available, degraded, assumption_only, data_gap]
-  - gate_id: finance.tier1.returns_attribution
-    artifact_type: returns_attribution
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Missing holding returns must reduce coverage and cannot be counted as zero contribution.
-    config:
-      allowed_quality_statuses: [available, degraded, data_gap]
-  - gate_id: finance.tier1.holding_rebalance
-    artifact_type: holding_rebalance
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Rebalance outputs must expose target policy, value coverage and the supplied fee model.
-    config:
-      allowed_quality_statuses: [available, degraded, assumption_only, data_gap]
-  - gate_id: finance.uzi.portfolio_rebalance
-    artifact_type: portfolio_rebalance
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Strategic allocation rebalancing requires explicit asset classes and policy targets.
-    config: {allowed_quality_statuses: [available, degraded, assumption_only, data_gap]}
-  - gate_id: finance.uzi.three_statement
-    artifact_type: three_statement_model
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Three-statement projections require observed financial anchors and explicit assumptions.
-    config: {allowed_quality_statuses: [available, degraded, assumption_only, data_gap]}
-  - gate_id: finance.uzi.quick_lbo
-    artifact_type: quick_lbo
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: LBO calculations require reported EBITDA and explicit transaction assumptions.
-    config: {allowed_quality_statuses: [available, degraded, assumption_only, data_gap]}
-  - gate_id: finance.uzi.accretion_dilution
-    artifact_type: accretion_dilution
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Accretion and dilution outputs require explicit transaction inputs.
-    config: {allowed_quality_statuses: [available, degraded, assumption_only, data_gap]}
-  - gate_id: finance.uzi.segmental
-    artifact_type: segmental_model
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Segment analysis may use only reported segment rows.
-    config: {allowed_quality_statuses: [available, degraded, data_gap]}
-  - gate_id: finance.uzi.initiation_report
-    artifact_type: initiation_report
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Initiation coverage exposes evidence coverage and missing sections.
-    config: {allowed_quality_statuses: [available, degraded, data_gap]}
-  - gate_id: finance.uzi.earnings_review
-    artifact_type: earnings_review
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Earnings review separates reported actuals from observed consensus.
-    config: {allowed_quality_statuses: [available, degraded, data_gap]}
-  - gate_id: finance.uzi.catalyst_calendar
-    artifact_type: catalyst_calendar
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Catalyst calendars require dated event evidence.
-    config: {allowed_quality_statuses: [available, degraded, data_gap]}
-  - gate_id: finance.uzi.thesis_tracker
-    artifact_type: thesis_tracker
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Thesis pillars preserve evidence status for each claimed driver.
-    config: {allowed_quality_statuses: [available, degraded, data_gap]}
-  - gate_id: finance.uzi.morning_note
-    artifact_type: morning_note
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Morning notes identify unavailable market, flow, sentiment and event inputs.
-    config: {allowed_quality_statuses: [available, degraded, data_gap]}
-  - gate_id: finance.uzi.ic_memo
-    artifact_type: ic_memo
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: IC memos remain decision support and cannot synthesize an unsupported recommendation.
-    config: {allowed_quality_statuses: [available, degraded, assumption_only, data_gap]}
-  - gate_id: finance.uzi.porter_bcg
-    artifact_type: porter_bcg
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Competitive analysis cannot substitute neutral default scores for missing evidence.
-    config: {allowed_quality_statuses: [available, degraded, data_gap]}
-  - gate_id: finance.uzi.dd_checklist
-    artifact_type: dd_checklist
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Due diligence coverage must expose every unavailable evidence workstream.
-    config: {allowed_quality_statuses: [available, degraded, data_gap]}
-  - gate_id: finance.uzi.unit_economics
-    artifact_type: unit_economics
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Unit economics require observed customer, churn, margin and acquisition-cost inputs.
-    config: {allowed_quality_statuses: [available, degraded, data_gap]}
-  - gate_id: finance.uzi.value_creation_plan
-    artifact_type: value_creation_plan
-    evaluator_capability: finance.methodology.quality.gate
-    blocking: true
-    description: Value creation plans require explicit levers and never fabricate EBITDA impacts.
-    config: {allowed_quality_statuses: [available, degraded, assumption_only, data_gap]}
 report_contracts:
   - contract_id: finance.research_report.v1
     artifact_type: research_report
@@ -1579,8 +1026,8 @@ report_contracts:
     required_gate_ids: [finance.sources_required, finance.research_safety, finance.uzi.native.critical]
 planner_policies:
   prefer_evidence_backed_paths: true
-  profile_intents: [stock_check, stock_compare, stock_screen, sector_research, review_thesis]
-  profile_output_intents: [stock_check, stock_compare]
+  profile_intents: [stock_check, stock_compare, uzi_portfolio_batch, stock_screen, sector_research, review_thesis]
+  profile_output_intents: [stock_check, stock_compare, uzi_portfolio_batch]
   progress_policy:
     max_model_updates: 12
     max_tokens: 1200
@@ -1641,7 +1088,6 @@ planner_policies:
   intent_outputs:
     quick_scan: [quick_scan]
     fund_research: [fund_analysis, research_report]
-    portfolio_research: [returns_attribution, holding_rebalance]
     stock_screen: [screening_result]
     sector_research: [sector_analysis]
     review_thesis: [thesis_review]
@@ -1665,7 +1111,7 @@ metadata:
     uzi_source_mapping: migration/uzi_source_mapping.yaml
     uzi_source_mapping_schema: migration/uzi_source_mapping.schema.json
     uzi_source_mapping_schema_version: "3"
-    source_commit: 0acf25122cabf493e7bc442faff62ceceb7f2f02
+    source_commit: b004d7a988ca53a4805bf36784af091fa1209f22
     methodology_version: 3.9.4-source-parity
   dashboard_views:
     overview:

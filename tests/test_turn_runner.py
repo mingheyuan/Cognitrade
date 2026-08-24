@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import sleep
 
 from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.runtime.turn_runner import (
@@ -118,6 +119,218 @@ class TurnRunnerTests(unittest.TestCase):
             self.assertEqual(turn.config.deadline_policy, "unbounded")
             self.assertIsNone(turn.config.timeout_seconds)
             self.assertIsNone(turn.deadline_at)
+
+    def test_terminal_outcome_is_not_rewritten_after_deadline(self) -> None:
+        class LateTerminalExecutor:
+            def __init__(self, status: str) -> None:
+                self.status = status
+
+            def execute(self, _context: TurnContext) -> TaskOutcome:
+                sleep(0.01)
+                return TaskOutcome(
+                    execution_mode="core",
+                    status=self.status,
+                    result=self.status,
+                )
+
+        for terminal_status in ("completed", "completed_partial"):
+            with (
+                self.subTest(status=terminal_status),
+                TemporaryDirectory() as temporary_directory,
+            ):
+                run_store = RunStore(Path(temporary_directory) / "runs")
+                request = RequestEnvelope(user_query="finish at the deadline")
+                run_id, paths, _ = run_store.create_run(
+                    request,
+                    "core.conversation.answer",
+                )
+                decision = RequestIntakeDecision(
+                    status="accepted",
+                    request_kind="conversation",
+                    recommended_mode="core",
+                )
+                runner = TurnRunner(
+                    run_store=run_store,
+                    main_agent=object(),
+                    graph_adapter=_UnusedGraphAdapter(),
+                    core_executor=LateTerminalExecutor(terminal_status),
+                    timeout_seconds=0.001,
+                )
+
+                outcome = runner.execute_task(
+                    request=request,
+                    decision=decision,
+                    run_id=run_id,
+                    thread_id="thread-late-terminal",
+                    execution_mode="core",
+                )
+                write_json(
+                    paths.root / "summary.json",
+                    {"status": "received", "message": "pending"},
+                )
+
+                def response_factory(
+                    _result,
+                    *,
+                    request_id=request.request_id,
+                    current_run_id=run_id,
+                    status=terminal_status,
+                ) -> ResponseEnvelope:
+                    return ResponseEnvelope(
+                        request_id=request_id,
+                        run_id=current_run_id,
+                        status=status,
+                        message="done",
+                        progress=ProgressState(
+                            current_phase="complete",
+                            status_message="done",
+                            percent=100,
+                        ),
+                    )
+
+                response = runner.finalize(
+                    outcome=outcome,
+                    response_factory=response_factory,
+                )
+                turn = TurnSnapshot.model_validate(read_json(paths.turn_state))
+                run_state = read_json(paths.run_state)
+                summary = read_json(paths.root / "summary.json")
+                persisted_response = read_json(paths.root / "response.json")
+                events = read_jsonl(paths.root / "execution_events.jsonl")
+
+                self.assertEqual(outcome.status, terminal_status)
+                self.assertEqual(turn.status, terminal_status)
+                self.assertEqual(response.status, terminal_status)
+                self.assertEqual(run_state["status"], terminal_status)
+                self.assertEqual(summary["status"], terminal_status)
+                self.assertEqual(persisted_response["status"], terminal_status)
+                self.assertTrue(any(event["event_type"] == "turn_deadline_exceeded_after_terminal" for event in events))
+                self.assertFalse(any(event["event_type"] == "turn_timed_out" for event in events))
+
+    def test_nonterminal_outcome_is_still_timed_out_after_deadline(self) -> None:
+        class LatePausedExecutor:
+            def execute(self, _context: TurnContext) -> TaskOutcome:
+                sleep(0.01)
+                return TaskOutcome(
+                    execution_mode="core",
+                    status="paused",
+                    result="paused",
+                )
+
+        with TemporaryDirectory() as temporary_directory:
+            run_store = RunStore(Path(temporary_directory) / "runs")
+            request = RequestEnvelope(user_query="pause too late")
+            run_id, paths, _ = run_store.create_run(request, "core.conversation.answer")
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="conversation",
+                recommended_mode="core",
+            )
+            runner = TurnRunner(
+                run_store=run_store,
+                main_agent=object(),
+                graph_adapter=_UnusedGraphAdapter(),
+                core_executor=LatePausedExecutor(),
+                timeout_seconds=0.001,
+            )
+
+            outcome = runner.execute_task(
+                request=request,
+                decision=decision,
+                run_id=run_id,
+                thread_id="thread-late-paused",
+                execution_mode="core",
+            )
+            response = runner.finalize(
+                outcome=outcome,
+                response_factory=lambda _result: ResponseEnvelope(
+                    request_id=request.request_id,
+                    run_id=run_id,
+                    status="paused",
+                    message="paused",
+                    progress=ProgressState(
+                        current_phase="paused",
+                        latest_event="turn_paused",
+                        status_message="paused",
+                        percent=50,
+                    ),
+                    result={"delivery_status": "paused"},
+                ),
+            )
+            turn = TurnSnapshot.model_validate(read_json(paths.turn_state))
+            run_state = read_json(paths.run_state)
+            summary = read_json(paths.root / "summary.json")
+
+            self.assertEqual(outcome.status, "timed_out")
+            self.assertEqual(turn.status, "timed_out")
+            self.assertEqual(response.status, "timed_out")
+            self.assertNotEqual(response.message, "paused")
+            self.assertEqual(response.progress.latest_event, "turn_timed_out")
+            self.assertEqual(response.result["delivery_status"], "timed_out")
+            self.assertEqual(response.result["turn_status"], "timed_out")
+            self.assertEqual(run_state["status"], "timed_out")
+            self.assertEqual(summary["status"], "timed_out")
+            self.assertEqual(summary["message"], response.message)
+
+    def test_finalize_uses_paused_turn_status_over_completed_graph_payload(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            run_store = RunStore(Path(temporary_directory) / "runs")
+            request = RequestEnvelope(user_query="pause after graph completion")
+            run_id, paths, _ = run_store.create_run(request, "stock_check")
+            turn = TurnSnapshot(
+                run_id=run_id,
+                thread_id="thread-stop-hook",
+                request_id=request.request_id,
+                execution_mode="graph",
+                status="paused",
+            )
+            write_json(paths.turn_state, turn.model_dump(mode="json"))
+            runner = TurnRunner(
+                run_store=run_store,
+                main_agent=object(),
+                graph_adapter=_UnusedGraphAdapter(),
+                core_executor=_RecordingExecutor("completed"),
+                timeout_seconds=60,
+            )
+            outcome = TaskOutcome(
+                execution_mode="graph",
+                status="paused",
+                result="graph snapshot says completed",
+            )
+
+            response = runner.finalize(
+                outcome=outcome,
+                response_factory=lambda _result: ResponseEnvelope(
+                    request_id=request.request_id,
+                    run_id=run_id,
+                    mode="graph",
+                    status="completed",
+                    message="graph completed",
+                    progress=ProgressState(
+                        current_phase="complete",
+                        latest_event="graph_run_finished",
+                        status_message="graph completed",
+                        percent=100,
+                    ),
+                    result={
+                        "status": "completed",
+                        "delivery_status": "completed",
+                    },
+                ),
+            )
+            run_state = read_json(paths.run_state)
+            summary = read_json(paths.root / "summary.json")
+
+            self.assertEqual(response.status, "paused")
+            self.assertNotEqual(response.message, "graph completed")
+            self.assertEqual(response.progress.latest_event, "turn_paused")
+            self.assertEqual(response.result["status"], "paused")
+            self.assertEqual(response.result["delivery_status"], "paused")
+            self.assertEqual(response.result["turn_status"], "paused")
+            self.assertEqual(run_state["status"], "paused")
+            self.assertEqual(summary["status"], "paused")
 
     def test_timeout_recovery_creates_a_same_run_continuation(self) -> None:
         class Executor:
