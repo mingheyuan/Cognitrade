@@ -64,7 +64,9 @@ class Settings(BaseModel):
     uzi_llm_retry_max_seconds: float = 60.0
     max_agent_tool_loop_turns: int = 4
     max_child_threads_per_turn: int = 8
-    fund_holding_report_concurrency: int = 5
+    market_data_auto_collection_enabled: bool = False
+    market_data_collection_concurrency: int = 5
+    fund_holding_report_concurrency: int = 2
     artifacts_retention_days: int = 30
     max_artifacts_size_mb: int = 1024
     memory_expiration_interval_seconds: float = 300.0
@@ -124,8 +126,10 @@ class Settings(BaseModel):
             raise ValueError("max_agent_tool_loop_turns must be positive")
         if self.max_child_threads_per_turn <= 0:
             raise ValueError("max_child_threads_per_turn must be positive")
-        if not 1 <= self.fund_holding_report_concurrency <= 10:
-            raise ValueError("fund_holding_report_concurrency must be between 1 and 10")
+        if not 1 <= self.market_data_collection_concurrency <= 5:
+            raise ValueError("market_data_collection_concurrency must be between 1 and 5")
+        if not 1 <= self.fund_holding_report_concurrency <= 5:
+            raise ValueError("fund_holding_report_concurrency must be between 1 and 5")
         if self.tool_resource_lease_backend not in {"file", "redis"}:
             raise ValueError("tool_resource_lease_backend must be 'file' or 'redis'")
         if self.tool_resource_lease_backend == "redis" and not self.tool_resource_lease_redis_url:

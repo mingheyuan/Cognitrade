@@ -44,6 +44,8 @@ export type UserRequestContent = {
   "source_records"?: Array<Record<string, unknown>>;
   "snapshots"?: Array<Record<string, unknown>>;
   "source_refs"?: Array<Record<string, unknown>>;
+  "market_data_bundle"?: Record<string, unknown>;
+  "report_data_manifest"?: Record<string, unknown>;
   "holding_context"?: {
     "parent_batch_id": string;
     "source_fund_run_id": string;
@@ -894,6 +896,7 @@ export type UziNativeAnalysisContent = {
   "source_commit": string;
   "methodology_version": string;
   "profile": "lite" | "medium" | "deep";
+  "agent_workflow_mode"?: "full" | "profile";
   "school"?: "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | null;
   "results": Array<Record<string, unknown>>;
   "critical_count": number;
@@ -989,6 +992,7 @@ export type FundSnapshotContent = {
     }>;
     "target_fund_period"?: string | null;
     "target_fund_source_ref"?: string | null;
+    "target_fund_published_at"?: string | null;
     "lookthrough_holdings"?: Array<{
       "rank": number;
       "code": string;
@@ -1360,6 +1364,8 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "source_records",
     "snapshots",
     "source_refs",
+    "market_data_bundle",
+    "report_data_manifest",
     "holding_context",
     "holding_context.parent_batch_id",
     "holding_context.source_fund_run_id",
@@ -2127,6 +2133,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "source_commit",
     "methodology_version",
     "profile",
+    "agent_workflow_mode",
     "school",
     "results",
     "critical_count",
@@ -2214,6 +2221,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "funds[].target_fund_holdings[].source_ref",
     "funds[].target_fund_period",
     "funds[].target_fund_source_ref",
+    "funds[].target_fund_published_at",
     "funds[].lookthrough_holdings",
     "funds[].lookthrough_holdings[].rank",
     "funds[].lookthrough_holdings[].code",

@@ -33,6 +33,12 @@
   --warning-soft: rgba(221, 168, 92, 0.11);
   --danger: #e56e75;
   --shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+  --panel: var(--surface);
+  --panel-soft: var(--surface-soft);
+  --text-muted: var(--text-soft);
+  --text-faint: var(--muted);
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --shadow-sm: 0 8px 24px rgba(0, 0, 0, 0.18);
   --sidebar-width: 252px;
   --topbar-height: 64px;
 }

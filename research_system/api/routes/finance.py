@@ -285,6 +285,11 @@ def _market_error(exc: FinanceMarketDataError) -> ApiError:
         "security_not_found": 404,
         "security_ambiguous": 409,
         "quote_unavailable": 503,
+        # The security exists, but the DB-only workspace projection has not
+        # satisfied its explicit collection/publish precondition yet.
+        "published_bundle_missing": 409,
+        "published_bundle_invalid": 409,
+        "market_data_bundle_unavailable": 409,
     }
     return ApiError(
         status_code=status_by_code.get(exc.code, 422),

@@ -144,6 +144,7 @@ class AgentOS:
         self.plan_agent = MainAgentPlanRole(self.dynamic_planner)
         self._active: dict[str, ExecutionGraphRunner] = {}
         self._prepared_run_ids: set[str] = set()
+        self._resolved_request_preflight = None
         self._lock = RLock()
         self.turn_runner = TurnRunner(
             run_store=self.run_store,
@@ -151,6 +152,11 @@ class AgentOS:
             graph_adapter=_AgentOSGraphRunnerAdapter(self),
             timeout_seconds=float(settings.run_timeout_seconds),
         )
+
+    def bind_resolved_request_preflight(self, callback) -> None:
+        """Bind a domain-neutral preflight applied after intake resolution."""
+
+        self._resolved_request_preflight = callback
 
     def list_domain_packs(self) -> list[dict[str, Any]]:
         return [
@@ -594,7 +600,12 @@ class AgentOS:
         decision = intake_decision or self.request_intake_decision(request)
         if decision.status != "accepted":
             raise ValueError("Agent OS RequestIntake requires clarification before execution")
-        request = decision.apply_to(request)
+        # ``_handle_routed_request`` has already applied the intake decision and
+        # then run the DB-backed report preflight.  Applying the decision a
+        # second time here would let its earlier, caller-supplied slots replace
+        # the trusted Bundle snapshots frozen by that preflight.
+        if not str(request.intent or "").strip():
+            request = decision.apply_to(request)
         intent = str(request.intent or "").strip()
         graph = self._build_initial_graph(request=request, decision=decision)
         effective_run_id, paths, _ = self.run_store.create_run(
@@ -632,6 +643,8 @@ class AgentOS:
             "source_records",
             "snapshots",
             "source_refs",
+            "market_data_bundle",
+            "report_data_manifest",
             "holding_context",
         ):
             if key in request.slots and key not in input_payload:
@@ -812,6 +825,8 @@ class AgentOS:
             )
 
         resolved_request = decision.apply_to(routed_request)
+        if callable(self._resolved_request_preflight):
+            resolved_request = self._resolved_request_preflight(resolved_request)
         if run_id and self._is_pending_clarification(run_id):
             self._complete_clarification_run(
                 run_id=run_id,

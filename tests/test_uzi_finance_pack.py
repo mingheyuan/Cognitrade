@@ -33,6 +33,7 @@ from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.planning.capability_planner import CapabilityPlanner
 from research_system.runtime.platform.settings import Settings
 from research_system.schemas.domain_pack import CapabilityPlanningRequest
+from tests.market_data.test_pit_core import seed_strict_bundle
 
 
 def _snapshots() -> list[dict]:
@@ -926,6 +927,7 @@ class UziFinancePackTests(unittest.TestCase):
             root = Path(temporary_directory)
             settings = Settings.from_env(repository_root).model_copy(
                 update={
+                    "workspace_root": root,
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
@@ -937,13 +939,20 @@ class UziFinancePackTests(unittest.TestCase):
             with TestClient(
                 create_app(settings=settings, api_config=ApiConfig(api_token="uzi-test"))
             ) as client:
+                as_of = seed_strict_bundle(
+                    client.app.state.api_runtime.strategies.database,
+                    "600000.SH",
+                )
                 response = client.post(
                     "/api/v1/runs",
                     headers={"Authorization": "Bearer uzi-test"},
                     json={
                         "intent": "stock_check",
                         "user_query": "分析 600000",
-                        "constraints": {"research_profile": "lite"},
+                        "constraints": {
+                            "research_profile": "lite",
+                            "analysis_as_of_date": as_of.isoformat(),
+                        },
                         "slots": {"symbols": ["600000"], "snapshots": _snapshots()},
                     },
                 )
@@ -1017,6 +1026,7 @@ class UziFinancePackTests(unittest.TestCase):
             root = Path(temporary_directory)
             settings = Settings.from_env(repository_root).model_copy(
                 update={
+                    "workspace_root": root,
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
@@ -1029,13 +1039,20 @@ class UziFinancePackTests(unittest.TestCase):
             with TestClient(
                 create_app(settings=settings, api_config=ApiConfig(api_token="uzi-medium-test"))
             ) as client:
+                as_of = seed_strict_bundle(
+                    client.app.state.api_runtime.strategies.database,
+                    "600000.SH",
+                )
                 response = client.post(
                     "/api/v1/runs",
                     headers={"Authorization": "Bearer uzi-medium-test"},
                     json={
                         "intent": "stock_check",
                         "user_query": "深度分析 600000",
-                        "constraints": {"research_profile": "medium"},
+                        "constraints": {
+                            "research_profile": "medium",
+                            "analysis_as_of_date": as_of.isoformat(),
+                        },
                         "slots": {"symbols": ["600000"], "snapshots": _snapshots()},
                     },
                 )

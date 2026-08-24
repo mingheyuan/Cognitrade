@@ -668,19 +668,10 @@ def collect_qualitative_agent_evidence(
     """
 
     selected_profile = _require_profile(profile)
-    if selected_profile == "lite":
-        return {
-            "schema_version": "uzi-3.9.4-qualitative-agent-evidence-v1",
-            "profile": selected_profile,
-            "enabled": False,
-            "group_count": 0,
-            "completed_group_count": 0,
-            "attempted": 0,
-            "succeeded": 0,
-            "failed": 0,
-            "attempts": [],
-            "disabled_reason": "profile_does_not_require_qualitative_deep_dive",
-        }
+    # This is the interactive/full Agent hard gate, not Stage 1's optional
+    # DDGS autofill budget.  Formal Lite reports therefore collect the same
+    # six-dimension cited evidence as Medium/Deep; only the standalone
+    # ``quick_scan`` command bypasses this function at the caller boundary.
 
     resolved_symbols = list(dict.fromkeys(
         str(item).strip() for item in symbols if str(item).strip()

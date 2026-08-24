@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from threading import Lock
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 
 from domain_packs.finance_ashare.subagents.uzi_agent_roleplay import (
@@ -84,6 +86,32 @@ class _RoleplayProvider:
             raise AssertionError(f"unexpected schema: {schema}")
 
 
+class _FlakyRoleplayProvider(_RoleplayProvider):
+    def __init__(self, workspace_root: Path) -> None:
+        super().__init__()
+        self.settings = SimpleNamespace(
+            workspace_root=workspace_root,
+            provider_name="test",
+            default_model="test-model",
+            uzi_llm_max_concurrency=2,
+        )
+        self.calls: dict[str, int] = {}
+
+    def parse(self, *, system_prompt, user_prompt, schema, temperature=0.2):
+        group_label = user_prompt.splitlines()[0].split("：", 1)[1]
+        with self._lock:
+            self.calls[group_label] = self.calls.get(group_label, 0) + 1
+            attempt = self.calls[group_label]
+        if group_label.startswith("F") and attempt == 1:
+            raise RuntimeError("temporary roleplay group failure")
+        return super().parse(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema=schema,
+            temperature=temperature,
+        )
+
+
 class UziDeepRoleplayTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -116,7 +144,7 @@ class UziDeepRoleplayTests(unittest.TestCase):
         self.assertEqual(result["quality_status"], "data_gap")
         self.assertEqual(result["roleplay"]["status"], "required_but_unavailable")
         self.assertFalse(result["roleplay"]["agent_reviewed"])
-        self.assertIn("deep_agent_roleplay_required", result["data_gap"])
+        self.assertIn("agent_roleplay_required", result["data_gap"])
         self.assertEqual(result["per_investor_override"], {})
 
     def test_deep_roleplays_all_66_seats_in_five_prefix_stable_groups(self) -> None:
@@ -133,6 +161,68 @@ class UziDeepRoleplayTests(unittest.TestCase):
         self.assertEqual(len(result["per_investor_override"]), 66)
         self.assertTrue(all(vote["agent_roleplay_applied"] for vote in result["votes"]))
         self.assertTrue(all("original_rule_score" in vote for vote in result["votes"]))
+
+    def test_full_agent_workflow_roleplays_medium_panel_too(self) -> None:
+        provider = _RoleplayProvider()
+        result = apply_deep_agent_roleplay(
+            _panel("medium"),
+            features=self.features,
+            llm_provider=provider,
+            required=True,
+        )
+
+        self.assertEqual(result["roleplay"]["status"], "completed")
+        self.assertEqual(len(result["per_investor_override"]), 66)
+        self.assertEqual(len(provider.system_prompts), 5)
+
+    def test_valid_roleplay_groups_resume_from_stage_cache(self) -> None:
+        with TemporaryDirectory() as temporary:
+            first_provider = _RoleplayProvider()
+            first_provider.settings = SimpleNamespace(
+                workspace_root=Path(temporary),
+                provider_name="test",
+                default_model="test-model",
+                uzi_llm_max_concurrency=2,
+            )
+            first = apply_deep_agent_roleplay(
+                _panel("deep"),
+                features=self.features,
+                llm_provider=first_provider,
+            )
+            second_provider = _RoleplayProvider()
+            second_provider.settings = first_provider.settings
+            second = apply_deep_agent_roleplay(
+                _panel("deep"),
+                features=self.features,
+                llm_provider=second_provider,
+            )
+
+        self.assertEqual(first["roleplay"]["status"], "completed")
+        self.assertEqual(second["roleplay"]["status"], "completed")
+        self.assertEqual(len(first_provider.system_prompts), 5)
+        self.assertEqual(second_provider.system_prompts, [])
+
+    def test_only_failed_roleplay_group_is_retried(self) -> None:
+        with TemporaryDirectory() as temporary:
+            provider = _FlakyRoleplayProvider(Path(temporary))
+            first = apply_deep_agent_roleplay(
+                _panel("deep"),
+                features=self.features,
+                llm_provider=provider,
+            )
+            second = apply_deep_agent_roleplay(
+                _panel("deep"),
+                features=self.features,
+                llm_provider=provider,
+            )
+
+        self.assertEqual(first["roleplay"]["status"], "incomplete")
+        self.assertEqual(second["roleplay"]["status"], "completed")
+        self.assertEqual(sum(provider.calls.values()), 6)
+        self.assertEqual(
+            next(count for label, count in provider.calls.items() if label.startswith("F")),
+            2,
+        )
 
     def test_incomplete_group_does_not_partially_claim_deep_completion(self) -> None:
         provider = _RoleplayProvider(incomplete=True)

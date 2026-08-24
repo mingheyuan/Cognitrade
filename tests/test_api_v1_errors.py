@@ -17,6 +17,9 @@ from api_test_support import (
 )
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
+from research_system.api.fund_holding_report_service import (
+    FundHoldingReportsUnavailable,
+)
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 
 
@@ -104,6 +107,19 @@ class ApiV1ErrorTests(unittest.TestCase):
                 )
                 error = self.assert_error_envelope(response, status_code=409)
                 self.assertEqual(error["code"], "source_run_incomplete")
+
+    def test_revoked_fund_child_delivery_maps_to_409(self) -> None:
+        self.run_service.errors["replay"] = FundHoldingReportsUnavailable(
+            "父基金 PIT Bundle 或冻结报告 manifest 已失效"
+        )
+
+        response = self.client.get(
+            f"/api/v1/runs/{RUN_ID}/replay",
+            headers=auth_headers(),
+        )
+
+        error = self.assert_error_envelope(response, status_code=409)
+        self.assertEqual(error["code"], "fund_holding_report_lineage_invalidated")
 
     def test_unhandled_exception_is_redacted_in_500_response(self) -> None:
         secret = "secret-provider-credential=abc123"

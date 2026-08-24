@@ -10,6 +10,7 @@ frozen snapshot payload before it is admitted to ``agent_analysis``.
 from __future__ import annotations
 
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -140,6 +141,25 @@ def _profile_dimension_keys(profile: str) -> tuple[str, ...]:
     native_profile = importlib.import_module("lib.analysis_profile").get_profile(profile)
     enabled = set(native_profile.fetchers_enabled)
     return tuple(key for key in _DIMENSION_KEYS if key in enabled)
+
+
+def _workflow_dimension_keys(
+    profile: str,
+    *,
+    full_agent_workflow: bool,
+) -> tuple[str, ...]:
+    """Return the dimensions the selected workflow must actually review.
+
+    UZI's executable root collector currently traverses the full 20-fetcher
+    registry for every depth, and its SKILL.md full Agent path requires the
+    analyst to inspect every collected dimension.  The depth profile still
+    controls network/model budgets; only the explicit quick/profile path may
+    retain the narrower seven-dimension Lite contract.
+    """
+
+    if full_agent_workflow:
+        return _DIMENSION_KEYS
+    return _profile_dimension_keys(profile)
 
 
 def _research_workflow_compatible_features(
@@ -370,9 +390,6 @@ def _profile_native_panel(panel: dict[str, Any], profile: str) -> dict[str, Any]
         raise ValueError(
             f"native panel is missing profile seats: {sorted(allowed_ids - present)}"
         )
-    if len(investors) == len(list(panel.get("investors") or [])):
-        return dict(panel)
-
     vote_keys = {
         "强烈买入": "strongly_buy",
         "买入": "buy",
@@ -388,7 +405,17 @@ def _profile_native_panel(panel: dict[str, Any], profile: str) -> dict[str, Any]
     signal_distribution = {
         key: 0 for key in ("bullish", "neutral", "bearish", "skip")
     }
-    for investor in investors:
+    short_ids = {
+        str(row.get("id") or row.get("investor_id") or "")
+        for row in list(dict(panel.get("short_consensus") or {}).get("top_short_candidates") or [])
+        if isinstance(row, dict)
+    }
+    consensus_investors = [
+        row
+        for row in investors
+        if str(row.get("investor_id") or "") not in short_ids
+    ]
+    for investor in consensus_investors:
         vote_key = vote_keys.get(str(investor.get("verdict") or ""), "n_a")
         vote_distribution[vote_key] += 1
         signal = str(investor.get("signal") or "skip")
@@ -402,7 +429,7 @@ def _profile_native_panel(panel: dict[str, Any], profile: str) -> dict[str, Any]
     def polarize(value: float) -> float:
         return max(0.0, min(100.0, 50.0 + (value - 50.0) * polarize_k))
 
-    active = [row for row in investors if row.get("signal") != "skip"]
+    active = [row for row in consensus_investors if row.get("signal") != "skip"]
     bullish = signal_distribution["bullish"]
     neutral = signal_distribution["neutral"]
     bearish = signal_distribution["bearish"]
@@ -432,7 +459,7 @@ def _profile_native_panel(panel: dict[str, Any], profile: str) -> dict[str, Any]
 
     schools: dict[str, dict[str, Any]] = {}
     grouped: dict[str, list[dict[str, Any]]] = {}
-    for investor in investors:
+    for investor in consensus_investors:
         grouped.setdefault(str(investor.get("group") or "?"), []).append(investor)
     for group in sorted(grouped):
         members = grouped[group]
@@ -479,7 +506,8 @@ def _profile_native_panel(panel: dict[str, Any], profile: str) -> dict[str, Any]
             "dominant_signal": dominant_signal,
         }
 
-    return {
+    recomputed = dict(panel)
+    recomputed.update({
         "ticker": panel.get("ticker"),
         "panel_consensus": round(consensus, 1),
         "vote_distribution": vote_distribution,
@@ -502,7 +530,40 @@ def _profile_native_panel(panel: dict[str, Any], profile: str) -> dict[str, Any]
             "skip": signal_distribution["skip"],
             "active": len(active),
         },
+    })
+    return recomputed
+
+
+def _panel_with_roleplay_overrides(
+    panel: dict[str, Any],
+    overrides: dict[str, Any],
+    *,
+    profile: str,
+) -> dict[str, Any]:
+    """Build the post-roleplay panel used by downstream Agent synthesis.
+
+    Upstream v3.9.4 applies overrides inside ``generate_synthesis``.  The full
+    Agent workflow also needs panel-level narrative to see those decisions, so
+    apply the same fields to an isolated copy first and recompute every panel
+    aggregate.  The canonical panel is still updated by upstream synthesis.
+    """
+
+    result = deepcopy(panel)
+    by_id = {
+        str(row.get("investor_id") or ""): row
+        for row in list(result.get("investors") or [])
+        if isinstance(row, dict)
     }
+    for investor_id, override in dict(overrides or {}).items():
+        row = by_id.get(str(investor_id))
+        if row is None or not isinstance(override, dict):
+            continue
+        for field in ("signal", "score", "headline", "reasoning", "comment", "verdict"):
+            if field in override and override[field] is not None:
+                row[field] = override[field]
+        if not row.get("comment") and row.get("headline"):
+            row["comment"] = row["headline"]
+    return _profile_native_panel(result, profile)
 
 
 def execute_native_analysis(
@@ -515,6 +576,7 @@ def execute_native_analysis(
     cancellation: Event | None = None,
     recovery_history: list[dict[str, Any]] | None = None,
     progress_callback=None,
+    full_agent_workflow: bool = False,
 ) -> dict[str, Any]:
     """Run the complete pinned pipeline for each requested symbol."""
 
@@ -610,6 +672,7 @@ def execute_native_analysis(
                         cancellation=cancellation,
                         recovery_history=recovery_for_symbol(symbol),
                         progress_callback=progress_callback,
+                        full_agent_workflow=full_agent_workflow,
                     )
             except Exception as exc:
                 if cancellation is not None and cancellation.is_set():
@@ -651,6 +714,7 @@ def execute_native_analysis(
         "source_commit": UZI_SOURCE_COMMIT,
         "methodology_version": "3.9.4-source-parity",
         "profile": selected_profile,
+        "agent_workflow_mode": "full" if full_agent_workflow else "profile",
         "school": selected_school,
         "results": results,
         "critical_count": critical,
@@ -737,12 +801,16 @@ def _execute_symbol(
     cancellation: Event | None,
     recovery_history: list[dict[str, Any]],
     progress_callback=None,
+    full_agent_workflow: bool = False,
 ) -> dict[str, Any]:
     _initialize_native_imports()
     symbol_snapshot_rows = _snapshot_rows_for_symbol(snapshot_rows, symbol)
     raw = build_uzi_raw(symbol_snapshot_rows, symbol)
     data_integrity = importlib.import_module("lib.data_integrity")
-    enabled_dimension_keys = set(_profile_dimension_keys(profile))
+    enabled_dimension_keys = set(_workflow_dimension_keys(
+        profile,
+        full_agent_workflow=full_agent_workflow,
+    ))
     integrity = _profile_integrity_report(
         raw,
         data_integrity.validate(raw),
@@ -793,11 +861,14 @@ def _execute_symbol(
         features = {}
         dimensions = {}
         panel = {}
+    rule_panel = deepcopy(panel)
 
     agent_analysis: dict[str, Any] | None = None
     agent_issues: list[dict[str, Any]] = []
-    roleplay = {"required": profile == "deep", "status": "not_requested", "agent_reviewed": False}
-    qualitative_execution = {"required": profile in {"medium", "deep"}, "status": "not_requested", "agent_reviewed": False}
+    roleplay_required = full_agent_workflow or profile == "deep"
+    qualitative_required = full_agent_workflow or profile in {"medium", "deep"}
+    roleplay = {"required": roleplay_required, "status": "not_requested", "agent_reviewed": False}
+    qualitative_execution = {"required": qualitative_required, "status": "not_requested", "agent_reviewed": False}
     synthesis: dict[str, Any] = {}
     review: dict[str, Any] = {}
     review_feedback: list[dict[str, Any]] = []
@@ -806,6 +877,8 @@ def _execute_symbol(
     ] = set()
     reusable_agent_analysis: dict[str, Any] | None = None
     reusable_roleplay: dict[str, Any] | None = None
+    reusable_panel_overrides: dict[str, Any] | None = None
+    reusable_qualitative: dict[str, Any] | None = None
     qualitative_retry_feedback: list[str] = []
     analysis_cycle = 0
     while True:
@@ -821,15 +894,100 @@ def _execute_symbol(
         reused_agent_analysis = reusable_agent_analysis is not None
         agent_analysis = None
         agent_issues = []
-        roleplay = {"required": profile == "deep", "status": "not_requested", "agent_reviewed": False}
-        qualitative_execution = {"required": profile in {"medium", "deep"}, "status": "not_requested", "agent_reviewed": False}
+        roleplay = {"required": roleplay_required, "status": "not_requested", "agent_reviewed": False}
+        qualitative_execution = {"required": qualitative_required, "status": "not_requested", "agent_reviewed": False}
         if not computation_error:
             try:
+                roleplay_result: dict[str, Any] = {
+                    "roleplay": deepcopy(reusable_roleplay) if reusable_roleplay is not None else roleplay,
+                    "per_investor_override": deepcopy(reusable_panel_overrides or {}),
+                }
+                qualitative: dict[str, Any] = deepcopy(reusable_qualitative or {})
+
+                # UZI's role-play and six-dimensional research both consume a
+                # frozen snapshot and are independent.  Run them in the same
+                # wave; provider-side concurrency still enforces the configured
+                # LLM ceiling.
+                prerequisite_jobs: dict[Any, str] = {}
+                with ThreadPoolExecutor(max_workers=2, thread_name_prefix="uzi-full-agent") as pool:
+                    if roleplay_required and reusable_roleplay is None:
+                        prerequisite_jobs[pool.submit(
+                            build_native_panel_overrides,
+                            rule_panel,
+                            features=features,
+                            llm_provider=llm_provider,
+                            cancellation=cancellation,
+                            school=school,
+                            profile=profile,
+                            required=True,
+                        )] = "roleplay"
+                    if qualitative_required and reusable_qualitative is None:
+                        _notify_progress(
+                            progress_callback,
+                            current_action=f"UZI 第 {analysis_cycle} 轮：并行执行角色评审与六维定性研究",
+                            next_action="合并完整 Agent 证据后生成叙事",
+                            progress_percent=8,
+                            stage="full_agent_prerequisites",
+                            cycle=analysis_cycle,
+                        )
+                        prerequisite_jobs[pool.submit(
+                            apply_qualitative_deep_dive,
+                            {},
+                            snapshot_rows=symbol_snapshot_rows,
+                            llm_provider=llm_provider,
+                            cancellation=cancellation,
+                            progress_callback=progress_callback,
+                            analysis_cycle=analysis_cycle,
+                            repair_feedback=qualitative_retry_feedback,
+                            research_profile=profile,
+                        )] = "qualitative"
+                    for future in as_completed(prerequisite_jobs):
+                        stage_name = prerequisite_jobs[future]
+                        try:
+                            stage_result = future.result()
+                            if stage_name == "roleplay":
+                                roleplay_result = dict(stage_result or {})
+                            else:
+                                qualitative = dict(stage_result or {})
+                        except Exception as exc:
+                            failure = {
+                                "required": True,
+                                "status": "failed",
+                                "agent_reviewed": False,
+                                "error": f"{exc.__class__.__name__}:{str(exc)[:300]}",
+                            }
+                            if stage_name == "roleplay":
+                                roleplay_result = {"roleplay": failure, "per_investor_override": {}}
+                            else:
+                                qualitative = {"qualitative_agent_execution": failure, "qualitative_deep_dive": {}}
+
+                if roleplay_required:
+                    roleplay = dict(roleplay_result.get("roleplay") or {})
+                    panel_overrides = dict(roleplay_result.get("per_investor_override") or {})
+                    if roleplay.get("status") == "completed" and roleplay.get("agent_reviewed") is True:
+                        reusable_roleplay = deepcopy(roleplay)
+                        reusable_panel_overrides = deepcopy(panel_overrides)
+                else:
+                    panel_overrides = {}
+
+                if qualitative_required:
+                    qualitative_execution = dict(qualitative.get("qualitative_agent_execution") or {})
+                    if (
+                        qualitative_execution.get("status") == "completed"
+                        and qualitative_execution.get("agent_reviewed") is True
+                    ):
+                        reusable_qualitative = deepcopy(qualitative)
+
+                analysis_panel = _panel_with_roleplay_overrides(
+                    rule_panel,
+                    panel_overrides,
+                    profile=profile,
+                ) if panel_overrides else rule_panel
                 if reusable_agent_analysis is None:
                     narrative = _generate_agent_analysis(
                         raw,
                         dimensions,
-                        panel,
+                        analysis_panel,
                         profile=profile,
                         school=school,
                         llm_provider=llm_provider,
@@ -837,82 +995,19 @@ def _execute_symbol(
                         review_feedback=review_feedback,
                         progress_callback=progress_callback,
                         analysis_cycle=analysis_cycle,
+                        full_agent_workflow=full_agent_workflow,
                     )
                     if narrative is not None:
-                        agent_analysis = narrative
-                else:
+                        reusable_agent_analysis = deepcopy(narrative)
+                if reusable_agent_analysis is not None:
                     agent_analysis = deepcopy(reusable_agent_analysis)
-                    if reusable_roleplay is not None:
-                        roleplay = deepcopy(reusable_roleplay)
-                if agent_analysis is not None:
-                    if profile == "deep":
-                        if reusable_roleplay is None:
-                            try:
-                                roleplay_result = build_native_panel_overrides(
-                                    panel,
-                                    features=features,
-                                    llm_provider=llm_provider,
-                                    cancellation=cancellation,
-                                    school=school,
-                                )
-                                roleplay = dict(roleplay_result.get("roleplay") or {})
-                                agent_analysis["per_investor_override"] = dict(
-                                    roleplay_result.get("per_investor_override") or {}
-                                )
-                            except Exception as exc:
-                                roleplay = {
-                                    "required": True,
-                                    "status": "failed",
-                                    "agent_reviewed": False,
-                                    "error": f"{exc.__class__.__name__}:{str(exc)[:300]}",
-                                }
-                    roleplay_complete = not roleplay.get("required") or (
-                        roleplay.get("status") == "completed"
-                        and roleplay.get("agent_reviewed") is True
-                    )
-                    if reusable_agent_analysis is None and roleplay_complete:
-                        reusable_agent_analysis = deepcopy(agent_analysis)
-                        reusable_roleplay = deepcopy(roleplay)
-                    if profile in {"medium", "deep"}:
-                        try:
-                            _notify_progress(
-                                progress_callback,
-                                current_action=f"UZI 第 {analysis_cycle} 轮：正在执行六维定性研究",
-                                next_action="合并定性研究并执行机械自审",
-                                progress_percent=82,
-                                stage="qualitative_deep_dive",
-                                cycle=analysis_cycle,
-                            )
-                            qualitative = apply_qualitative_deep_dive(
-                                {},
-                                snapshot_rows=symbol_snapshot_rows,
-                                llm_provider=llm_provider,
-                                cancellation=cancellation,
-                                progress_callback=progress_callback,
-                                analysis_cycle=analysis_cycle,
-                                repair_feedback=qualitative_retry_feedback,
-                                research_profile=profile,
-                            )
-                            qualitative_execution = dict(qualitative.get("qualitative_agent_execution") or {})
-                            agent_analysis["qualitative_deep_dive"] = dict(
-                                qualitative.get("qualitative_deep_dive") or {}
-                            )
-                            _apply_qualitative_commentary(agent_analysis)
-                            _notify_progress(
-                                progress_callback,
-                                current_action=f"UZI 第 {analysis_cycle} 轮：六维定性研究已完成",
-                                next_action="执行证据路径校验与机械自审",
-                                progress_percent=90,
-                                stage="qualitative_deep_dive",
-                                cycle=analysis_cycle,
-                            )
-                        except Exception as exc:
-                            qualitative_execution = {
-                                "required": True,
-                                "status": "failed",
-                                "agent_reviewed": False,
-                                "error": f"{exc.__class__.__name__}:{str(exc)[:300]}",
-                            }
+                    if panel_overrides:
+                        agent_analysis["per_investor_override"] = panel_overrides
+                    if qualitative_required:
+                        agent_analysis["qualitative_deep_dive"] = dict(
+                            qualitative.get("qualitative_deep_dive") or {}
+                        )
+                        _apply_qualitative_commentary(agent_analysis)
                     agent_issues = _validate_agent_analysis(agent_analysis)
             except Exception as exc:
                 failure_kind = _agent_failure_kind(exc)
@@ -938,6 +1033,7 @@ def _execute_symbol(
         if computation_error:
             synthesis = {}
         else:
+            panel = deepcopy(rule_panel)
             with _uzi_native_environment(profile=profile, school=school):
                 synthesis = importlib.import_module("lib.pipeline.score_fns").generate_synthesis(
                     raw,
@@ -945,6 +1041,10 @@ def _execute_symbol(
                     panel,
                     agent_analysis=agent_analysis,
                 )
+            # ``generate_synthesis`` mutates investor rows with role-play
+            # overrides but leaves upstream's top-level consensus/schools at
+            # their skeleton values.  Persist one internally consistent panel.
+            panel = _profile_native_panel(panel, profile)
             synthesis["data_gaps"] = _data_gap_document(
                 recovery_tasks,
                 agent_analysis,
@@ -964,6 +1064,7 @@ def _execute_symbol(
             roleplay=roleplay,
             qualitative_execution=qualitative_execution,
             computation_error=computation_error,
+            full_agent_workflow=full_agent_workflow,
         )
         _notify_progress(
             progress_callback,
@@ -1014,9 +1115,20 @@ def _execute_symbol(
                     if str(error).strip()
                 ],
             ]))[-24:]
-        if any(str(row.get("dim") or "") != "qualitative_deep_dive" for row in critical_rows):
+            reusable_qualitative = None
+        if any(str(row.get("dim") or "") == "panel" for row in critical_rows):
+            # Panel narrative is downstream of role-play, so both must be
+            # refreshed; validated qualitative work remains reusable.
             reusable_agent_analysis = None
             reusable_roleplay = None
+            reusable_panel_overrides = None
+        elif any(
+            str(row.get("dim") or "") != "qualitative_deep_dive"
+            for row in critical_rows
+        ):
+            # Narrative/dimension/buy-zone failures do not invalidate the
+            # already validated persona or qualitative stages.
+            reusable_agent_analysis = None
         review_feedback = critical_rows
 
     _merge_self_review_warnings(synthesis, review)
@@ -1037,6 +1149,7 @@ def _execute_symbol(
         "self_review": review,
         "report_allowed": review["critical_count"] == 0,
         "quality_status": "available" if review["critical_count"] == 0 else "quality_gate_blocked",
+        "agent_workflow_mode": "full" if full_agent_workflow else "profile",
     }
 
 
@@ -1052,10 +1165,14 @@ def _generate_agent_analysis(
     review_feedback: list[dict[str, Any]],
     progress_callback=None,
     analysis_cycle: int = 1,
+    full_agent_workflow: bool = False,
 ) -> dict[str, Any] | None:
     if llm_provider is None or not bool(getattr(llm_provider, "available", True)):
         return None
-    expected_dimensions = _profile_dimension_keys(profile)
+    expected_dimensions = _workflow_dimension_keys(
+        profile,
+        full_agent_workflow=full_agent_workflow,
+    )
     native_profile = importlib.import_module("lib.analysis_profile").get_profile(profile)
     frozen = {
         "raw": _compact(raw),
@@ -1071,7 +1188,8 @@ def _generate_agent_analysis(
     }
     base_system_prompt = (
         "你是 UZI 3.9.4 完整研究链的 Agent 分析阶段。"
-        f"当前显式研究档位为 {profile}。禁止模拟、补造或把缺失值改成中位值。"
+        f"当前显式研究档位为 {profile}；Agent 工作流={'full' if full_agent_workflow else 'profile'}。"
+        "禁止模拟、补造或把缺失值改成中位值。"
         "本次只生成用户消息指定的结构化片段，完整 agent_analysis 会由系统机械合并；禁止返回契约外字段。"
         "所有事实必须使用当前片段提供的冻结真实证据；返回后会由机械校验逐条核对。若证据不足，结构化输出应失败"
         "并让报告停在质量门。"
@@ -1088,20 +1206,24 @@ def _generate_agent_analysis(
         if native_profile.enable_bull_bear_debate
         else "当前档位不启用结构化多空辩论，不要返回 great_divide_override。"
     )
-    review_feedback_json = json.dumps(
-        review_feedback,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
     dimension_rows: list[AgentDimensionCommentary] = []
     gap_rows: list[AgentDataGapAcknowledgement] = []
     dimension_batch_size = 5
     dimension_batch_count = math.ceil(len(expected_dimensions) / dimension_batch_size)
     stage_total = dimension_batch_count + 5
     stage_index = 0
-    for offset in range(0, len(expected_dimensions), dimension_batch_size):
-        stage_index += 1
+
+    def generate_dimension_batch(
+        offset: int,
+        batch_stage_index: int,
+    ) -> AgentDimensionPayload:
         dimension_batch = expected_dimensions[offset : offset + dimension_batch_size]
+        stage_feedback = _review_feedback_for_agent_stage(
+            review_feedback,
+            stage="dimensions",
+            dimension_keys=dimension_batch,
+        )
+        stage_feedback_json = _compact_json(stage_feedback)
         included_raw_dimensions = list(dimension_batch)
         if "0_basic" not in included_raw_dimensions:
             included_raw_dimensions.append("0_basic")
@@ -1142,7 +1264,7 @@ def _generate_agent_analysis(
             "dimensions 中的 dimension_id 必须且只能是："
             f"{','.join(dimension_batch)}；每个维度恰好一条、commentary.text 至少 20 字，并引用真实叶子路径。"
             "data_gaps 只记录本批次内已经穷尽的真实恢复尝试，不能把缺口写成已解决。"
-            f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
+            f"上一轮本阶段机械自审 critical 与 suggested_fix={stage_feedback_json}。"
             "必须逐条修复；不得通过改写措辞隐藏问题。"
         )
         stage_name = f"dimensions_{offset + 1}_{offset + len(dimension_batch)}"
@@ -1151,7 +1273,7 @@ def _generate_agent_analysis(
             profile=profile,
             stage=stage_name,
             system_prompt=dimension_system_prompt,
-        ) if not review_feedback else None
+        ) if not stage_feedback else None
         stage_retry_feedback = ""
         seen_stage_failure_signatures: set[tuple[str, ...]] = set()
         while True:
@@ -1166,7 +1288,7 @@ def _generate_agent_analysis(
                     symbol=str(raw.get("ticker") or ""),
                     profile=profile,
                     stage=stage_name,
-                    stage_index=stage_index,
+                    stage_index=batch_stage_index,
                     stage_total=stage_total,
                     analysis_cycle=analysis_cycle,
                 )
@@ -1182,7 +1304,7 @@ def _generate_agent_analysis(
                     temperature=0.1,
                     reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
                     progress_callback=progress_callback,
-                    stage_index=stage_index,
+                    stage_index=batch_stage_index,
                     stage_total=stage_total,
                     analysis_cycle=analysis_cycle,
                 )
@@ -1245,12 +1367,47 @@ def _generate_agent_analysis(
                     f"仅重试 {stage_name}"
                 ),
                 next_action="从冻结证据候选中逐字符复制合法叶子路径",
-                progress_percent=min(78, 5 + stage_index * 8),
+                progress_percent=min(78, 5 + batch_stage_index * 8),
                 stage=f"{stage_name}_repair",
                 cycle=analysis_cycle,
             )
+        return dimensions_payload
+
+    dimension_specs = [
+        (offset, index)
+        for index, offset in enumerate(
+            range(0, len(expected_dimensions), dimension_batch_size),
+            start=1,
+        )
+    ]
+    dimension_results: dict[int, AgentDimensionPayload] = {}
+    dimension_workers = _configured_agent_workers(
+        llm_provider,
+        len(dimension_specs),
+        ceiling=4,
+    )
+    for wave_start in range(0, len(dimension_specs), dimension_workers):
+        wave = dimension_specs[wave_start : wave_start + dimension_workers]
+        with ThreadPoolExecutor(
+            max_workers=dimension_workers,
+            thread_name_prefix="uzi-dimensions",
+        ) as pool:
+            futures = {
+                pool.submit(generate_dimension_batch, offset, index): offset
+                for offset, index in wave
+            }
+            for future in as_completed(futures):
+                try:
+                    dimension_results[futures[future]] = future.result()
+                except Exception:
+                    for pending in futures:
+                        pending.cancel()
+                    raise
+    for offset, batch_stage_index in dimension_specs:
+        dimensions_payload = dimension_results[offset]
         dimension_rows.extend(dimensions_payload.dimensions)
         gap_rows.extend(dimensions_payload.data_gaps)
+        stage_index = max(stage_index, batch_stage_index)
 
     dimension_commentary_drafts = {
         row.dimension_id: row.commentary.model_dump(mode="json")
@@ -1288,7 +1445,7 @@ def _generate_agent_analysis(
         "生成当前档位 agent_analysis 的评委洞察、核心结论和风险部分，不生成买入区间。"
         "panel_insights 至少 30 字。"
         f"{debate_instruction}至少三条风险。"
-        f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
+        f"上一轮本阶段机械自审 critical 与 suggested_fix={_compact_json(_review_feedback_for_agent_stage(review_feedback, stage='narrative'))}。"
         "必须逐条修复；不得通过改写措辞隐藏问题。"
     )
     stage_index += 1
@@ -1297,7 +1454,7 @@ def _generate_agent_analysis(
         profile=profile,
         stage="narrative_core",
         system_prompt=narrative_system_prompt,
-    ) if not review_feedback else None
+    ) if not _review_feedback_for_agent_stage(review_feedback, stage="narrative") else None
     narrative_retry_feedback = ""
     seen_narrative_failure_signatures: set[tuple[str, ...]] = set()
     while True:
@@ -1393,8 +1550,17 @@ def _generate_agent_analysis(
         ),
     }
     zone_payloads: dict[str, AgentBuyZone] = {}
-    for zone_name, dimension_keys in zone_dimension_keys.items():
-        stage_index += 1
+
+    def generate_buy_zone(
+        zone_name: str,
+        dimension_keys: tuple[str, ...],
+        zone_stage_index: int,
+    ) -> AgentBuyZone:
+        stage_feedback = _review_feedback_for_agent_stage(
+            review_feedback,
+            stage="buy_zone",
+            zone_name=zone_name,
+        )
         raw_prefixes = tuple(
             f"raw.dimensions.{dimension_key}."
             for dimension_key in dimension_keys
@@ -1429,7 +1595,7 @@ def _generate_agent_analysis(
             "basis_fields 只能填写 ALLOWED_NUMERIC_BASIS_VALUES 中真实数值的精确叶子路径；"
             "calculation 写清真实数值如何导出 price。证据不足时不得猜测或使用中位值，"
             "必须让结构化输出失败并停在质量门。"
-            f"上一轮机械自审 critical 与 suggested_fix={review_feedback_json}。"
+            f"上一轮本阶段机械自审 critical 与 suggested_fix={_compact_json(stage_feedback)}。"
         )
         zone_stage = f"buy_zone_{zone_name}"
         zone_cache_path = _agent_stage_cache_path(
@@ -1437,7 +1603,7 @@ def _generate_agent_analysis(
             profile=profile,
             stage=zone_stage,
             system_prompt=numeric_system_prompt,
-        ) if not review_feedback else None
+        ) if not stage_feedback else None
         stage_retry_feedback = ""
         seen_zone_failure_signatures: set[tuple[str, ...]] = set()
         while True:
@@ -1452,7 +1618,7 @@ def _generate_agent_analysis(
                     symbol=str(raw.get("ticker") or ""),
                     profile=profile,
                     stage=zone_stage,
-                    stage_index=stage_index,
+                    stage_index=zone_stage_index,
                     stage_total=stage_total,
                     analysis_cycle=analysis_cycle,
                 )
@@ -1468,7 +1634,7 @@ def _generate_agent_analysis(
                     temperature=0.1,
                     reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
                     progress_callback=progress_callback,
-                    stage_index=stage_index,
+                    stage_index=zone_stage_index,
                     stage_total=stage_total,
                     analysis_cycle=analysis_cycle,
                 )
@@ -1507,11 +1673,42 @@ def _generate_agent_analysis(
                     f"仅重试 {zone_stage}"
                 ),
                 next_action="从当前买入区间的真实数值白名单中复制合法路径",
-                progress_percent=min(78, 5 + stage_index * 8),
+                progress_percent=min(78, 5 + zone_stage_index * 8),
                 stage=f"{zone_stage}_repair",
                 cycle=analysis_cycle,
             )
-        zone_payloads[zone_name] = buy_zone_payload.zone
+        return buy_zone_payload.zone
+
+    zone_specs = [
+        (zone_name, dimension_keys, stage_index + index)
+        for index, (zone_name, dimension_keys) in enumerate(
+            zone_dimension_keys.items(),
+            start=1,
+        )
+    ]
+    zone_workers = _configured_agent_workers(
+        llm_provider,
+        len(zone_specs),
+        ceiling=4,
+    )
+    for wave_start in range(0, len(zone_specs), zone_workers):
+        wave = zone_specs[wave_start : wave_start + zone_workers]
+        with ThreadPoolExecutor(
+            max_workers=zone_workers,
+            thread_name_prefix="uzi-buy-zones",
+        ) as pool:
+            futures = {
+                pool.submit(generate_buy_zone, zone_name, dimension_keys, index): zone_name
+                for zone_name, dimension_keys, index in wave
+            }
+            for future in as_completed(futures):
+                try:
+                    zone_payloads[futures[future]] = future.result()
+                except Exception:
+                    for pending in futures:
+                        pending.cancel()
+                    raise
+    stage_index += len(zone_specs)
     payload = AgentAnalysisPayload(
         agent_reviewed=True,
         dim_commentary={
@@ -1551,6 +1748,53 @@ def _compact_json(value: Any) -> str:
         separators=(",", ":"),
         sort_keys=isinstance(value, dict),
     )
+
+
+def _review_feedback_for_agent_stage(
+    rows: list[dict[str, Any]],
+    *,
+    stage: str,
+    dimension_keys: tuple[str, ...] = (),
+    zone_name: str | None = None,
+) -> list[dict[str, Any]]:
+    """Route self-review failures only to the stage that can repair them."""
+
+    selected: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        dim = str(row.get("dim") or row.get("field") or "")
+        haystack = " ".join(
+            str(row.get(key) or "")
+            for key in ("dim", "field", "issue", "evidence", "suggested_fix")
+        ).lower()
+        generic = dim in {"agent_analysis", "(root)"}
+        include = False
+        if stage == "dimensions":
+            include = generic or any(
+                dim == key
+                or dim.startswith(f"dim_commentary.{key}")
+                or key.lower() in haystack
+                for key in dimension_keys
+            )
+        elif stage == "narrative":
+            include = generic or any(
+                marker in dim
+                for marker in (
+                    "panel_insights",
+                    "great_divide_override",
+                    "narrative_override.core_conclusion",
+                    "narrative_override.risks",
+                )
+            )
+        elif stage == "buy_zone":
+            include = generic or (
+                "buy_zones" in dim
+                and (zone_name is None or zone_name in dim)
+            )
+        if include:
+            selected.append(dict(row))
+    return selected
 
 
 def _agent_stage_cache_path(
@@ -1740,6 +1984,23 @@ def _parse_agent_stage(
 def _notify_progress(progress_callback, **payload: Any) -> None:
     if callable(progress_callback):
         progress_callback(payload)
+
+
+def _configured_agent_workers(
+    provider: Any,
+    task_count: int,
+    *,
+    ceiling: int,
+) -> int:
+    """Honor the request's LLM concurrency ceiling for independent stages."""
+
+    settings = getattr(provider, "settings", None)
+    configured = getattr(settings, "uzi_llm_max_concurrency", ceiling)
+    try:
+        limit = int(configured)
+    except (TypeError, ValueError):
+        limit = ceiling
+    return max(1, min(task_count or 1, ceiling, max(limit, 1)))
 
 
 def _normalize_narrative_core_paths(
@@ -2422,11 +2683,15 @@ def run_native_self_review(
     roleplay: dict[str, Any],
     qualitative_execution: dict[str, Any],
     computation_error: str | None,
+    full_agent_workflow: bool = False,
 ) -> dict[str, Any]:
     """Run exact UZI checks plus non-bypassable Agent OS boundary checks."""
 
     review_module = importlib.import_module("lib.self_review")
-    enabled_dimension_keys = set(_profile_dimension_keys(profile))
+    enabled_dimension_keys = set(_workflow_dimension_keys(
+        profile,
+        full_agent_workflow=full_agent_workflow,
+    ))
     enabled_dimension_numbers = {
         int(key.split("_", 1)[0]) for key in enabled_dimension_keys
     }
@@ -2467,7 +2732,11 @@ def run_native_self_review(
                         for row in rows
                         if _issue_dimension_number(row) in enabled_dimension_numbers
                     ]
-                if check.__name__ == "check_agent_analysis_exists" and len(enabled_dimension_keys) < 15:
+                if (
+                    check.__name__ == "check_agent_analysis_exists"
+                    and not full_agent_workflow
+                    and len(enabled_dimension_keys) < 15
+                ):
                     rows = [
                         row
                         for row in rows
@@ -2496,12 +2765,13 @@ def run_native_self_review(
 
     if computation_error:
         add_critical("pipeline", "UZI 原生计算链失败", computation_error, "恢复缺失数据或修复计算异常后重算")
-    if profile != "lite" and (not agent_analysis or agent_analysis.get("agent_reviewed") is not True):
+    agent_analysis_required = full_agent_workflow or profile != "lite"
+    if agent_analysis_required and (not agent_analysis or agent_analysis.get("agent_reviewed") is not True):
         add_critical("agent_analysis", "Agent 分析缺失或未确认", "agent_reviewed!=true", "完成 Agent 分析后重算与自审")
     for issue in agent_validation_issues:
         if issue.get("severity") != "error":
             continue
-        if profile != "lite":
+        if agent_analysis_required:
             add_critical(
                 str(issue.get("field") or "agent_analysis"),
                 str(issue.get("message") or "agent_analysis schema error"),
@@ -2520,7 +2790,7 @@ def run_native_self_review(
     if roleplay.get("required") and (
         roleplay.get("status") != "completed" or roleplay.get("agent_reviewed") is not True
     ):
-        add_critical("panel", "Deep 评委角色扮演未完整完成", str(roleplay), "完成全部评委后重新合成")
+        add_critical("panel", "完整 Agent 评委角色扮演未完成", str(roleplay), "完成全部评委后重新合成")
     if qualitative_execution.get("required") and (
         qualitative_execution.get("status") != "completed"
         or qualitative_execution.get("agent_reviewed") is not True
@@ -2537,7 +2807,7 @@ def run_native_self_review(
         raw,
         enabled_dimension_keys=enabled_dimension_keys,
     )
-    if coverage < 40 and profile != "lite":
+    if coverage < 40 and (full_agent_workflow or profile != "lite"):
         add_critical("overall", "数据完整性低于 40%", f"coverage_pct={coverage}", "按 suggested_fix 穷尽真实来源后重算")
 
     deduped: list[dict[str, Any]] = []
@@ -2564,9 +2834,16 @@ def run_native_self_review(
         "checks_run": [check.__name__ for check in review_module.CHECKS],
         "profile": profile,
         "school": school,
-        "enabled_dimensions": list(_profile_dimension_keys(profile)),
+        "enabled_dimensions": list(_workflow_dimension_keys(
+            profile,
+            full_agent_workflow=full_agent_workflow,
+        )),
         "profile_coverage_pct": coverage,
-        "gate_policy": "uzi_native_lite_cli_warning_semantics;critical_blocks_html_pdf;warning_allowed",
+        "gate_policy": (
+            "uzi_full_agent_hard_gates;critical_blocks_html_pdf;warning_allowed"
+            if full_agent_workflow
+            else "uzi_native_lite_cli_warning_semantics;critical_blocks_html_pdf;warning_allowed"
+        ),
     }
 
 

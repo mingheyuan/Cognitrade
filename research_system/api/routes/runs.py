@@ -23,6 +23,9 @@ from research_system.api.dependencies import (
     require_principal,
 )
 from research_system.api.errors import ApiError
+from research_system.api.fund_holding_report_service import (
+    FundHoldingReportsUnavailable,
+)
 from research_system.api.models import RerunRequest
 from research_system.api.route_support import (
     identity_scope_kwargs,
@@ -80,6 +83,12 @@ async def _call_run_resource(
             status_code=404,
             code="nested_resource_not_found",
             message="未找到请求的运行子资源",
+        ) from exc
+    except FundHoldingReportsUnavailable as exc:
+        raise ApiError(
+            status_code=409,
+            code="fund_holding_report_lineage_invalidated",
+            message=str(exc) or "父基金持仓数据已失效，报告不可继续交付",
         ) from exc
     except ValueError as exc:
         message = str(exc).lower()

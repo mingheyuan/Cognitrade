@@ -1,73 +1,358 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { MarketDataResponse } from '../finance-contracts'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MarketData, type MarketDataViewState } from './MarketData'
 
 vi.mock('../CognitradeContext', () => ({
-  useCognitrade: () => ({
-    settings: { baseUrl: 'http://127.0.0.1:8000/api/v1', token: '' },
-  }),
+  useCognitrade: () => ({ settings: { baseUrl: 'http://127.0.0.1:8000/api/v1', token: '' } }),
 }))
 
-const data: MarketDataResponse = {
-  symbol: '600519',
-  name: '贵州茅台',
-  retrieved_at: '2026-08-05T10:00:00Z',
-  quality_status: 'partial',
-  quality: {
-    market: 'available', kline: 'available', fundamental: 'available', capital_flow: 'available',
-    sentiment: 'available', notice: 'available', events: 'available', lhb: 'data_gap',
-  },
-  sources: {
-    market: { provider_id: 'akshare.market', vendor: 'eastmoney' },
-    kline: { provider_id: 'akshare.kline', vendor: 'eastmoney' },
-    fundamental: { provider_id: 'akshare.fundamental', vendor: 'eastmoney' },
-    capital_flow: { provider_id: 'akshare.capital_flow', vendor: 'eastmoney' },
-    sentiment: { provider_id: 'akshare.sentiment', vendor: 'eastmoney' },
-    notice: { provider_id: 'cninfo.notice', vendor: 'cninfo' },
-    events: { provider_id: 'cninfo.events', vendor: 'cninfo' },
-    lhb: {},
-  },
-  sections: {
-    market: {
-      overview: { latest_price: 1500, pct_change: 1.2, custom_business_metric: '行情补充值' },
-      history_summary: { latest_bar: { date: '2026-08-05', open: 1490, high: 1510, low: 1480, close: 1500, volume: 10 } },
-    },
-    kline: { bars: [{ date: '2026-08-05', open: 1490, high: 1510, low: 1480, close: 1500, volume: 10 }] },
-    fundamental: { info: { name: '贵州茅台' }, extra_block: { hidden_metric: '基本面补充值' } },
-    capital_flow: { latest_flow: { main_net_inflow: 100 } },
-    sentiment: {
-      hot_keywords: Array.from({ length: 17 }, (_, index) => `关键词${index + 1}`),
-      event_note: '热度补充值',
-    },
-    notices: { notice_count: 13, window_start: '2026-07-01', window_end: '2026-08-05', recent_notices: [] },
-    events: {
-      event_keywords: ['分红'],
-      event_notices: Array.from({ length: 13 }, (_, index) => ({
-        date: `2026-08-${String(index + 1).padStart(2, '0')}`,
-        title: `事件${index + 1}`,
-        type: '公告',
-      })),
-    },
-    lhb: {},
-  },
+const contract = {
+  contract_version: 'uzi-test-v1',
+  expected_dimension_count: 3,
+  asset_family: 'equity',
+  collector_count: 3,
+  dimensions: [
+    { dimension: 'd0', label: '基础行情', ordinal: 0, freshness_seconds: 3600, verified_empty_policy: 'never' },
+    { dimension: 'd1', label: '财务数据', ordinal: 1, freshness_seconds: 86400, verified_empty_policy: 'never' },
+    { dimension: 'd2', label: '龙虎榜', ordinal: 2, freshness_seconds: 3600, verified_empty_policy: 'bounded_zero' },
+  ],
 }
 
-describe('MarketData', () => {
-  afterEach(cleanup)
+const stockIdentity = {
+  symbol: '600519.SH', code: '600519', asset_type: 'stock', market: 'CN_EQUITY', exchange: 'SH',
+  exchange_timezone: 'Asia/Shanghai', security_type: 'stock', name: '贵州茅台', currency: 'CNY',
+  resolution_source: 'stock_symbol', instrument_id: 'stock:SH:600519',
+}
 
-  it('exposes every returned business section without raw JSON or silent slicing', () => {
-    const state: MarketDataViewState = { query: '600519', data, loading: false, error: '' }
-    render(<MarketData state={state} setState={vi.fn()} />)
+const fundIdentity = {
+  symbol: '020464', code: '020464', asset_type: 'otc_fund', market: 'CN_FUND', exchange: 'OTC',
+  exchange_timezone: 'Asia/Shanghai', security_type: 'mutual_fund', name: '测试权益基金', currency: 'CNY',
+  resolution_source: 'fund_security_master', instrument_id: 'otc_fund:OTC:020464',
+}
 
-    expect(screen.getByText('行情补充值')).toBeInTheDocument()
-    expect(screen.getByText('基本面补充值')).toBeInTheDocument()
-    expect(screen.getByText('关键词17')).toBeInTheDocument()
-    expect(screen.getByText('数据来源与完整性')).toBeInTheDocument()
-    expect(screen.getByText('实时行情与估值')).toBeInTheDocument()
-    expect(screen.queryByText(/\{"latest_price"/)).not.toBeInTheDocument()
+function identityResolution(query: string) {
+  const identity = query.includes('020464') ? fundIdentity : stockIdentity
+  return { query, candidates: [identity], resolved: identity, ambiguous: false }
+}
 
-    fireEvent.click(screen.getByRole('button', { name: '查看全部 13 条事件' }))
-    expect(screen.getByText('事件13')).toBeInTheDocument()
+function coverage(ready = false) {
+  return {
+    symbol: '600519.SH', market: 'CN', as_of_date: '2026-08-20', cutoff_at: '2026-08-20T15:59:59Z',
+    expected_dimension_count: 3,
+    available_count: ready ? 2 : 1,
+    verified_empty_count: 1,
+    gap_count: ready ? 0 : 1,
+    conflict_count: 0,
+    stale_count: 0,
+    ready_dimension_count: ready ? 3 : 2,
+    structurally_complete: ready,
+    report_ready: ready,
+    contract_version: 'uzi-test-v1',
+    dimensions: [
+      { dimension: 'd0', ordinal: 0, status: 'available', stale: false, conflict: false, eligible: true, reason: null, snapshot_id: 'snap-0', evidence_grade: 'A' },
+      { dimension: 'd1', ordinal: 1, status: ready ? 'available' : null, stale: false, conflict: false, eligible: ready, reason: ready ? null : '财报发布日期证据缺失', snapshot_id: ready ? 'snap-1' : null, evidence_grade: ready ? 'B' : null },
+      { dimension: 'd2', ordinal: 2, status: 'verified_empty', stale: false, conflict: false, eligible: true, reason: '权威查询成功且 0 条', snapshot_id: 'snap-2', evidence_grade: 'A' },
+    ],
+  }
+}
+
+function json(value: unknown, status = 200) {
+  return new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
+}
+
+function installApi(options: { ready?: boolean } = {}) {
+  const requests: Array<{ url: string; init?: RequestInit }> = []
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    requests.push({ url, init })
+    if (url.endsWith('/market-data/instruments/resolve')) {
+      const body = JSON.parse(String(init?.body)) as { query: string }
+      return json(identityResolution(body.query))
+    }
+    if (url.includes('/market-data/contract')) return json(contract)
+    if (url.includes('/market-data/coverage')) return json(coverage(Boolean(options.ready)))
+    if (url.includes('/market-data/snapshots/snap-2')) return json({
+      id: 'snap-2', symbol: '600519.SH', dimension: 'd2', status: 'verified_empty', evidence_grade: 'A',
+      content_hash: 'snapshot-hash', effective_at: '2026-08-20T00:00:00Z', published_at: '2026-08-20T08:00:00Z',
+      observed_at: '2026-08-20T08:01:00Z', ingested_at: '2026-08-20T08:02:00Z', payload: {},
+      query_manifest: { sources: ['official'], returned_count: 0 },
+      evidence: [{ evidence_id: 'e-1', provider: 'official', grade: 'A', source_url: 'https://example.com/evidence' }],
+    })
+    if (url.includes('/market-data/snapshots')) return json({ items: [{
+      id: 'snap-2', symbol: '600519.SH', dimension: 'd2', status: 'verified_empty', evidence_grade: 'A',
+      content_hash: 'snapshot-hash', published_at: '2026-08-20T08:00:00Z',
+    }], total_count: 1, limit: 50, offset: 0 })
+    if (url.endsWith('/market-data/collection-jobs') && init?.method === 'POST') return json({
+      id: 'job-1', status: 'queued', mode: 'missing_or_stale', asset_family: 'equity', top_n: 10, symbols: ['600519.SH'], dimensions: ['d0', 'd1', 'd2'],
+      start_date: '2026-08-20', end_date: '2026-08-20', max_concurrency: 5, publish_when_complete: true,
+      progress: { total: 3, completed: 0, by_status: { queued: 3 } }, created_at: '2026-08-20T08:00:00Z',
+    })
+    if (url.includes('/market-data/collection-jobs')) return json({ items: [], total_count: 0, limit: 50, offset: 0 })
+    if (url.endsWith('/market-data/manual-snapshots') && init?.method === 'POST') return json({
+      id: 'manual-snapshot-1', symbol: '600519.SH', dimension: 'd0', status: 'available', evidence_grade: 'B',
+    })
+    if (url.includes('/market-data/bundles')) return json({
+      items: options.ready ? [{
+        id: 'bundle-1', symbol: '600519.SH', market: 'cn_equity', as_of_date: '2026-08-20', cutoff_at: '2026-08-20T15:59:59Z',
+        status: 'published', contract_version: 'uzi-test-v1', expected_dimension_count: 3, available_count: 2,
+        verified_empty_count: 1, manifest_hash: '0123456789abcdef', revision: 1, items: [],
+      }] : [], total_count: options.ready ? 1 : 0, limit: 1, offset: 0,
+    })
+    if (url.endsWith('/market-data/report-manifests') && init?.method === 'POST') return json({ manifest_id: 'manifest-1', status: 'queued', report_run_id: 'run-1' })
+    return json({ items: [], total_count: 0, limit: 50, offset: 0 })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return { fetchMock, requests }
+}
+
+const fundContract = {
+  contract_version: 'cognitrade-fund-top-holdings-pit-v1',
+  expected_dimension_count: 1,
+  collector_count: 1,
+  asset_family: 'fund',
+  dimensions: [{
+    dimension: 'fund_top_holdings', label: '基金前十大持仓披露', ordinal: 0, freshness_seconds: 43200,
+    verified_empty_policy: 'bounded_zero', description: '基金只作为十只 A 股子标的入口。',
+  }],
+}
+
+const expandedHoldings = Array.from({ length: 10 }, (_, index) => ({
+  rank: index + 1,
+  source_rank: index + 1,
+  symbol: `${600000 + index}.SH`,
+  code: String(600000 + index),
+  name: `持仓股票 ${index + 1}`,
+  asset_type: 'stock',
+  market: 'CN_EQUITY',
+  exchange: 'SH',
+  status: 'available',
+  fund_weight_pct: 10 - index * 0.5,
+  disclosed_weight_pct: 10 - index * 0.5,
+  holding_source: 'direct_equity_disclosure',
+  disclosure_date: '2026-06-30',
+  missing_dimensions: [],
+}))
+
+const completedFundJob = {
+  id: 'fund-job-1', job_id: 'fund-job-1', status: 'succeeded', mode: 'missing_or_stale', asset_family: 'fund', top_n: 10,
+  symbols: ['020464'], dimensions: ['fund_top_holdings'], start_date: '2026-08-20', end_date: '2026-08-20',
+  max_concurrency: 5, publish_when_complete: true, progress: { total: 1, completed: 1, by_status: { succeeded: 1 } },
+  checkpoint: { parent_bundle_id: 'fund-bundle-1', parent_bundle_hash: 'fund-bundle-hash', holdings: expandedHoldings, child_job_ids: ['child-job-a', 'child-job-b'] },
+  expanded_holdings: expandedHoldings, child_collection_job_ids: ['child-job-a', 'child-job-b'], created_at: '2026-08-20T08:00:00Z',
+}
+
+function installFundApi() {
+  const requests: Array<{ url: string; init?: RequestInit }> = []
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    requests.push({ url, init })
+    if (url.endsWith('/market-data/instruments/resolve')) {
+      const body = JSON.parse(String(init?.body)) as { query: string }
+      return json(identityResolution(body.query))
+    }
+    if (url.includes('/market-data/contract')) return json(fundContract)
+    if (url.includes('/market-data/coverage')) return json({
+      symbol: '020464', market: 'CN_FUND', as_of_date: '2026-08-20', cutoff_at: '2026-08-20T15:59:59Z',
+      expected_dimension_count: 1, available_count: 1, verified_empty_count: 0, gap_count: 0, conflict_count: 0, stale_count: 0,
+      structurally_complete: true, report_ready: true, contract_version: fundContract.contract_version,
+      latest_bundle: { bundle_id: 'fund-bundle-1', status: 'published', manifest_hash: 'fund-bundle-hash' },
+      dimensions: [{ dimension: 'fund_top_holdings', ordinal: 0, status: 'available', stale: false, conflict: false, eligible: true, snapshot_id: 'fund-snapshot-1', evidence_grade: 'A' }],
+    })
+    if (url.endsWith('/market-data/collection-jobs') && init?.method === 'POST') return json({ ...completedFundJob, status: 'queued', progress: { total: 1, completed: 0, by_status: { queued: 1 } } })
+    if (url.includes('/market-data/collection-jobs')) return json({ items: [completedFundJob], total_count: 1, limit: 50, offset: 0 })
+    if (url.endsWith('/market-data/report-manifests') && init?.method === 'POST') return json({ manifest_id: 'fund-manifest-1', status: 'frozen' })
+    if (url.includes('/market-data/bundles/fund-bundle-1')) return json({
+      id: 'fund-bundle-1', symbol: '020464', market: 'CN_FUND', as_of_date: '2026-08-20', cutoff_at: '2026-08-20T15:59:59Z',
+      status: 'published', contract_version: fundContract.contract_version, expected_dimension_count: 1, available_count: 1,
+      verified_empty_count: 0, manifest_hash: 'fund-bundle-hash', revision: 1, items: [],
+    })
+    if (url.includes('/market-data/bundles')) return json({ items: [], total_count: 0, limit: 50, offset: 0 })
+    return json({ items: [], total_count: 0, limit: 50, offset: 0 })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  return { fetchMock, requests }
+}
+
+function renderPage() {
+  const state: MarketDataViewState = { query: '600519.SH', data: null, loading: false, error: '' }
+  return render(<MarketData state={state} setState={vi.fn()} />)
+}
+
+describe('MarketDataCenter', () => {
+  beforeEach(() => {
+    window.history.replaceState({}, '', '/market-data?symbol=600519.SH&as_of_date=2026-08-20&cutoff=eod&tab=coverage')
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+    vi.clearAllMocks()
+  })
+
+  it('renders the backend-provided dimension contract and never collects during GET reads', async () => {
+    const { requests } = installApi()
+    renderPage()
+
+    expect(await screen.findByRole('heading', { name: '采集槽完整度' })).toBeInTheDocument()
+    expect(screen.getByText('基础行情')).toBeInTheDocument()
+    expect(screen.getByText('财务数据')).toBeInTheDocument()
+    expect(screen.getByText('龙虎榜')).toBeInTheDocument()
+    expect(screen.getByText('/ 3')).toBeInTheDocument()
+    expect(screen.getAllByRole('tab')).toHaveLength(5)
+    expect(requests.some((request) => request.url.endsWith('/collection-jobs') && request.init?.method === 'POST')).toBe(false)
+    expect(requests.some((request) => request.url.includes('refresh='))).toBe(false)
+    expect(requests.some((request) => request.url.includes('cutoff=eod'))).toBe(false)
+    expect(requests.some((request) => request.url.includes('contract?market=CN_FUND'))).toBe(false)
+    expect(requests.some((request) => request.url.includes('contract?market=CN_EQUITY'))).toBe(true)
+    expect(requests.some((request) => request.url.includes('coverage?') && request.url.includes('market=CN_EQUITY'))).toBe(true)
+    expect(requests.every((request) => request.url.includes('/api/v2/finance/market-data/'))).toBe(true)
+  })
+
+  it('restores URL state and exposes verified-empty evidence without treating it as a timeout', async () => {
+    window.history.replaceState({}, '', '/market-data?symbol=600519.SH&as_of_date=2026-08-20&cutoff=eod&tab=evidence&dimension=d2')
+    installApi()
+    renderPage()
+
+    expect(await screen.findByRole('heading', { name: '龙虎榜' })).toBeInTheDocument()
+    expect(screen.getByText('A级 · 截止前观测')).toBeInTheDocument()
+    expect(screen.getAllByText('official').length).toBeGreaterThan(0)
+    expect(screen.getByText('returned_count')).toBeInTheDocument()
+    expect(screen.getAllByText('0').length).toBeGreaterThan(0)
+    expect(screen.getByRole('tab', { name: /数据与证据/ })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('starts external acquisition only after an explicit user action with default concurrency five', async () => {
+    const { requests } = installApi()
+    renderPage()
+    await screen.findByRole('heading', { name: '采集槽完整度' })
+
+    expect(requests.some((request) => request.url.endsWith('/collection-jobs') && request.init?.method === 'POST')).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: /补缺 \/ 补旧/ }))
+
+    await waitFor(() => expect(requests.some((request) => request.url.endsWith('/collection-jobs') && request.init?.method === 'POST')).toBe(true))
+    const creation = requests.find((request) => request.url.endsWith('/collection-jobs') && request.init?.method === 'POST')
+    expect(JSON.parse(String(creation?.init?.body))).toMatchObject({
+      symbols: ['600519.SH'], asset_family: 'equity', top_n: 10, dimensions: 'all', mode: 'missing_or_stale', max_concurrency: 5, publish_when_complete: true,
+    })
+    expect(await screen.findByRole('heading', { name: '新建采集任务' })).toBeInTheDocument()
+    expect(screen.getByRole('spinbutton', { name: '采集并发' })).toHaveAttribute('max', '5')
+    expect(window.location.search).toContain('tab=jobs')
+  })
+
+  it('freezes a ready bundle and launches the selected report profile', async () => {
+    const { requests } = installApi({ ready: true })
+    renderPage()
+    await screen.findByRole('heading', { name: '采集槽完整度' })
+
+    fireEvent.click(screen.getByRole('button', { name: '冻结报告输入' }))
+    expect(screen.getByRole('dialog')).toHaveTextContent('报告阶段外部数据调用数必须为 0')
+    fireEvent.click(screen.getByRole('radio', { name: /Deep/ }))
+    fireEvent.click(screen.getByRole('button', { name: '冻结 DEEP 输入' }))
+
+    await waitFor(() => expect(requests.some((request) => request.url.endsWith('/report-manifests') && request.init?.method === 'POST')).toBe(true))
+    const creation = requests.find((request) => request.url.endsWith('/report-manifests') && request.init?.method === 'POST')
+    expect(JSON.parse(String(creation?.init?.body))).toMatchObject({
+      symbols: ['600519.SH'],
+      market_by_symbol: { '600519.SH': 'CN_EQUITY' },
+      as_of_date: '2026-08-20',
+      evaluation_at: '2026-08-20T15:59:59Z',
+      report_kind: 'single_stock',
+      asset_family: 'equity',
+      workflow_pins: { profile: 'deep' },
+      weights: {},
+    })
+  })
+
+  it('builds a backend-valid B-grade manual evidence request and never offers manual grade A', async () => {
+    const { requests } = installApi()
+    renderPage()
+    await screen.findByRole('heading', { name: '采集槽完整度' })
+
+    fireEvent.click(screen.getByRole('button', { name: '手工录入' }))
+    expect(screen.getByDisplayValue('B · 人工数据最高等级')).toHaveAttribute('readonly')
+    expect(screen.queryByRole('option', { name: /A ·/ })).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('证据 URL'), { target: { value: 'https://example.com/archive' } })
+    fireEvent.change(screen.getByLabelText('录入原因'), { target: { value: '补录不可变历史公告证据' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /我确认该证据不可变/ }))
+    fireEvent.click(screen.getByRole('button', { name: '提交严格校验' }))
+
+    await waitFor(() => expect(requests.some((request) => request.url.endsWith('/manual-snapshots') && request.init?.method === 'POST')).toBe(true))
+    const creation = requests.find((request) => request.url.endsWith('/manual-snapshots') && request.init?.method === 'POST')
+    expect(JSON.parse(String(creation?.init?.body))).toMatchObject({
+      symbol: '600519.SH', market: 'CN_EQUITY', dimension_id: 'd0', as_of_date: '2026-08-20', cutoff_at: '2026-08-20T15:59:59Z',
+      evidence_grade: 'B', status: 'available', payload: {}, field_sources: { $: 'manual.evidence' },
+      query_manifest: { query_window: { start: '2026-08-20', end: '2026-08-20' }, required_sources: ['manual.evidence'], sources: [{ source: 'manual.evidence', status: 'success', result_count: 0 }], result_count: 0 },
+      evidence: [{ provider: 'manual.evidence', source_url: 'https://example.com/archive', grade: 'B', immutable_proof: true, is_manual: true }],
+    })
+  })
+
+  it('uses the CN_FUND contract as a single dynamic holdings entry instead of the equity contract', async () => {
+    window.history.replaceState({}, '', '/market-data?symbol=020464&asset_family=fund&as_of_date=2026-08-20&cutoff=eod&tab=coverage')
+    const { requests } = installFundApi()
+    renderPage()
+
+    expect(await screen.findByRole('heading', { name: '基金持仓入口完整度' })).toBeInTheDocument()
+    expect(screen.getByText('基金前十大持仓披露')).toBeInTheDocument()
+    expect(screen.getByText('fund_top_holdings')).toBeInTheDocument()
+    expect(screen.getByText('/ 1')).toBeInTheDocument()
+    expect(screen.queryByText('基础行情')).not.toBeInTheDocument()
+    expect(screen.getByText(/基金本身只占一个持仓披露槽/)).toBeInTheDocument()
+    expect(requests.some((request) => request.url.includes('/contract?market=CN_FUND'))).toBe(true)
+  })
+
+  it('sends the fixed fund collection contract and renders expanded holdings with child job ids', async () => {
+    window.history.replaceState({}, '', '/market-data?symbol=020464&asset_family=fund&as_of_date=2026-08-20&cutoff=eod&tab=jobs')
+    const { requests } = installFundApi()
+    renderPage()
+
+    expect(await screen.findByRole('heading', { name: '新建采集任务' })).toBeInTheDocument()
+    const jobCode = await screen.findByText('fund-job-1')
+    fireEvent.click(jobCode.closest('summary') as HTMLElement)
+    expect(screen.getByRole('heading', { name: '冻结前十大股票组合' })).toBeInTheDocument()
+    expect(screen.getByText('持仓股票 1')).toBeInTheDocument()
+    expect(screen.getByText('持仓股票 10')).toBeInTheDocument()
+    expect(screen.getByText('child-job-a')).toBeInTheDocument()
+    expect(screen.getByText('child-job-b')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /补缺 \/ 补旧/ }))
+    await waitFor(() => expect(requests.some((request) => request.url.endsWith('/collection-jobs') && request.init?.method === 'POST')).toBe(true))
+    const creation = requests.find((request) => request.url.endsWith('/collection-jobs') && request.init?.method === 'POST')
+    expect(JSON.parse(String(creation?.init?.body))).toMatchObject({
+      symbols: ['020464'], asset_family: 'fund', top_n: 10, dimensions: 'all', max_concurrency: 5,
+    })
+  })
+
+  it('freezes a fund report as the backend-derived ten-stock portfolio', async () => {
+    window.history.replaceState({}, '', '/market-data?symbol=020464&asset_family=fund&as_of_date=2026-08-20&cutoff=eod&tab=coverage')
+    const { requests } = installFundApi()
+    renderPage()
+
+    const freeze = await screen.findByRole('button', { name: '冻结十大持仓组合' })
+    await waitFor(() => expect(freeze).toBeEnabled())
+    fireEvent.click(freeze)
+    expect(screen.getByRole('dialog')).toHaveTextContent('基金代码不会被当成股票分析')
+    expect(screen.getByRole('dialog')).toHaveTextContent('10 只股票')
+    fireEvent.click(screen.getByRole('radio', { name: /Deep/ }))
+    fireEvent.click(screen.getByRole('button', { name: '冻结十大持仓 · DEEP' }))
+
+    await waitFor(() => expect(requests.some((request) => request.url.endsWith('/report-manifests') && request.init?.method === 'POST')).toBe(true))
+    const creation = requests.find((request) => request.url.endsWith('/report-manifests') && request.init?.method === 'POST')
+    expect(JSON.parse(String(creation?.init?.body))).toMatchObject({
+      symbols: ['020464'], market_by_symbol: { '020464': 'CN_FUND' }, asset_family: 'fund',
+      fund_bundle_id: 'fund-bundle-1', report_kind: 'fund_top_holdings', workflow_pins: { profile: 'deep' },
+    })
+  })
+
+  it('blocks a mixed equity and fund batch before collection job creation', async () => {
+    window.history.replaceState({}, '', '/market-data?symbol=600519.SH&asset_family=auto&as_of_date=2026-08-20&cutoff=eod&tab=jobs')
+    const { requests } = installApi()
+    renderPage()
+
+    const input = await screen.findByLabelText(/股票代码（逗号或空格分隔；不可混入基金）/)
+    fireEvent.change(input, { target: { value: '600519.SH, 020464' } })
+    fireEvent.click(screen.getByRole('button', { name: '创建显式采集任务' }))
+
+    expect(await screen.findByText('同一采集任务不能混合股票与基金，请分别创建任务。')).toBeInTheDocument()
+    expect(requests.some((request) => request.url.endsWith('/collection-jobs') && request.init?.method === 'POST')).toBe(false)
   })
 })

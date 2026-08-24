@@ -32,6 +32,9 @@ class _MarketData:
             "refresh": refresh,
         }
 
+    def get_live_quote(self, symbol: str, *, refresh: bool) -> dict:
+        return self.get_quote(symbol, refresh=refresh)
+
 
 class _PaperTrading:
     def __init__(self) -> None:

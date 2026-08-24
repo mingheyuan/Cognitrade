@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import dataclass, replace
 import hashlib
 import importlib
 import os
-from pathlib import Path
 import sys
 import threading
-from typing import Any, Callable
-
+import time
+import uuid
+from collections.abc import Callable
+from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass, replace
+from pathlib import Path
+from typing import Any
 
 UZI_SOURCE_COMMIT = "b004d7a988ca53a4805bf36784af091fa1209f22"
 UZI_REPORT_SOURCE_COMMIT = "b004d7a988ca53a4805bf36784af091fa1209f22"
@@ -229,9 +231,13 @@ _FETCHERS: dict[str, _FetcherSpec] = {
 
 
 _IMPORT_LOCK = threading.Lock()
-_CONTEST_POLICY_LOCK = threading.Lock()
+_CONTEST_POLICY_LOCK = threading.RLock()
 _FUND_PROFILE_ENV_LOCK = threading.Lock()
 UZI_ENVIRONMENT_LOCK = threading.RLock()
+_PIPELINE_MINI_RACER_LOCK = threading.Lock()
+_MINI_RACER_SENTINEL_OWNER_PREFIX = "cognitrade-timeout-owner="
+_PARALLEL_SYMBOL_SCOPE_OPTION = "cognitrade_parallel_symbol_scope"
+_PARALLEL_SYMBOL_SCOPE_TOKEN = object()
 _INITIALIZED_ROOTS: set[Path] = set()
 
 
@@ -303,6 +309,10 @@ class Uzi392FetcherRuntime:
         if not normalized_ticker:
             raise ValueError("UZI symbol collection requires a ticker")
         normalized_options = dict(options or {})
+        parallel_scope_active = (
+            normalized_options.pop(_PARALLEL_SYMBOL_SCOPE_OPTION, None)
+            is _PARALLEL_SYMBOL_SCOPE_TOKEN
+        )
         process_timeout_overrides = dict(
             normalized_options.get(
                 "cognitrade_pipeline_fetcher_timeout_overrides"
@@ -327,6 +337,7 @@ class Uzi392FetcherRuntime:
                 max_workers=max_workers,
                 resume=resume,
                 contest_policy=contest_policy,
+                contest_policy_scoped=parallel_scope_active,
             )
             return {
                 **raw,
@@ -346,13 +357,16 @@ class Uzi392FetcherRuntime:
                 raw_previous=raw_previous,
                 resume=resume,
             )
-            with _pipeline_contests_policy_scope(
-                pipeline_collect,
-                policy=contest_policy,
-            ), _pipeline_process_job_timeout_scope(
-                pipeline_collect,
-                overrides=process_timeout_overrides,
-            ):
+            collection_scope = (
+                nullcontext()
+                if parallel_scope_active
+                else _pipeline_symbol_collection_scope(
+                    pipeline_collect,
+                    policy=contest_policy,
+                    timeout_overrides=process_timeout_overrides,
+                )
+            )
+            with collection_scope:
                 collected = pipeline_collect.collect(
                     normalized_ticker,
                     raw_previous=previous,
@@ -388,6 +402,7 @@ class Uzi392FetcherRuntime:
                 max_workers=max_workers,
                 resume=resume,
                 contest_policy=contest_policy,
+                contest_policy_scoped=parallel_scope_active,
             )
             return {
                 **raw,
@@ -395,6 +410,59 @@ class Uzi392FetcherRuntime:
                     "lane": "legacy_fallback",
                     "fallback_reason": fallback_reason,
                 },
+            }
+
+    @contextmanager
+    def parallel_symbol_collection_scope(
+        self,
+        *,
+        options: dict[str, Any] | None = None,
+        cancellation: Any = None,
+    ):
+        """Install request-global UZI patches once for parallel symbol threads.
+
+        ``collect_symbol`` normally scopes two module-global wrappers around one
+        pipeline invocation. Applying those wrappers independently from worker
+        threads would either serialize all symbols or deadlock against the
+        request's profile lock. This scope installs the identical policy and
+        timeout wrappers once on the coordinating thread, then returns an
+        opaque option token that lets workers reuse them safely.
+
+        Mini-racer jobs remain process-isolated by UZI and are additionally
+        serialized across symbol pipelines so their shared crash sentinel
+        cannot be armed or cleared concurrently.
+        """
+
+        normalized_options = dict(options or {})
+        process_timeout_overrides = dict(
+            normalized_options.get(
+                "cognitrade_pipeline_fetcher_timeout_overrides"
+            )
+            or {}
+        )
+        contest_policy = dict(
+            normalized_options.get("cognitrade_xueqiu_policy") or {}
+        )
+        pipeline_collect = importlib.import_module("lib.pipeline.collect")
+        contests = importlib.import_module("fetch_contests")
+        with (
+            _pipeline_process_job_timeout_scope(
+                pipeline_collect,
+                overrides=process_timeout_overrides,
+            ),
+            _pipeline_contests_policy_scope(
+                pipeline_collect,
+                policy=contest_policy,
+            ),
+            _pipeline_mini_racer_serial_scope(
+                pipeline_collect,
+                cancellation=cancellation,
+            ),
+            _contests_policy_scope(contests, policy=contest_policy),
+        ):
+            yield {
+                **normalized_options,
+                _PARALLEL_SYMBOL_SCOPE_OPTION: _PARALLEL_SYMBOL_SCOPE_TOKEN,
             }
 
     def _pipeline_previous(
@@ -474,11 +542,17 @@ class Uzi392FetcherRuntime:
         max_workers: int,
         resume: bool,
         contest_policy: dict[str, Any],
+        contest_policy_scoped: bool = False,
     ) -> dict[str, Any]:
         run_real_test = importlib.import_module("run_real_test")
         contests = importlib.import_module("fetch_contests")
         resolved_ticker = self._resolve_legacy_equity_ticker(ticker)
-        with _contests_policy_scope(contests, policy=contest_policy):
+        policy_scope = (
+            nullcontext()
+            if contest_policy_scoped
+            else _contests_policy_scope(contests, policy=contest_policy)
+        )
+        with policy_scope:
             raw = run_real_test.collect_raw_data(
                 resolved_ticker,
                 max_workers=max(int(max_workers), 1),
@@ -577,6 +651,220 @@ def _run_pipeline_contest_job(
     contests = importlib.import_module("fetch_contests")
     with _contests_policy_scope(contests, policy=dict(policy or {})):
         return pipeline_collect._run_fetcher_job(dim_key, ticker, raw_context)
+
+
+def _mini_racer_sentinel_path() -> Path:
+    run_real_test = importlib.import_module("run_real_test")
+    return Path(run_real_test._MINI_RACER_SENTINEL)
+
+
+def _arm_owned_mini_racer_sentinel(module_name: str, owner_token: str) -> None:
+    """Write a marker that the host can recover after an intentional kill."""
+
+    try:
+        sentinel = _mini_racer_sentinel_path()
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text(
+            "|".join(
+                (
+                    str(time.time()),
+                    str(module_name),
+                    f"{_MINI_RACER_SENTINEL_OWNER_PREFIX}{owner_token}",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except (ImportError, OSError):
+        # Match pinned UZI's fail-open marker write. The fetcher still runs;
+        # the process boundary remains the hard-crash containment mechanism.
+        return
+
+
+def _run_pipeline_owned_mini_racer_job(
+    target: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    owner_token: str,
+) -> Any:
+    """Run one pinned job while tagging only the sentinel it arms."""
+
+    run_real_test = importlib.import_module("run_real_test")
+    original_arm = run_real_test._arm_mini_racer_sentinel
+
+    def owned_arm(module_name: str) -> None:
+        _arm_owned_mini_racer_sentinel(module_name, owner_token)
+
+    run_real_test._arm_mini_racer_sentinel = owned_arm
+    try:
+        return target(*args, **kwargs)
+    finally:
+        run_real_test._arm_mini_racer_sentinel = original_arm
+
+
+def _recover_timed_out_mini_racer_sentinel(owner_token: str) -> bool:
+    """Remove only the marker owned by a worker the host intentionally killed.
+
+    Pipe failures and other abnormal worker exits do not call this function, so
+    a genuine V8 crash keeps the pinned UZI fail-safe sentinel in place. An
+    exact owner check also prevents one concurrent/native UZI caller from
+    clearing another caller's marker.
+    """
+
+    sentinel = _mini_racer_sentinel_path()
+    expected_owner = f"{_MINI_RACER_SENTINEL_OWNER_PREFIX}{owner_token}"
+    try:
+        before = sentinel.stat()
+        fields = sentinel.read_text(encoding="utf-8").strip().split("|")
+        after = sentinel.stat()
+        if len(fields) != 3 or fields[2] != expected_owner:
+            return False
+        if (
+            before.st_ino != after.st_ino
+            or before.st_mtime_ns != after.st_mtime_ns
+            or before.st_size != after.st_size
+        ):
+            return False
+        sentinel.unlink()
+        return True
+    except (FileNotFoundError, OSError, UnicodeError):
+        return False
+
+
+@contextmanager
+def _pipeline_symbol_collection_scope(
+    module: Any,
+    *,
+    policy: dict[str, Any],
+    timeout_overrides: dict[str, float],
+):
+    """Install the single-symbol wrappers in a consistent lock order."""
+
+    # Always take UZI_ENVIRONMENT_LOCK before _CONTEST_POLICY_LOCK. The public
+    # collection entrypoint already owns the environment lock while applying a
+    # profile, and this order prevents a direct runtime caller from creating a
+    # lock inversion with that request.
+    with (
+        _pipeline_process_job_timeout_scope(
+            module,
+            overrides=timeout_overrides,
+        ),
+        _pipeline_contests_policy_scope(module, policy=policy),
+        _pipeline_mini_racer_serial_scope(module),
+    ):
+        yield
+
+
+@contextmanager
+def _pipeline_mini_racer_serial_scope(module: Any, *, cancellation: Any = None):
+    """Serialize mini-racer process jobs across concurrent symbol pipelines.
+
+    UZI's scheduler already serializes these jobs inside one symbol. A
+    multi-symbol request adds several schedulers in parallel, however, and all
+    of their child processes share one crash-sentinel path. Split only the
+    mini-racer jobs out of each wave and admit them through one host lock. Lock
+    queueing is host orchestration time, not provider execution time, so every
+    admitted group retains its original UZI wave budget.
+    """
+
+    original_runner = module.run_process_jobs
+
+    def controlled_runner(jobs, *, max_workers, overall_timeout):
+        jobs = list(jobs)
+        mini_racer_jobs = [
+            job for job in jobs if getattr(job, "serial_group", None) == "mini_racer"
+        ]
+        if not mini_racer_jobs:
+            return original_runner(
+                jobs,
+                max_workers=max_workers,
+                overall_timeout=overall_timeout,
+            )
+
+        regular_jobs = [job for job in jobs if job not in mini_racer_jobs]
+        outcomes = (
+            original_runner(
+                regular_jobs,
+                max_workers=max_workers,
+                overall_timeout=overall_timeout,
+            )
+            if regular_jobs
+            else []
+        )
+        acquired = False
+        while not acquired and not (
+            cancellation is not None and cancellation.is_set()
+        ):
+            acquired = _PIPELINE_MINI_RACER_LOCK.acquire(timeout=0.1)
+        if not acquired:
+            outcomes.extend(
+                module.ProcessOutcome(
+                    key=job.key,
+                    error="cancelled before mini-racer start",
+                )
+                for job in mini_racer_jobs
+            )
+            return outcomes
+        try:
+            if cancellation is not None and cancellation.is_set():
+                outcomes.extend(
+                    module.ProcessOutcome(
+                        key=job.key,
+                        error="cancelled before mini-racer start",
+                    )
+                    for job in mini_racer_jobs
+                )
+            else:
+                mini_started = time.monotonic()
+                for index, job in enumerate(mini_racer_jobs):
+                    if cancellation is not None and cancellation.is_set():
+                        outcomes.extend(
+                            module.ProcessOutcome(
+                                key=pending_job.key,
+                                error="cancelled before mini-racer start",
+                            )
+                            for pending_job in mini_racer_jobs[index:]
+                        )
+                        break
+                    remaining = float(overall_timeout) - (
+                        time.monotonic() - mini_started
+                    )
+                    if remaining <= 0:
+                        outcomes.extend(
+                            module.ProcessOutcome(
+                                key=pending_job.key,
+                                error="overall timeout before mini-racer start",
+                                timed_out=True,
+                            )
+                            for pending_job in mini_racer_jobs[index:]
+                        )
+                        break
+
+                    owner_token = uuid.uuid4().hex
+                    owned_job = replace(
+                        job,
+                        target=_run_pipeline_owned_mini_racer_job,
+                        args=(job.target, job.args, job.kwargs, owner_token),
+                        kwargs={},
+                    )
+                    job_outcomes = original_runner(
+                        [owned_job],
+                        max_workers=1,
+                        overall_timeout=remaining,
+                    )
+                    for outcome in job_outcomes:
+                        if outcome.timed_out:
+                            _recover_timed_out_mini_racer_sentinel(owner_token)
+                    outcomes.extend(job_outcomes)
+        finally:
+            _PIPELINE_MINI_RACER_LOCK.release()
+        return outcomes
+
+    module.run_process_jobs = controlled_runner
+    try:
+        yield
+    finally:
+        module.run_process_jobs = original_runner
 
 
 @contextmanager

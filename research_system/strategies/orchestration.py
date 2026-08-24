@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from domain_packs.finance_ashare.holding_reports import freeze_fund_holdings
+from research_system.market_data.report_inputs import bundle_hashes_for_symbols
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
@@ -651,8 +652,6 @@ class ReportOrchestrationService:
             source_run_id = building_source_run_id
         if source_run_id is None:
             source_run_id = self._find_latest_fund_run(scope, assignment.fund_code, as_of)
-        if source_run_id is None and as_of >= date.today():
-            source_run_id = self._create_current_fund_run(scope, assignment.fund_code)
         if source_run_id is None:
             report_set_id = self._create_blocked_report(
                 scope,
@@ -738,12 +737,53 @@ class ReportOrchestrationService:
             if request.get("retry") and not request.get("full_rerun")
             else None
         )
+        report_manifest = None
+        load_frozen_manifest = getattr(
+            self.holding_report_service,
+            "frozen_report_manifest",
+            None,
+        )
+        if previous_batch_id and callable(load_frozen_manifest):
+            report_manifest = load_frozen_manifest(
+                previous_batch_id,
+                **self._runtime_scope(scope),
+            )
+        freeze_report_inputs = getattr(self.holding_report_service, "freeze_report_inputs", None)
+        if report_manifest is None and callable(freeze_report_inputs):
+            report_manifest = freeze_report_inputs(
+                [
+                    str(row.get("symbol") or "")
+                    for row in frozen.get("holdings") or []
+                    if bool(row.get("supported")) and str(row.get("symbol") or "")
+                ],
+                as_of_date=as_of,
+                profile=document.report_inputs.research_profile,
+                pin_set_hash=uzi_pin_hash,
+                **self._runtime_scope(scope),
+                context={
+                    "orchestration_job_id": job_id,
+                    "assignment_id": assignment.id,
+                    "fund_code": assignment.fund_code,
+                    "source_run_id": source_run_id,
+                    "holdings": list(frozen.get("holdings") or []),
+                },
+            )
+        supported_holding_symbols = [
+            str(row.get("symbol") or "")
+            for row in frozen.get("holdings") or []
+            if bool(row.get("supported")) and str(row.get("symbol") or "")
+        ]
+        bundle_manifest_hashes = bundle_hashes_for_symbols(
+            report_manifest,
+            supported_holding_symbols,
+        )
         reuse, owned_canonical = self._canonical_plan(
             scope,
             job_id=job_id,
             holdings=list(frozen.get("holdings") or []),
             as_of=as_of,
             pin_hash=uzi_pin_hash,
+            manifest_hashes=bundle_manifest_hashes,
             claim_symbols=claim_symbols,
         )
         batch = self.holding_report_service.create_batch(
@@ -757,6 +797,7 @@ class ReportOrchestrationService:
             as_of_date=as_of,
             pin_set_hash=uzi_pin_hash,
             canonical_reuse=reuse,
+            report_manifest=report_manifest,
             selected_symbols=(
                 retry_symbols
                 if request.get("retry") and not request.get("full_rerun")
@@ -785,6 +826,7 @@ class ReportOrchestrationService:
             frozen=frozen,
             pin_hash=uzi_pin_hash,
             as_of=as_of,
+            manifest_hashes=bundle_manifest_hashes,
         )
         self._recompute_signal(scope, assignment.id, report_set_id)
         return {
@@ -923,6 +965,7 @@ class ReportOrchestrationService:
         frozen: dict[str, Any],
         pin_hash: str,
         as_of: date,
+        manifest_hashes: dict[str, str] | None = None,
     ) -> list[str]:
         failed_symbols: list[str] = []
         with self.database.session() as session:
@@ -938,7 +981,12 @@ class ReportOrchestrationService:
             previous_by_key: dict[str, DailyReportNode] = {}
             for item in batch.get("holdings") or []:
                 symbol = str(item.get("symbol") or "")
-                canonical = self._canonical_uzi_key(symbol, as_of, pin_hash)
+                canonical = self._canonical_uzi_key(
+                    symbol,
+                    as_of,
+                    pin_hash,
+                    (manifest_hashes or {}).get(symbol, "legacy-unverified"),
+                )
                 previous = self._canonical_node(session, scope, canonical)
                 if previous is not None:
                     previous_by_key[canonical] = previous
@@ -1234,12 +1282,18 @@ class ReportOrchestrationService:
         holdings: list[dict[str, Any]],
         as_of: date,
         pin_hash: str,
+        manifest_hashes: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         reuse: dict[str, dict[str, Any]] = {}
         with self.database.session() as session:
             for holding in holdings:
                 symbol = str(holding.get("symbol") or "")
-                canonical_key = self._canonical_uzi_key(symbol, as_of, pin_hash)
+                canonical_key = self._canonical_uzi_key(
+                    symbol,
+                    as_of,
+                    pin_hash,
+                    (manifest_hashes or {}).get(symbol, "legacy-unverified"),
+                )
                 analysis = self._canonical_analysis(
                     session,
                     scope,
@@ -1261,6 +1315,7 @@ class ReportOrchestrationService:
         holdings: list[dict[str, Any]],
         as_of: date,
         pin_hash: str,
+        manifest_hashes: dict[str, str] | None = None,
         claim_symbols: set[str] | None,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
         supported = {
@@ -1276,6 +1331,7 @@ class ReportOrchestrationService:
             requested=requested,
             as_of=as_of,
             pin_hash=pin_hash,
+            manifest_hashes=manifest_hashes,
         )
         deadline = time.monotonic() + 60 * 30
         next_heartbeat = time.monotonic()
@@ -1299,6 +1355,7 @@ class ReportOrchestrationService:
                 requested=set(waiting_holdings),
                 as_of=as_of,
                 pin_hash=pin_hash,
+                manifest_hashes=manifest_hashes,
             )
             reuse.update(current_reuse)
             owned.update(current_owned)
@@ -1317,9 +1374,18 @@ class ReportOrchestrationService:
         requested: set[str],
         as_of: date,
         pin_hash: str,
+        manifest_hashes: dict[str, str] | None = None,
     ) -> tuple[dict[str, dict[str, Any]], dict[str, str], dict[str, str]]:
         records = [
-            (self._canonical_uzi_key(symbol, as_of, pin_hash), symbol)
+            (
+                self._canonical_uzi_key(
+                    symbol,
+                    as_of,
+                    pin_hash,
+                    (manifest_hashes or {}).get(symbol, "legacy-unverified"),
+                ),
+                symbol,
+            )
             for symbol in holdings
         ]
         records.sort()
@@ -1993,11 +2059,24 @@ class ReportOrchestrationService:
         )
 
     @staticmethod
-    def _canonical_uzi_key(symbol: str, as_of: date, pin_hash: str) -> str:
+    def _canonical_uzi_key(
+        symbol: str,
+        as_of: date,
+        pin_hash: str,
+        manifest_hash: str = "legacy-unverified",
+    ) -> str:
         input_hash = _hash(
-            {"symbol": symbol, "as_of": as_of.isoformat(), "uzi_pin_set_hash": pin_hash}
+            {
+                "symbol": symbol,
+                "as_of": as_of.isoformat(),
+                "uzi_pin_set_hash": pin_hash,
+                "market_data_manifest_hash": manifest_hash,
+            }
         )
-        return f"uzi:{symbol}:{as_of.isoformat()}:{pin_hash}:{input_hash}"
+        return (
+            f"uzi:{symbol}:{as_of.isoformat()}:{pin_hash}:"
+            f"{manifest_hash}:{input_hash}"
+        )
 
     @staticmethod
     def _runtime_scope(scope: OwnerScope) -> dict[str, str | None]:

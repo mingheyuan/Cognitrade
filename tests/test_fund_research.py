@@ -587,6 +587,27 @@ class FundResearchTests(unittest.TestCase):
         self.assertEqual(rows[0]["weight_pct"], 15.02)
         self.assertEqual(rows[0]["market_value_10k"], 112420.46)
 
+    def test_snapshot_retains_twenty_holding_candidates_for_ashare_backfill(self) -> None:
+        disclosed = [
+            {
+                "序号": rank,
+                "股票代码": f"{600000 + rank:06d}",
+                "股票名称": f"样本{rank}",
+                "占净值比例": float(21 - rank),
+                "季度": "2026年2季度",
+            }
+            for rank in range(1, 21)
+        ]
+        skill = FundSnapshotSkill(
+            holdings_loader=lambda _code, _year: pd.DataFrame(disclosed),
+        )
+
+        holdings, period, errors = skill._latest_direct_equity_holdings("020464")
+
+        self.assertEqual(period, "2026年2季度")
+        self.assertEqual(errors, [])
+        self.assertEqual(len(holdings), 20)
+
     def test_fund_methodology_ranks_only_comparable_observed_evidence(self) -> None:
         skill = FundSnapshotSkill(
             fund_master=FundSecurityMaster(catalog_loader=_catalog_frame),

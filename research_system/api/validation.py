@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Iterable
+from datetime import date
 from typing import Any
 
 from research_system.api.errors import ApiError
@@ -132,7 +133,13 @@ _UZI_PROFILE_INTENTS = frozenset({
 })
 _INVESTMENT_CYCLE_INTENTS = frozenset({"fund_research", "stock_screen"})
 
-_COMMON_REQUEST_FIELDS = {"planning_context_hints", "background"}
+_COMMON_REQUEST_FIELDS = {
+    "planning_context_hints",
+    "background",
+    # A formal PIT report may explicitly pin the logical trading day.  The
+    # report preflight will resolve only a published Bundle for this date.
+    "analysis_as_of_date",
+}
 _STOCK_FIELDS = {
     "symbol",
     "snapshot_types",
@@ -358,6 +365,13 @@ def _validate_common_constraints(
         _invalid_constraint("planning_context_hints", "must be an object")
     if "background" in constraints and not isinstance(constraints["background"], bool):
         _invalid_constraint("background", "must be a boolean")
+    if "analysis_as_of_date" in constraints:
+        try:
+            constraints["analysis_as_of_date"] = date.fromisoformat(
+                str(constraints["analysis_as_of_date"] or "")
+            ).isoformat()
+        except ValueError:
+            _invalid_constraint("analysis_as_of_date", "must be an ISO date (YYYY-MM-DD)")
 
     if "investment_cycle" in constraints:
         _require_enum(constraints["investment_cycle"], field_name="investment_cycle", allowed=_INVESTMENT_CYCLES)

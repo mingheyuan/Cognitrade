@@ -153,6 +153,7 @@ intake:
   minimum_confidence: 0.65
   intents:
     - intent_id: stock_check
+      report_requires_bundle: true
       description: Run the complete pinned UZI 3.9.4 analysis and strict quality gate on one company.
       required_slots: [symbols, research_profile]
       optional_slots: [school]
@@ -163,6 +164,7 @@ intake:
         - finance.uzi.native.report.compose
       output_artifact_types: [research_report]
     - intent_id: uzi_analyze_stock
+      report_requires_bundle: true
       description: Run the pinned UZI /analyze-stock command as an independent Agent OS capability.
       required_slots: [symbols, research_profile]
       optional_slots: [school]
@@ -173,6 +175,7 @@ intake:
         - finance.uzi.native.report.compose
       output_artifact_types: [research_report]
     - intent_id: quick_scan
+      report_requires_bundle: true
       description: Run the pinned UZI 3.9.4 four-dimension stock quick scan and return concise Markdown.
       required_slots: [symbols]
       candidate_capabilities:
@@ -181,117 +184,140 @@ intake:
         - finance.uzi.quick_scan.compose
       output_artifact_types: [quick_scan]
     - intent_id: uzi_dcf
+      report_requires_bundle: true
       description: Run the pinned UZI /dcf command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.dcf]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_panel_only
+      report_requires_bundle: true
       description: Run the pinned UZI /panel-only rule-engine panel without the full report pipeline.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.command.panel_only]
       output_artifact_types: [uzi_native_command_result]
     - intent_id: uzi_scan_trap
+      report_requires_bundle: true
       description: Run the pinned UZI /scan-trap eight-signal command with explicit evidence coverage.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.command.scan_trap]
       output_artifact_types: [uzi_native_command_result]
     - intent_id: uzi_segmental_model
+      report_requires_bundle: true
       description: Run the pinned UZI /segmental-model discovery and validation phases.
       required_slots: [symbols]
       optional_slots: [segmental_model]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.command.segmental_model]
       output_artifact_types: [uzi_native_command_result]
     - intent_id: uzi_comps
+      report_requires_bundle: true
       description: Run the pinned UZI /comps command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.comps]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_lbo
+      report_requires_bundle: true
       description: Run the pinned UZI /lbo command, preserving its optional transaction defaults when assumptions are omitted.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.quick_lbo]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_initiate
+      report_requires_bundle: true
       description: Run the pinned UZI /initiate command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.initiation_report]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_earnings
+      report_requires_bundle: true
       description: Run the pinned UZI /earnings command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.earnings_review]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_catalysts
+      report_requires_bundle: true
       description: Run the pinned UZI /catalysts command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.catalyst_calendar]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_thesis
+      report_requires_bundle: true
       description: Run the pinned UZI /thesis command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.thesis_tracker]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_screen
+      report_requires_bundle: true
       description: Run the pinned UZI /screen command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.quantitative_screen]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_dd
+      report_requires_bundle: true
       description: Run the pinned UZI /dd command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.dd_checklist]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_ic_memo
+      report_requires_bundle: true
       description: Run the pinned UZI /ic-memo command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.ic_memo]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_ai_readiness
+      report_requires_bundle: true
       description: Run the pinned UZI /ai-readiness command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.ai_readiness]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_earnings_preview
+      report_requires_bundle: true
       description: Run the pinned UZI /earnings-preview command as an independent Agent OS capability.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.earnings_preview]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_model_update
+      report_requires_bundle: true
       description: Run the pinned UZI /model-update command, including its native demo mode when updates are omitted.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.model_update]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_three_statement_method
+      report_requires_bundle: true
       description: Run the pinned UZI three-statement method, preserving native defaults for omitted forecast assumptions.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.three_statement]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_accretion_dilution_method
+      report_requires_bundle: true
       description: Run the pinned UZI merger accretion/dilution method with an explicit target and optional native deal-term defaults.
       required_slots: [symbols, method_assumptions]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.accretion_dilution]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_morning_note_method
+      report_requires_bundle: true
       description: Run the pinned UZI morning-note method.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.morning_note]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_sector_review_method
+      report_requires_bundle: true
       description: Run the pinned UZI sector-review method.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.sector_review]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_porter_bcg_method
+      report_requires_bundle: true
       description: Run the pinned UZI Porter/BCG decision method.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.porter_bcg]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_unit_economics_method
+      report_requires_bundle: true
       description: Run the pinned UZI unit-economics method and disclose its native proxy assumptions as degraded evidence.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.unit_economics]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: uzi_value_creation_plan_method
+      report_requires_bundle: true
       description: Run the pinned UZI value-creation-plan method and disclose its native proxy assumptions as degraded evidence.
       required_slots: [symbols]
       candidate_capabilities: [finance.query.normalize, finance.ashare.snapshot.collect, finance.uzi.native.value_creation_plan]
@@ -312,6 +338,7 @@ intake:
       candidate_capabilities: [finance.query.normalize, finance.uzi.native.holding_rebalance]
       output_artifact_types: [uzi_native_method_result]
     - intent_id: stock_compare
+      report_requires_bundle: true
       description: Run the pinned UZI --versus flow for two to four A-share companies on a consistent evidence basis.
       required_slots: [symbols, research_profile]
       optional_slots: [school]
@@ -322,6 +349,7 @@ intake:
         - finance.stock.compare.report.compose
       output_artifact_types: [research_report]
     - intent_id: uzi_portfolio_batch
+      report_requires_bundle: true
       description: Run the pinned UZI --portfolio flow over explicit holdings, with native weight normalization and portfolio HTML.
       required_slots: [portfolio_holdings, research_profile]
       optional_slots: [portfolio_name, school]

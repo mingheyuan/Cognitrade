@@ -75,6 +75,14 @@ class PackIntakeService:
                             decision.candidate_capabilities
                             or intent_definition.candidate_capabilities
                         ),
+                        "constraints": {
+                            **dict(decision.constraints),
+                            **(
+                                {"report_requires_bundle": True}
+                                if intent_definition.report_requires_bundle
+                                else {}
+                            ),
+                        },
                         "confidence": max(
                             decision.confidence,
                             manifest.intake.minimum_confidence,
@@ -82,6 +90,7 @@ class PackIntakeService:
                         "trace": {
                             **dict(decision.trace),
                             "intent_definition": intent_definition.intent_id,
+                            "report_requires_bundle": intent_definition.report_requires_bundle,
                         },
                     }
                 )

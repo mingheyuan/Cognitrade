@@ -1,7 +1,7 @@
 {
   "contract_version": "finance-artifact-ui-v2",
   "artifacts": {
-    "user_request": {"title": "原始研究请求", "renderer": "UserRequestArtifactRenderer", "schema_field_digest": "e93fd2038968369c"},
+    "user_request": {"title": "原始研究请求", "renderer": "UserRequestArtifactRenderer", "schema_field_digest": "6874ba013aa1cb6c"},
     "normalized_query": {"title": "标准化研究问题", "renderer": "NormalizedQueryArtifactRenderer", "schema_field_digest": "ede43c897db22959"},
     "stock_snapshot_bundle": {"title": "股票数据采集包", "renderer": "StockSnapshotBundleArtifactRenderer", "schema_field_digest": "c189aefce2848122"},
     "snapshot": {"title": "业务数据快照", "renderer": "SnapshotArtifactRenderer", "schema_field_digest": "fdedd2816fbbd327"},
@@ -17,8 +17,8 @@
     "quick_scan": {"title": "UZI 股票速判", "renderer": "QuickScanArtifactRenderer", "schema_field_digest": "c1fc21c3a5182801"},
     "uzi_native_method_result": {"title": "UZI 原生方法产物", "renderer": "UziNativeMethodResultArtifactRenderer", "schema_field_digest": "5f2b23416ccc87b2"},
     "uzi_native_command_result": {"title": "UZI 原生命令产物", "renderer": "UziNativeCommandResultArtifactRenderer", "schema_field_digest": "52b37449f15d6af0"},
-    "uzi_native_analysis": {"title": "UZI 原生完整研究", "renderer": "UziNativeAnalysisArtifactRenderer", "schema_field_digest": "c1f1694608814a1c"},
-    "fund_snapshot": {"title": "基金数据快照", "renderer": "FundSnapshotArtifactRenderer", "schema_field_digest": "b74686cc19f4959e"},
+    "uzi_native_analysis": {"title": "UZI 原生完整研究", "renderer": "UziNativeAnalysisArtifactRenderer", "schema_field_digest": "92d06bcde1b9c8ee"},
+    "fund_snapshot": {"title": "基金数据快照", "renderer": "FundSnapshotArtifactRenderer", "schema_field_digest": "66d8c096bf29c738"},
     "fund_analysis": {"title": "基金分析结果", "renderer": "FundAnalysisArtifactRenderer", "schema_field_digest": "daeb87bb46f27dcd"},
     "fund_holding_report_batch": {"title": "基金持仓股票报告批次", "renderer": "FundHoldingReportBatchArtifactRenderer", "schema_field_digest": "19809730c6cc727c"}
   }

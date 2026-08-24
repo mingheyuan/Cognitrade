@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from research_system.strategies.models import Base
+# Import the market-data models for their shared Base metadata registration.
+# Keeping one metadata graph makes create_schema and Alembic behave identically.
+from research_system.market_data import models as _market_data_models  # noqa: F401
 
 
 REQUIRED_STRATEGY_TABLES = frozenset(

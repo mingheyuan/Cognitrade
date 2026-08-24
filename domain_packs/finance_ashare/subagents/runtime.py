@@ -25,6 +25,7 @@ from domain_packs.finance_ashare.subagents.uzi_portfolio_contract import (
 )
 from research_system.adapters.vendors.akshare_utils import coerce_numeric
 from research_system.runtime.core.artifact_board import ArtifactBoard
+from research_system.market_data.report_inputs import validate_bundle_only_input
 from research_system.schemas.artifacts import ArtifactDraft
 from research_system.schemas.execution_runtime import NodeExecutionOutput
 
@@ -357,6 +358,25 @@ def collect_snapshot(context):
     intent = str(inputs.get("intent") or "").strip()
     sector = str(inputs.get("sector") or inputs.get("sector_query") or "").strip() or None
     snapshots = list(query.content.get("snapshots") or inputs.get("snapshots") or [])
+    data_source_mode = str(inputs.get("data_source_mode") or "").strip().lower()
+    if data_source_mode == "bundle_only":
+        # This is a second, in-graph hard gate.  Even if a caller bypasses API
+        # preflight, formal reports can only consume the exact frozen Bundle and
+        # can never fall through to ``financial_data_provider``.
+        validate_bundle_only_input(
+            snapshots=[row for row in snapshots if isinstance(row, dict)],
+            manifest=(
+                inputs.get("report_data_manifest")
+                if isinstance(inputs.get("report_data_manifest"), dict)
+                else None
+            ),
+            bundle=(
+                inputs.get("market_data_bundle")
+                if isinstance(inputs.get("market_data_bundle"), dict)
+                else None
+            ),
+            symbols=symbols,
+        )
     requested_types = _requested_snapshot_types(inputs=inputs, sector=sector)
     collection_profile = _collection_research_profile(inputs)
     governed_tool_path = callable(getattr(context, "call_tool", None))
@@ -374,6 +394,17 @@ def collect_snapshot(context):
         "enrichment_targets": [],
         "degraded": False,
     }
+    if data_source_mode == "bundle_only":
+        manifest = dict(inputs.get("report_data_manifest") or {})
+        collection.update(
+            {
+                "data_source_mode": "bundle_only",
+                "manifest_id": manifest.get("manifest_id"),
+                "manifest_hash": manifest.get("manifest_hash"),
+                "as_of_date": manifest.get("as_of_date"),
+                "universe_source": "frozen_bundle",
+            }
+        )
     provider_source_refs: list[dict] = []
     if not snapshots:
         provider_arguments = {
@@ -825,6 +856,9 @@ def execute_uzi_native_full_analysis(context):
         cancellation=getattr(context, "cancellation", None),
         recovery_history=recovery_history,
         progress_callback=emit_progress,
+        full_agent_workflow=(
+            dict(profile.get("agent_workflow") or {}).get("mode") == "full"
+        ),
     )
     content["holding_context"] = holding_context or None
     if normalized is not None:

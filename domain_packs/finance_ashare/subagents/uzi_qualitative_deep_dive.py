@@ -1,4 +1,4 @@
-"""Three-way Agent qualitative deep dive for UZI Deep research.
+"""Three-way qualitative research for UZI's full Agent workflow.
 
 Collection remains in governed DomainPack skills.  This module receives the
 frozen ArtifactBoard snapshots, dispatches the latest UZI qualitative groups
@@ -91,7 +91,7 @@ def apply_qualitative_deep_dive(
     progress_callback=None,
     analysis_cycle: int | None = None,
     repair_feedback: list[str] | None = None,
-    research_profile: Literal["medium", "deep"] = "deep",
+    research_profile: Literal["lite", "medium", "deep"] = "deep",
 ) -> dict[str, Any]:
     result = deepcopy(deep_analysis)
     provider_available = llm_provider is not None and bool(getattr(llm_provider, "available", True))
@@ -120,7 +120,7 @@ def apply_qualitative_deep_dive(
         )
 
     system_prompt = (
-        "你是 UZI Deep 六维定性研究执行器。只允许引用冻结证据包里的 URL 和事实；"
+        "你是 UZI 完整 Agent 工作流的六维定性研究执行器。只允许引用冻结证据包里的 URL 和事实；"
         "禁止补造来源、补造数字或把爬虫片段直接改写成无引用结论。每维至少引用两个不同 URL，"
         "并明确跨域因果链。三个分析组共用同一冻结证据前缀。\n"
         f"UZI_SOURCE_COMMIT={LATEST_UZI_SOURCE_COMMIT}\n"
@@ -181,7 +181,10 @@ def apply_qualitative_deep_dive(
             group_label=label,
             cache_hit=True,
         )
-    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="uzi-qualitative") as pool:
+    with ThreadPoolExecutor(
+        max_workers=_configured_workers(llm_provider, len(pending_groups), ceiling=3),
+        thread_name_prefix="uzi-qualitative",
+    ) as pool:
         futures = {
             pool.submit(
                 _evaluate_group,
@@ -381,6 +384,16 @@ def _group_repair_feedback(
         if str(error).startswith(f"{group_label}:")
     ]
     return list(dict.fromkeys(scoped))[-8:]
+
+
+def _configured_workers(provider: Any, task_count: int, *, ceiling: int) -> int:
+    settings = getattr(provider, "settings", None)
+    configured = getattr(settings, "uzi_llm_max_concurrency", ceiling)
+    try:
+        limit = int(configured)
+    except (TypeError, ValueError):
+        limit = ceiling
+    return max(1, min(task_count or 1, ceiling, max(limit, 1)))
 
 
 def _qualitative_stage_cache_path(

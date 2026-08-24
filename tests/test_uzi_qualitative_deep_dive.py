@@ -160,6 +160,17 @@ class _RepairAwareProvider(_FlakyCachedProvider):
 
 
 class UziQualitativeDeepDiveTests(unittest.TestCase):
+    def test_full_agent_lite_uses_the_same_six_dimension_gate(self) -> None:
+        result = apply_qualitative_deep_dive(
+            _deep_base(),
+            snapshot_rows=_rows(),
+            llm_provider=_Provider(),
+            research_profile="lite",
+        )
+
+        self.assertEqual(result["qualitative_agent_execution"]["status"], "completed")
+        self.assertEqual(len(result["qualitative_deep_dive"]), 6)
+
     def test_provider_unavailable_is_a_blocking_deep_gap(self) -> None:
         result = apply_qualitative_deep_dive(
             _deep_base(),

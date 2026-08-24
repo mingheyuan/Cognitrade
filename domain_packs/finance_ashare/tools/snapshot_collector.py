@@ -6,10 +6,10 @@ import inspect
 import json
 import math
 import os
-from contextlib import contextmanager
 from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
@@ -168,6 +168,8 @@ _UZI_MINI_RACER_FETCHERS = frozenset(
 )
 _UZI_MINI_RACER_LOCK = Lock()
 _UZI_MAX_WORKERS = 6
+_UZI_DEFAULT_SYMBOL_WORKERS = 5
+_UZI_MAX_SYMBOL_WORKERS = 5
 # Pinned UZI run_real_test.py uses one five-minute wave-2 ceiling and a
 # separate three-minute bonus-wave ceiling for every profile.
 _UZI_FETCHER_WAVE_TIMEOUT_SECONDS = 300.0
@@ -449,7 +451,6 @@ def _collect_snapshots_with_uzi_root_router(
 ) -> list[dict[str, Any]]:
     """Collect each symbol through the pinned UZI root-default router once."""
 
-    del max_workers  # UZI's root command fixes pipeline collection at six workers.
     requested = list(
         dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip())
     )
@@ -514,6 +515,16 @@ def _collect_snapshots_with_uzi_root_router(
     uzi_types = [item for item in symbol_types if _uses_uzi_fetcher(item)]
     total = len(resolved_symbols) * len(symbol_types)
     completed = 0
+    requested_symbol_workers = (
+        _UZI_DEFAULT_SYMBOL_WORKERS
+        if max_workers is None
+        else max(int(max_workers), 1)
+    )
+    symbol_workers = min(
+        requested_symbol_workers,
+        _UZI_MAX_SYMBOL_WORKERS,
+        max(len(resolved_symbols), 1),
+    )
 
     settings = providers.settings
     runtime = Uzi392FetcherRuntime(workspace_root=settings.workspace_root)
@@ -557,13 +568,12 @@ def _collect_snapshots_with_uzi_root_router(
                 }
             )
 
-    for symbol in resolved_symbols:
+    def collect_symbol(symbol: str, scoped_route_options: dict[str, Any]):
         if _cancelled(cancellation):
-            break
+            return None, None
         symbol_result: dict[str, Any] | None = None
         route_failure: Exception | None = None
         if uzi_types:
-            emit(phase="collecting", snapshot_type=uzi_types[0])
             try:
                 with uzi_request_timeout_scope():
                     symbol_result = runtime.collect_symbol(
@@ -573,7 +583,7 @@ def _collect_snapshots_with_uzi_root_router(
                         # resume=True.  Request-local no_resume belongs only to
                         # the single-stock root CLI route.
                         resume=not no_resume if route_mode == "single" else True,
-                        options=route_options,
+                        options=scoped_route_options,
                     )
                 normalized = normalize_json_value(symbol_result)
                 if not isinstance(normalized, dict):
@@ -581,10 +591,15 @@ def _collect_snapshots_with_uzi_root_router(
                 symbol_result = normalized
             except Exception as exc:
                 route_failure = exc
+        return symbol_result, route_failure
 
+    def project_symbol(
+        symbol: str,
+        symbol_result: dict[str, Any] | None,
+        route_failure: Exception | None,
+    ) -> list[dict[str, Any]]:
+        symbol_snapshots: list[dict[str, Any]] = []
         for snapshot_type in symbol_types:
-            if _cancelled(cancellation):
-                break
             if snapshot_type in uzi_types:
                 if route_failure is not None or symbol_result is None:
                     snapshot = _fetcher_failure_snapshot(
@@ -626,9 +641,78 @@ def _collect_snapshots_with_uzi_root_router(
                         profile=research_profile,
                         snapshot=snapshot,
                     )
-            snapshots.append(snapshot)
-            completed += 1
-            emit(phase="completed", snapshot_type=snapshot_type)
+            symbol_snapshots.append(snapshot)
+        return symbol_snapshots
+
+    results_by_index: dict[int, list[dict[str, Any]]] = {}
+    if resolved_symbols and not _cancelled(cancellation):
+        # UZI's six workers remain the *inside-one-stock* fetcher budget.  The
+        # request max_workers controls only how many complete symbol pipelines
+        # may be in flight, capped at five to bound the worst case at thirty
+        # provider child processes.  The runtime installs process-global UZI
+        # wrappers once before these threads start, avoiding lock inversion and
+        # preserving one profile/source policy for the whole request.
+        with runtime.parallel_symbol_collection_scope(
+            options=route_options,
+            cancellation=cancellation,
+        ) as scoped_route_options, ThreadPoolExecutor(
+            max_workers=symbol_workers,
+            thread_name_prefix="uzi-symbol",
+        ) as pool:
+            next_index = 0
+            in_flight = {}
+
+            def submit_available() -> None:
+                nonlocal next_index
+                while (
+                    not _cancelled(cancellation)
+                    and next_index < len(resolved_symbols)
+                    and len(in_flight) < symbol_workers
+                ):
+                    symbol_index = next_index
+                    symbol = resolved_symbols[symbol_index]
+                    emit(phase="collecting", snapshot_type=uzi_types[0])
+                    future = pool.submit(
+                        collect_symbol,
+                        symbol,
+                        scoped_route_options,
+                    )
+                    in_flight[future] = (symbol_index, symbol)
+                    next_index += 1
+
+            submit_available()
+            while in_flight:
+                done, _pending = wait(
+                    in_flight,
+                    timeout=0.1,
+                    return_when=FIRST_COMPLETED,
+                )
+                if not done:
+                    if _cancelled(cancellation):
+                        for future in in_flight:
+                            future.cancel()
+                    continue
+
+                for future in sorted(done, key=lambda item: in_flight[item][0]):
+                    symbol_index, symbol = in_flight.pop(future)
+                    if future.cancelled():
+                        continue
+                    symbol_result, route_failure = future.result()
+                    if symbol_result is None and route_failure is None:
+                        continue
+                    rows = project_symbol(symbol, symbol_result, route_failure)
+                    results_by_index[symbol_index] = rows
+                    for row in rows:
+                        completed += 1
+                        emit(
+                            phase="completed",
+                            snapshot_type=str(row.get("snapshot_type") or ""),
+                        )
+
+                submit_available()
+
+    for symbol_index in range(len(resolved_symbols)):
+        snapshots.extend(results_by_index.get(symbol_index, []))
 
     if "sector" in requested and not sector:
         snapshots.append(_missing_scope_snapshot(query=query, snapshot_type="sector"))

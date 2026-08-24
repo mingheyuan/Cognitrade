@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import importlib
 import os
+import threading
+import time
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 from unittest.mock import patch
 
-from domain_packs.finance_ashare.subagents.uzi_methodology import select_profile
-from domain_packs.finance_ashare.subagents.uzi_392_native_methods import build_uzi_raw
 from domain_packs.finance_ashare.subagents import runtime as subagent_runtime
+from domain_packs.finance_ashare.subagents.uzi_392_native_methods import build_uzi_raw
+from domain_packs.finance_ashare.subagents.uzi_methodology import select_profile
 from domain_packs.finance_ashare.tools import snapshot_collector
 from domain_packs.finance_ashare.vendor.uzi_3_9_2 import Uzi392FetcherRuntime
 
@@ -1020,6 +1022,116 @@ class UziRootCollectionRouterTests(unittest.TestCase):
         self.assertEqual([row["snapshot_type"] for row in rows], ["capital_flow"])
         self.assertEqual(rows[0]["facts"]["marker"], "one-symbol-run")
         collect_symbol.assert_called_once()
+
+    def test_multi_symbol_root_route_honors_symbol_concurrency_and_output_order(self) -> None:
+        active = 0
+        peak_active = 0
+        state_lock = threading.Lock()
+        callback_thread_ids: list[int] = []
+        caller_thread_id = threading.get_ident()
+        symbols = ["600519", "000858", "300750", "601318"]
+
+        def collect_symbol(_runtime, *, ticker, **_kwargs):
+            nonlocal active, peak_active
+            with state_lock:
+                active += 1
+                peak_active = max(peak_active, active)
+            # Make completion order differ from request order. The returned
+            # snapshots must nevertheless retain the caller's symbol order.
+            time.sleep(0.01 if ticker != "600519" else 0.04)
+            with state_lock:
+                active -= 1
+            return {
+                "ticker": ticker,
+                "market": "A",
+                "code": ticker,
+                "full": ticker,
+                "dimensions": {
+                    "0_basic": {
+                        "data": {"marker": ticker},
+                        "source": "fixture:basic",
+                        "fallback": False,
+                        "_pipeline": {"dim_key": "0_basic", "quality": "full"},
+                    }
+                },
+                "_uzi_execution": {"lane": "pipeline", "fallback_reason": None},
+            }
+
+        with patch.object(
+            Uzi392FetcherRuntime,
+            "collect_symbol",
+            autospec=True,
+            side_effect=collect_symbol,
+        ) as mocked:
+            rows = snapshot_collector.collect_snapshots(
+                query="组合并发采集",
+                symbols=symbols,
+                snapshot_types=["market"],
+                research_profile="deep",
+                max_workers=2,
+                progress_callback=lambda _event: callback_thread_ids.append(
+                    threading.get_ident()
+                ),
+                uzi_root_route=True,
+                uzi_root_route_mode="multi",
+            )
+
+        self.assertEqual(peak_active, 2)
+        self.assertEqual([row["symbol"] for row in rows], symbols)
+        self.assertEqual(len(mocked.call_args_list), len(symbols))
+        self.assertEqual(
+            {call.kwargs["max_workers"] for call in mocked.call_args_list},
+            {snapshot_collector._UZI_MAX_WORKERS},
+        )
+        self.assertEqual(set(callback_thread_ids), {caller_thread_id})
+
+    def test_multi_symbol_root_route_cancellation_stops_new_symbol_starts(self) -> None:
+        cancellation = threading.Event()
+        first_wave = threading.Barrier(2)
+        called: list[str] = []
+        called_lock = threading.Lock()
+        symbols = ["600519", "000858", "300750", "601318"]
+
+        def collect_symbol(_runtime, *, ticker, **_kwargs):
+            with called_lock:
+                called.append(ticker)
+            first_wave.wait(timeout=1)
+            cancellation.set()
+            return {
+                "ticker": ticker,
+                "market": "A",
+                "code": ticker,
+                "full": ticker,
+                "dimensions": {
+                    "0_basic": {
+                        "data": {"marker": ticker},
+                        "source": "fixture:basic",
+                        "fallback": False,
+                        "_pipeline": {"dim_key": "0_basic", "quality": "full"},
+                    }
+                },
+                "_uzi_execution": {"lane": "pipeline", "fallback_reason": None},
+            }
+
+        with patch.object(
+            Uzi392FetcherRuntime,
+            "collect_symbol",
+            autospec=True,
+            side_effect=collect_symbol,
+        ):
+            rows = snapshot_collector.collect_snapshots(
+                query="取消组合采集",
+                symbols=symbols,
+                snapshot_types=["market"],
+                research_profile="deep",
+                max_workers=2,
+                cancellation=cancellation,
+                uzi_root_route=True,
+                uzi_root_route_mode="multi",
+            )
+
+        self.assertEqual(set(called), set(symbols[:2]))
+        self.assertEqual([row["symbol"] for row in rows], symbols[:2])
 
     def test_snapshot_projection_round_trips_pipeline_and_legacy_bonus_spills(self) -> None:
         fund_dimension = {

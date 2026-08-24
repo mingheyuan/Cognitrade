@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import re
 from tempfile import TemporaryDirectory
+from threading import Lock
+from time import sleep
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -25,6 +27,7 @@ from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
     _safe_error_detail,
     _self_review_compatible_raw,
     _snapshot_rows_for_symbol,
+    _workflow_dimension_keys,
     execute_native_analysis,
 )
 from tests.test_uzi_392_native_methods import _snapshots
@@ -226,7 +229,57 @@ class _RepairingNarrativeProvider(_LiteAgentProvider):
         return result
 
 
+class _ConcurrencyProvider(_LiteAgentProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self._active_lock = Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def parse(self, **kwargs):
+        with self._active_lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            sleep(0.02)
+            return super().parse(**kwargs)
+        finally:
+            with self._active_lock:
+                self.active -= 1
+
+
 class Uzi392AnalysisGateTests(unittest.TestCase):
+    def test_independent_agent_stages_honor_configured_parallelism(self) -> None:
+        provider = _ConcurrencyProvider()
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="lite",
+            llm_provider=provider,
+        )
+
+        self.assertTrue(result["report_allowed"])
+        self.assertEqual(provider.max_active, 2)
+
+    def test_full_agent_workflow_expands_lite_to_all_dimensions_and_hard_gates(self) -> None:
+        self.assertEqual(len(_workflow_dimension_keys("lite", full_agent_workflow=True)), 20)
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="lite",
+            llm_provider=None,
+            full_agent_workflow=True,
+        )
+
+        analysis = result["results"][0]
+        self.assertEqual(result["agent_workflow_mode"], "full")
+        self.assertFalse(result["report_allowed"])
+        self.assertTrue(analysis["roleplay"]["required"])
+        self.assertTrue(analysis["qualitative_execution"]["required"])
+        self.assertEqual(len(analysis["self_review"]["enabled_dimensions"]), 20)
+
     def test_nullable_moat_is_only_normalized_for_the_legacy_idea_screen(self) -> None:
         features = {"moat_known": False, "moat_total": None, "fcf_positive": None}
 
@@ -690,7 +743,11 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         )
 
         analysis = result["results"][0]
-        self.assertEqual(provider.calls, 1)
+        self.assertGreaterEqual(provider.calls, 1)
+        self.assertLessEqual(
+            provider.calls,
+            provider.settings.uzi_llm_max_concurrency,
+        )
         self.assertEqual(len(analysis["recovery_history"]), 1)
         self.assertEqual(analysis["recovery_history"][0]["status"], "passed")
         self.assertTrue(result["report_allowed"])
@@ -713,8 +770,12 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         )
 
         analysis = result["results"][0]
-        self.assertEqual(provider.calls, 1)
-        self.assertEqual(provider.reasoning_efforts, ["high"])
+        self.assertGreaterEqual(provider.calls, 1)
+        self.assertLessEqual(
+            provider.calls,
+            provider.settings.uzi_llm_max_concurrency,
+        )
+        self.assertTrue(all(effort == "high" for effort in provider.reasoning_efforts))
         self.assertEqual(len(analysis["recovery_history"]), 1)
         self.assertEqual(
             analysis["recovery_history"][0]["exhausted_reason"],

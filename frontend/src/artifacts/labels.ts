@@ -48,6 +48,7 @@ const FIELD_LABELS: Record<string, string> = {
   title: '标题',
   summary: '摘要',
   published_at: '发布时间',
+  target_fund_published_at: '目标基金持仓发布时间',
   confidence: '置信度',
   quality: '质量评分',
   metadata: '业务元数据',

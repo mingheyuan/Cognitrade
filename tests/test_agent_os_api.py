@@ -24,6 +24,7 @@ from research_system.schemas.protocol import (
     RequestEnvelope,
     ResponseEnvelope,
 )
+from tests.market_data.test_pit_core import seed_strict_bundle
 
 
 class AgentOSApiTests(unittest.TestCase):
@@ -1047,6 +1048,7 @@ class AgentOSApiTests(unittest.TestCase):
             root = Path(temporary_directory)
             settings = Settings.from_env(repository_root).model_copy(
                 update={
+                    "workspace_root": root,
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
@@ -1061,13 +1063,20 @@ class AgentOSApiTests(unittest.TestCase):
                     api_config=ApiConfig(api_token="agent-os-api-test"),
                 )
             ) as client:
+                as_of = seed_strict_bundle(
+                    client.app.state.api_runtime.strategies.database,
+                    "600000.SH",
+                )
                 headers = {"Authorization": "Bearer agent-os-api-test"}
                 response = client.post(
                     "/api/v1/runs",
                     headers=headers,
                     json={
                         "user_query": "Review supplied evidence for 600000.",
-                        "constraints": {"research_profile": "lite"},
+                        "constraints": {
+                            "research_profile": "lite",
+                            "analysis_as_of_date": as_of.isoformat(),
+                        },
                         "slots": {
                             "symbols": ["600000"],
                             "snapshots": [

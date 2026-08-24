@@ -115,6 +115,31 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
         )
         self.assertEqual(decision.trace["intent_definition"], "stock_screen")
 
+    def test_pack_declares_bundle_preflight_for_uzi_stock_methods(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
+
+        decision = service.resolve(
+            RequestEnvelope(
+                intent="uzi_dcf",
+                user_query="/dcf 600519",
+                slots={"symbols": ["600519"]},
+            )
+        )
+
+        self.assertEqual(decision.status, "accepted")
+        self.assertTrue(decision.constraints["report_requires_bundle"])
+        self.assertTrue(decision.trace["report_requires_bundle"])
+
+        screening = service.resolve(
+            RequestEnvelope(
+                intent="stock_screen",
+                user_query="筛选最近值得关注的股票",
+                constraints={"research_profile": "lite", "investment_cycle": "short_term"},
+            )
+        )
+        self.assertNotIn("report_requires_bundle", screening.constraints)
+
     def test_finance_pack_returns_clarification_for_incomplete_target(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         service = PackIntakeService(DomainPackRegistry.load(repository_root / "domain_packs"))
@@ -241,7 +266,7 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
                 .get("question")
             )
 
-    def test_versioned_api_uses_pack_intake_when_intent_is_omitted(self) -> None:
+    def test_versioned_api_infers_formal_pack_intent_and_requires_bundles(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -274,9 +299,12 @@ class AgentOSTaskIntakeTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()["intent"], "stock_compare")
-        self.assertEqual(response.json()["status"], "gated")
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["error"]["code"], "published_bundle_missing")
+        # The omitted intent was still resolved through the finance pack as a
+        # formal stock comparison. Caller-supplied ad-hoc snapshots can no
+        # longer bypass the frozen database Bundle preflight.
+        self.assertIn("000001", response.json()["error"]["message"])
 
     def test_versioned_api_persists_a_resumable_clarification_run(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]

@@ -75,6 +75,9 @@ class UziRuleSourceParityTests(unittest.TestCase):
         self.assertEqual(profile["declared_investors_count"], 51)
         self.assertEqual(profile["playwright_mode"], "opt-in")
         self.assertEqual(len(profile["playwright_dimensions"]), 6)
+        self.assertEqual(profile["agent_workflow"]["mode"], "full")
+        self.assertTrue(profile["agent_workflow"]["persona_roleplay_required"])
+        self.assertTrue(profile["agent_workflow"]["qualitative_deep_dive_required"])
 
     def test_all_three_profiles_match_the_pinned_uzi_contract(self) -> None:
         lite = select_profile({"research_profile": "lite"})
@@ -385,7 +388,7 @@ class UziFallbackParityTests(unittest.TestCase):
         self.assertTrue(snapshots[0]["fallback_applied"])
         self.assertEqual(snapshots[0]["quality_status"], "degraded")
 
-    def test_task25_agent_evidence_runs_all_six_dimensions_in_three_groups(self) -> None:
+    def test_full_lite_task25_agent_evidence_runs_all_six_dimensions_in_three_groups(self) -> None:
         snapshots = [
             {
                 "snapshot_type": snapshot_type,
@@ -430,7 +433,7 @@ class UziFallbackParityTests(unittest.TestCase):
                 snapshots,
                 query="研究贵州茅台",
                 symbols=["600519"],
-                profile="deep",
+                profile="lite",
                 settings=_settings(mx_api_key=None),
             )
 

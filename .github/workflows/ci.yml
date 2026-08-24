@@ -136,6 +136,9 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements.txt
+      - run: python -m pip install pytest
+      - name: Run Point-in-Time market-data and fund-holding contracts
+        run: python -m pytest -q tests/market_data
       - name: Run complete backend suite with native crash diagnostics
         # Several native UZI/provider dependencies keep process-wide state.
         # Isolate every test module while retaining the complete test inventory.

@@ -24,7 +24,7 @@ from research_system.api.fund_holding_report_service import (
     FundHoldingReportService,
 )
 from research_system.api.sse import RunEventSource
-from research_system.runtime.storage.jsonl import read_json, read_jsonl
+from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
 from research_system.runtime.storage.runs.run_store import RunStore
 
 
@@ -349,6 +349,40 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         regenerated = self.service.create_batch("source-run", fund_code="110011", profile="lite", force=True)
         self.assertNotEqual(regenerated["batch_id"], final["batch_id"])
         self.wait_terminal(regenerated["batch_id"])
+
+    def test_manifest_batch_recovery_waits_for_report_input_binding(self) -> None:
+        root = self.runs_root / "persisted-batch"
+        root.mkdir(parents=True)
+        write_json(
+            root / "fund_holding_batch.json",
+            {
+                "batch_id": "persisted-batch",
+                "status": "running",
+                "_report_data_manifest": {"manifest_id": "manifest-1"},
+                "holdings": [
+                    {
+                        "symbol": "600001",
+                        "status": "queued",
+                        "child_run_id": "child-1",
+                    }
+                ],
+            },
+        )
+        submitted: list[tuple[str, str, str]] = []
+        original_submit = self.service._submit_item
+        self.service._submit_item = lambda *args: submitted.append(args)  # type: ignore[method-assign]
+        try:
+            self.service._recover_batches()
+            self.assertEqual(submitted, [])
+
+            self.run_service.report_input_service = SimpleNamespace()
+            self.service.recover_pending_batches()
+            self.assertEqual(
+                submitted,
+                [("persisted-batch", "600001", "child-1")],
+            )
+        finally:
+            self.service._submit_item = original_submit  # type: ignore[method-assign]
 
     def test_partial_failure_retry_and_partial_delivery(self) -> None:
         self.agent_os.fail_symbols.add("600001")

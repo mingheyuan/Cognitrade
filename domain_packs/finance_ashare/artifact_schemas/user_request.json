@@ -22,6 +22,8 @@
     "source_records": {"type": "array", "items": {"type": "object"}},
     "snapshots": {"type": "array", "items": {"type": "object"}},
     "source_refs": {"type": "array", "items": {"type": "object"}},
+    "market_data_bundle": {"type": "object"},
+    "report_data_manifest": {"type": "object"},
     "holding_context": {
       "type": ["object", "null"],
       "required": [

@@ -239,6 +239,7 @@ class FundSnapshotSkill:
                             "type": "fund_target_disclosure",
                             "provider": "eastmoney_official_report",
                             "id": str(row["target_fund_source_ref"]),
+                            "published_at": row.get("target_fund_published_at"),
                         }
                     )
                 if row.get("lookthrough_holdings"):
@@ -490,11 +491,13 @@ class FundSnapshotSkill:
                 )
 
         if not direct_equities and asset_stocks:
-            direct_equities = asset_stocks[:10]
+            # Keep a bounded disclosure superset so the strict parent adapter
+            # can skip unsupported/duplicate rows and still select ten A-shares.
+            direct_equities = asset_stocks[:20]
             direct_period = asset_period
         weights = [
             row["weight_pct"]
-            for row in direct_equities
+            for row in direct_equities[:10]
             if row.get("weight_pct") is not None
         ]
         allocation_weights = {
@@ -521,6 +524,7 @@ class FundSnapshotSkill:
         lookthrough_holdings: list[dict[str, Any]] = []
         target_fund_period: str | None = None
         target_fund_source_ref: str | None = None
+        target_fund_published_at: str | None = None
         lookthrough_period: str | None = None
         target_status = "unavailable" if is_fund_of_funds else "not_applicable"
         lookthrough_status = target_status
@@ -532,6 +536,7 @@ class FundSnapshotSkill:
                     target_status = "available"
                     target_fund_period = target.get("report_date")
                     target_fund_source_ref = target.get("source_ref")
+                    target_fund_published_at = target.get("published_at")
                     target_code = str(target.get("code") or "")
                     rows, period, target_errors = self._latest_direct_equity_holdings(target_code)
                     provider_errors.extend(target_errors)
@@ -551,7 +556,7 @@ class FundSnapshotSkill:
                                 else None
                             ),
                         }
-                        for row in rows[:10]
+                        for row in rows[:20]
                     ]
                     lookthrough_period = period
                     lookthrough_status = "available" if lookthrough_holdings else "unavailable"
@@ -572,6 +577,7 @@ class FundSnapshotSkill:
             "target_fund_holdings": target_fund_holdings,
             "target_fund_period": target_fund_period,
             "target_fund_source_ref": target_fund_source_ref,
+            "target_fund_published_at": target_fund_published_at,
             "lookthrough_holdings": lookthrough_holdings,
             "lookthrough_period": lookthrough_period,
             "holdings_coverage": {
@@ -595,7 +601,7 @@ class FundSnapshotSkill:
                 payload = self.holdings_loader(code, year)
                 rows, period = self._normalize_holdings(payload)
                 if rows:
-                    return rows[:10], period, errors
+                    return rows[:20], period, errors
             except Exception as exc:
                 errors.append(self._error(f"direct_equity_holdings:{code}:{year}", exc))
         return [], None, errors
@@ -640,6 +646,7 @@ class FundSnapshotSkill:
             "target_fund_holdings": [],
             "target_fund_period": None,
             "target_fund_source_ref": None,
+            "target_fund_published_at": None,
             "lookthrough_holdings": [],
             "lookthrough_period": None,
             "holdings_coverage": {
@@ -773,6 +780,7 @@ class FundSnapshotSkill:
                 source_ref=source_ref,
             )
             if target:
+                target["published_at"] = cls._date_value(report.get("公告日期"))
                 return target
         return {}
 

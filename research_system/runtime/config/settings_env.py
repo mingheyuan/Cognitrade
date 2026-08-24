@@ -144,8 +144,15 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
             env_values.get("UZI_LLM_RETRY_MAX_SECONDS", "60")
         ),
         "max_child_threads_per_turn": int(env_values.get("MAX_CHILD_THREADS_PER_TURN", "8")),
+        "market_data_auto_collection_enabled": env_values.get(
+            "COGNITRADE_MARKET_DATA_AUTO_COLLECTION_ENABLED", "false"
+        ).strip().lower()
+        in {"1", "true", "yes", "on"},
+        "market_data_collection_concurrency": int(
+            env_values.get("COGNITRADE_MARKET_DATA_COLLECTION_CONCURRENCY", "5")
+        ),
         "fund_holding_report_concurrency": int(
-            env_values.get("COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY", "5")
+            env_values.get("COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY", "2")
         ),
         "artifacts_retention_days": int(env_values.get("ARTIFACTS_RETENTION_DAYS", "30")),
         "max_artifacts_size_mb": int(env_values.get("MAX_ARTIFACTS_SIZE_MB", "1024")),

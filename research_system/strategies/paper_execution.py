@@ -421,7 +421,9 @@ class StrategyPaperExecutionService:
             None,
         )
         current_value = float((position or {}).get("market_value") or 0.0)
-        quote = self.paper_trading.market_data.get_quote(symbol, refresh=True)
+        # Strategy submission is an explicit execution path; unlike public
+        # quote GETs it deliberately acquires the current executable quote.
+        quote = self.paper_trading.market_data.get_live_quote(symbol, refresh=True)
         requested_value = int(quantity) * float(quote["latest_price"])
         maximum_value = equity * target_weight
         if current_value + requested_value > maximum_value + 0.01:

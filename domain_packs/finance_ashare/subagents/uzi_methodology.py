@@ -270,6 +270,18 @@ def select_profile(inputs: dict[str, Any]) -> dict[str, Any]:
     profile["selected"] = selected
     profile["selection_reason"] = "用户显式指定研究深度"
     profile["source_commit"] = UZI_SOURCE_COMMIT
+    # Cognitrade's analyze graph is the interactive/full Agent path from the
+    # upstream SKILL.md.  The separate ``quick_scan`` intent is the only quick
+    # path and never enters this profile contract.  Keep depth-specific data
+    # budgets and institutional methods, while making the Agent hard gates
+    # explicit instead of silently treating lite/medium as script-only runs.
+    profile["agent_workflow"] = {
+        "mode": "full",
+        "persona_roleplay_required": True,
+        "qualitative_deep_dive_required": True,
+        "all_dimension_review_required": True,
+        "quick_path": "quick_scan_intent_only",
+    }
     return profile
 
 

@@ -20,6 +20,9 @@ class _MarketData:
             "source": {"provider_id": "test"},
         }
 
+    def get_live_quote(self, symbol: str, *, refresh: bool):
+        return self.get_quote(symbol, refresh=refresh)
+
 
 class PaperTradingCalendarTests(unittest.TestCase):
     def test_friday_buy_becomes_available_on_next_exchange_session(self) -> None:
