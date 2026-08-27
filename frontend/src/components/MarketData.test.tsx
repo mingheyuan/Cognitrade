@@ -302,7 +302,8 @@ describe('MarketDataCenter', () => {
       progress: { total: 3, completed: 3, by_status: { succeeded: 3 } },
       completed_at: '2026-08-20T08:03:00Z',
     }
-    const { requests } = installApi({ jobResponses: [[pollingJob], [pollingJob], [completedJob]] })
+    const jobResponses = [[pollingJob]]
+    const { requests } = installApi({ jobResponses })
     renderPage()
 
     expect(await screen.findByText('job-poll-1')).toBeInTheDocument()
@@ -312,6 +313,7 @@ describe('MarketDataCenter', () => {
     expect(intervals.length).toBeGreaterThanOrEqual(1)
     const activeInterval = intervals.at(-1) as { id: number; callback: () => void }
 
+    jobResponses[0] = [completedJob]
     act(() => activeInterval.callback())
     await waitFor(() => expect(screen.getByText('3 / 3 已结算')).toBeInTheDocument())
     expect(screen.getByText(/没有运行中任务/)).toBeInTheDocument()
