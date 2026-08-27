@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from research_system.market_data.contracts import (
+    CONTRACT_VERSION,
     BundleStatus,
     CoverageResult,
     EvidenceGrade,
@@ -17,6 +18,7 @@ from research_system.market_data.dimension_contracts import (
     DEFAULT_DIMENSION_REGISTRY,
     DimensionRegistry,
 )
+from research_system.market_data.historical import is_safe_degradation_manifest
 from research_system.market_data.ingestion import (
     snapshot_content_hash,
     validate_persisted_snapshot_contract,
@@ -24,6 +26,7 @@ from research_system.market_data.ingestion import (
 from research_system.market_data.models import MarketDataBundle, MarketDataBundleItem
 from research_system.market_data.repository import MarketDataRepository
 from research_system.market_data.resolver import SnapshotResolver, _database_utc
+from research_system.market_data.uzi_gate import native_payload, native_quality
 
 
 class BundlePublicationError(RuntimeError):
@@ -41,12 +44,18 @@ class IncompleteBundleError(BundlePublicationError):
             for item in coverage.dimensions
             if item.snapshot_id is not None and not item.eligible
         ]
+        for issue in list(coverage.uzi_integrity.get("issues") or []):
+            if not isinstance(issue, dict) or issue.get("severity") != "critical":
+                continue
+            dimension = str(issue.get("dimension") or "").strip()
+            if dimension and dimension != "overall" and dimension not in self.blocked_dimensions:
+                self.blocked_dimensions.append(dimension)
         details = [
             f"{item.dimension}: {item.reason or 'not ready'}"
             for item in coverage.dimensions
             if not item.eligible
         ]
-        super().__init__("cannot publish incomplete PIT bundle; " + "; ".join(details))
+        super().__init__("cannot publish an incomplete UZI day bundle; " + "; ".join(details))
 
 
 class BundleIntegrityError(RuntimeError):
@@ -108,6 +117,7 @@ class BundlePublisher:
         exchange_timezone: str = "Asia/Shanghai",
         published_by: str = "system",
         now: datetime | None = None,
+        allow_degraded: bool = False,
     ) -> MarketDataBundle:
         symbol = symbol.strip().upper()
         market = market.strip().upper()
@@ -127,7 +137,10 @@ class BundlePublisher:
             exchange_timezone=exchange_timezone,
             now=publication_time,
         )
-        if not coverage.report_ready:
+        uses_uzi_gate = self.registry.contract_version == CONTRACT_VERSION
+        if not coverage.report_ready and not (
+            coverage.report_generatable and (uses_uzi_gate or allow_degraded)
+        ):
             raise IncompleteBundleError(coverage)
 
         rows = [
@@ -237,6 +250,13 @@ class BundleMaterializer:
         snapshots: list[dict[str, Any]] = []
         all_source_refs: list[dict[str, Any]] = []
         seen_evidence: set[str] = set()
+        bundle_coverage = dict(bundle.coverage_json or {})
+        uses_uzi_gate = bundle.contract_version == CONTRACT_VERSION
+        degraded_bundle = bool(
+            bundle_coverage.get("report_generatable") is True
+            and bundle_coverage.get("quality") == "degraded"
+        )
+        resolved_snapshots: dict[str, Any] = {}
         for contract, item in zip(self.registry, items, strict=True):
             if item.ordinal != contract.ordinal or item.dimension != contract.dimension:
                 raise BundleIntegrityError(
@@ -294,24 +314,35 @@ class BundleMaterializer:
                 raise BundleIntegrityError(
                     f"snapshot payload hash verification failed for {item.dimension}"
                 )
-            contract_errors = validate_persisted_snapshot_contract(
-                snapshot,
-                contract=contract,
-                expected_contract_version=self.registry.contract_version,
+            resolved_snapshots[contract.dimension] = snapshot
+            safe_degradation = bool(
+                degraded_bundle
+                and snapshot.status == SnapshotStatus.DATA_GAP.value
+                and is_safe_degradation_manifest(snapshot.query_manifest_json)
             )
-            if contract_errors:
-                raise BundleIntegrityError(
-                    f"snapshot {snapshot.id} failed contract validation: "
-                    + "; ".join(contract_errors)
+            if not uses_uzi_gate and not safe_degradation:
+                contract_errors = validate_persisted_snapshot_contract(
+                    snapshot,
+                    contract=contract,
+                    expected_contract_version=self.registry.contract_version,
                 )
-            if snapshot.status != item.snapshot_status or snapshot.status not in {
-                SnapshotStatus.AVAILABLE.value,
-                SnapshotStatus.VERIFIED_EMPTY.value,
-            }:
+                if contract_errors:
+                    raise BundleIntegrityError(
+                        f"snapshot {snapshot.id} failed contract validation: "
+                        + "; ".join(contract_errors)
+                    )
+            if snapshot.status != item.snapshot_status or (
+                not uses_uzi_gate
+                and not safe_degradation
+                and snapshot.status not in {
+                    SnapshotStatus.AVAILABLE.value,
+                    SnapshotStatus.VERIFIED_EMPTY.value,
+                }
+            ):
                 raise BundleIntegrityError(
                     f"snapshot status drift detected for {item.dimension}"
                 )
-            if (
+            if not uses_uzi_gate and not safe_degradation and (
                 snapshot.evidence_grade != item.evidence_grade
                 or snapshot.evidence_grade
                 not in {
@@ -324,7 +355,11 @@ class BundleMaterializer:
                 )
             if snapshot.revoked_at is not None:
                 raise BundleIntegrityError(f"snapshot {snapshot.id} was revoked")
-            if _database_utc(snapshot.published_at) > _database_utc(bundle.cutoff_at):
+            if (
+                not uses_uzi_gate
+                and not safe_degradation
+                and _database_utc(snapshot.published_at) > _database_utc(bundle.cutoff_at)
+            ):
                 raise BundleIntegrityError(
                     f"snapshot {snapshot.id} crosses the PIT cutoff"
                 )
@@ -335,13 +370,17 @@ class BundleMaterializer:
                 as_of_date=bundle.as_of_date,
                 snapshot_id=snapshot.id,
             )
-            if conflicts:
+            if conflicts and not uses_uzi_gate:
                 raise BundleIntegrityError(
                     f"snapshot {snapshot.id} has an unresolved conflict"
                 )
 
             evidence = self.repository.list_snapshot_evidence(snapshot.id)
-            if len(evidence) < contract.min_evidence_count:
+            if (
+                not uses_uzi_gate
+                and not safe_degradation
+                and len(evidence) < contract.min_evidence_count
+            ):
                 raise BundleIntegrityError(
                     f"snapshot {snapshot.id} lacks required evidence"
                 )
@@ -361,21 +400,29 @@ class BundleMaterializer:
                 ) from exc
             refs: list[dict[str, Any]] = []
             for proof in evidence:
-                if proof.grade not in {EvidenceGrade.A.value, EvidenceGrade.B.value}:
+                if (
+                    not uses_uzi_gate
+                    and not safe_degradation
+                    and proof.grade not in {EvidenceGrade.A.value, EvidenceGrade.B.value}
+                ):
                     raise BundleIntegrityError(
                         f"snapshot {snapshot.id} now has grade C evidence"
                     )
-                if _database_utc(proof.published_at) > _database_utc(bundle.cutoff_at):
+                if (
+                    not uses_uzi_gate
+                    and not safe_degradation
+                    and _database_utc(proof.published_at) > _database_utc(bundle.cutoff_at)
+                ):
                     raise BundleIntegrityError(
                         f"evidence for {snapshot.id} crosses the cutoff"
                     )
-                if proof.grade == EvidenceGrade.A.value and _database_utc(
+                if not uses_uzi_gate and not safe_degradation and proof.grade == EvidenceGrade.A.value and _database_utc(
                     proof.observed_at
                 ) > _database_utc(bundle.cutoff_at):
                     raise BundleIntegrityError(
                         f"grade A evidence for {snapshot.id} was observed after cutoff"
                     )
-                if proof.grade == EvidenceGrade.B.value and not proof.immutable_proof:
+                if not uses_uzi_gate and not safe_degradation and proof.grade == EvidenceGrade.B.value and not proof.immutable_proof:
                     raise BundleIntegrityError(
                         f"grade B evidence for {snapshot.id} has no immutable proof"
                     )
@@ -393,7 +440,84 @@ class BundleMaterializer:
                     seen_evidence.add(proof.id)
                     all_source_refs.append(ref)
 
-            facts = dict(snapshot.payload_json or {})
+            stored_payload = dict(snapshot.payload_json or {})
+            if uses_uzi_gate:
+                raw = native_payload(snapshot)
+                quality = native_quality(snapshot)
+                stored_native_result = stored_payload.get("_uzi_raw_result")
+                native_result = (
+                    dict(stored_native_result)
+                    if isinstance(stored_native_result, dict)
+                    else {}
+                )
+                native_result["data"] = raw
+                native_result.setdefault(
+                    "source", snapshot.source_version or "database"
+                )
+                native_result.setdefault(
+                    "fallback",
+                    quality
+                    in {
+                        "assumption_only",
+                        "data_gap",
+                        "error",
+                        "failed",
+                        "missing",
+                        "missing_result",
+                        "no_data",
+                        "parse_failed",
+                        "provider_unavailable",
+                        "rate_limited",
+                        "timeout",
+                    },
+                )
+                native_result.setdefault(
+                    "_pipeline",
+                    {
+                        "dim_key": contract.dimension,
+                        "quality": (
+                            "partial"
+                            if quality in {"degraded", "partial"}
+                            else "missing"
+                            if quality
+                            in {
+                                "assumption_only",
+                                "data_gap",
+                                "missing",
+                                "missing_result",
+                                "no_data",
+                            }
+                            else "error"
+                            if quality
+                            in {
+                                "error",
+                                "failed",
+                                "parse_failed",
+                                "provider_unavailable",
+                                "rate_limited",
+                                "timeout",
+                            }
+                            else "full"
+                        ),
+                        "data_gaps": list(
+                            (snapshot.query_manifest_json or {}).get("missing_fields")
+                            or []
+                        ),
+                        "error": None,
+                    },
+                )
+                facts = {
+                    **raw,
+                    "availability": quality,
+                    "_uzi_raw_result": native_result,
+                    "_market_data_audit": {
+                        "normalized_payload": stored_payload,
+                        "evidence_grade": snapshot.evidence_grade,
+                        "validation": dict(snapshot.validation_json or {}),
+                    },
+                }
+            else:
+                facts = stored_payload
             if series:
                 facts["_series_points"] = [
                     {
@@ -417,7 +541,9 @@ class BundleMaterializer:
                     "snapshot_date": bundle.as_of_date.isoformat(),
                     "facts": facts,
                     "availability_status": snapshot.status,
-                    "quality_status": snapshot.status,
+                    "quality_status": (
+                        native_quality(snapshot) if uses_uzi_gate else snapshot.status
+                    ),
                     "evidence_grade": snapshot.evidence_grade,
                     "content_hash": snapshot.content_hash,
                     "contract_version": snapshot.contract_version,

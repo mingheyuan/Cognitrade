@@ -22,8 +22,8 @@ from research_system.market_data.bundles import (
     IncompleteBundleError,
 )
 from research_system.market_data.collection import (
-    CollectionJobError,
     EQUITY_COLLECTION_JOB_TYPES,
+    CollectionJobError,
     MarketDataCollectionCoordinator,
     market_scope,
 )
@@ -41,20 +41,26 @@ from research_system.market_data.fund_holdings_contracts import (
     FUND_TOP_HOLDINGS_REGISTRY,
     validate_fund_top_holdings_payload,
 )
+from research_system.market_data.ingestion import (
+    SnapshotIngestionError,
+    SnapshotIngestionService,
+)
 from research_system.market_data.instruments import (
     AssetType,
     SecurityIdentityError,
     SecurityIdentityResolver,
 )
-from research_system.market_data.ingestion import (
-    SnapshotIngestionError,
-    SnapshotIngestionService,
+from research_system.market_data.job_diagnostics import (
+    summarize_fund_portfolio,
+    summarize_tasks,
 )
 from research_system.market_data.models import (
     MarketDataBundle,
     MarketDataBundleItem,
-    MarketDataConflict,
     MarketDataCollectionJob,
+    MarketDataCollectionTask,
+    MarketDataCollectionTaskResult,
+    MarketDataConflict,
     MarketDataSnapshot,
     MarketDataSnapshotEvidence,
     ReportDataManifestDependency,
@@ -196,6 +202,7 @@ class MarketDataCenterService:
                 "data_gap": coverage.gap_count,
                 "conflict": coverage.conflict_count,
                 "stale": coverage.stale_count,
+                "degraded": coverage.degraded_dimension_count,
             }
             result["dimensions"] = [
                 {
@@ -477,6 +484,9 @@ class MarketDataCenterService:
         user_id = str(kwargs["user_id"])
         page_limit = max(1, min(int(kwargs.get("limit", 50)), 200))
         page_offset = max(0, int(kwargs.get("offset", 0)))
+        requested_symbol = str(kwargs.get("symbol") or "").strip().upper()
+        asset_family = str(kwargs.get("asset_family") or "").strip().lower()
+        as_of_date = kwargs.get("as_of_date")
         with self.database.session() as session:
             filters = [
                 MarketDataCollectionJob.tenant_id == tenant_id,
@@ -484,37 +494,217 @@ class MarketDataCenterService:
             ]
             if kwargs.get("status"):
                 filters.append(MarketDataCollectionJob.status == str(kwargs["status"]))
-            total = int(
-                session.scalar(
-                    select(func.count()).select_from(MarketDataCollectionJob).where(*filters)
+            if as_of_date is not None:
+                resolved_date = _date(as_of_date)
+                filters.extend(
+                    (
+                        MarketDataCollectionJob.start_date <= resolved_date,
+                        MarketDataCollectionJob.end_date >= resolved_date,
+                    )
                 )
-                or 0
-            )
-            rows = list(
+            if asset_family == "fund":
+                filters.extend(
+                    (
+                        MarketDataCollectionJob.job_type == FUND_HOLDING_JOB_TYPE,
+                        MarketDataCollectionJob.parent_job_id.is_(None),
+                    )
+                )
+            elif asset_family == "equity":
+                filters.append(
+                    MarketDataCollectionJob.job_type.in_(EQUITY_COLLECTION_JOB_TYPES)
+                )
+
+            primary_rows = list(
                 session.scalars(
                     select(MarketDataCollectionJob)
                     .where(*filters)
                     .order_by(MarketDataCollectionJob.created_at.desc())
-                    .offset(page_offset)
-                    .limit(page_limit)
                 )
             )
-            row_types = [(row.id, row.job_type) for row in rows]
-        items = [
-            self._collection_job_payload(
-                job_id,
-                job_type=job_type,
-                tenant_id=tenant_id,
-                user_id=user_id,
+            if requested_symbol:
+                primary_rows = [
+                    row for row in primary_rows if _job_contains_symbol(row, requested_symbol)
+                ]
+            total = len(primary_rows)
+            primary_rows = primary_rows[page_offset : page_offset + page_limit]
+
+            rows = list(primary_rows)
+            if asset_family == "fund" and primary_rows:
+                parent_ids = [row.id for row in primary_rows]
+                rows.extend(
+                    list(
+                        session.scalars(
+                            select(MarketDataCollectionJob)
+                            .where(
+                                MarketDataCollectionJob.tenant_id == tenant_id,
+                                MarketDataCollectionJob.user_id == user_id,
+                                MarketDataCollectionJob.parent_job_id.in_(parent_ids),
+                                MarketDataCollectionJob.job_type.in_(
+                                    EQUITY_COLLECTION_JOB_TYPES
+                                ),
+                            )
+                            .order_by(MarketDataCollectionJob.created_at.desc())
+                        )
+                    )
+                )
+
+            row_ids = [row.id for row in rows]
+            tasks = (
+                list(
+                    session.scalars(
+                        select(MarketDataCollectionTask)
+                        .where(MarketDataCollectionTask.job_id.in_(row_ids))
+                        .order_by(
+                            MarketDataCollectionTask.job_id,
+                            MarketDataCollectionTask.symbol,
+                            MarketDataCollectionTask.dimension,
+                        )
+                    )
+                )
+                if row_ids
+                else []
             )
-            for job_id, job_type in row_types
-        ]
+            tasks_by_job: dict[str, list[MarketDataCollectionTask]] = {}
+            for task in tasks:
+                tasks_by_job.setdefault(task.job_id, []).append(task)
+            task_job = {task.id: task.job_id for task in tasks}
+            result_rows = (
+                list(
+                    session.scalars(
+                        select(MarketDataCollectionTaskResult)
+                        .where(
+                            MarketDataCollectionTaskResult.task_id.in_(
+                                list(task_job)
+                            )
+                        )
+                        .order_by(
+                            MarketDataCollectionTaskResult.task_id,
+                            MarketDataCollectionTaskResult.as_of_date,
+                            MarketDataCollectionTaskResult.attempt.desc(),
+                        )
+                    )
+                )
+                if task_job
+                else []
+            )
+            latest_results: dict[
+                tuple[str, date], MarketDataCollectionTaskResult
+            ] = {}
+            for result in result_rows:
+                latest_results.setdefault((result.task_id, result.as_of_date), result)
+            resolution_by_job: dict[str, dict[str, int]] = {}
+            for result in latest_results.values():
+                job_id = task_job.get(result.task_id)
+                if not job_id:
+                    continue
+                bucket = resolution_by_job.setdefault(job_id, {})
+                bucket[result.status] = bucket.get(result.status, 0) + 1
+            children_by_parent: dict[str, list[MarketDataCollectionJob]] = {}
+            for row in rows:
+                if row.parent_job_id:
+                    children_by_parent.setdefault(row.parent_job_id, []).append(row)
+
+            items = [
+                self._collection_job_summary_payload(
+                    row,
+                    tasks=tasks_by_job.get(row.id, []),
+                    resolution_counts=resolution_by_job.get(row.id, {}),
+                    child_rows=children_by_parent.get(row.id, []),
+                    tasks_by_job=tasks_by_job,
+                )
+                for row in rows
+            ]
         return {
             "items": items,
             "total_count": total,
             "limit": page_limit,
             "offset": page_offset,
         }
+
+    def _collection_job_summary_payload(
+        self,
+        job: MarketDataCollectionJob,
+        *,
+        tasks: list[MarketDataCollectionTask],
+        resolution_counts: Mapping[str, int],
+        child_rows: list[MarketDataCollectionJob],
+        tasks_by_job: Mapping[str, list[MarketDataCollectionTask]],
+    ) -> dict[str, Any]:
+        checkpoint = dict(job.checkpoint_json or {})
+        compact_checkpoint = (
+            {
+                "parent_bundle_id": checkpoint.get("parent_bundle_id"),
+                "parent_bundle_hash": checkpoint.get("parent_bundle_hash"),
+            }
+            if job.job_type == FUND_HOLDING_JOB_TYPE
+            else {}
+        )
+        task_summary = summarize_tasks(tasks)
+        task_summary["by_error_code"] = []
+        task_summary["by_dimension"] = []
+        payload = {
+            "id": job.id,
+            "job_id": job.id,
+            "job_type": job.job_type,
+            "origin": job.origin,
+            "subscription_id": job.subscription_id,
+            "parent_job_id": job.parent_job_id,
+            "mode": job.mode,
+            "status": job.status,
+            "asset_family": (
+                "fund" if job.job_type == FUND_HOLDING_JOB_TYPE else "equity"
+            ),
+            "top_n": 10 if job.job_type == FUND_HOLDING_JOB_TYPE else None,
+            "symbols": list(job.symbols_json or []),
+            "dimensions": list(job.dimensions_json or []),
+            "start_date": job.start_date.isoformat(),
+            "end_date": job.end_date.isoformat(),
+            "max_concurrency": int(job.max_concurrency),
+            "publish_when_complete": bool(job.publish_when_complete),
+            "scoped_retry_supported": True,
+            "progress": dict(job.progress_json or {}),
+            "checkpoint": compact_checkpoint,
+            "cancel_requested": bool(job.cancel_requested),
+            "error_summary": job.error_summary,
+            "created_at": _iso(job.created_at),
+            "started_at": _iso(job.started_at),
+            "completed_at": _iso(job.completed_at),
+            "expanded_holdings": (
+                list(checkpoint.get("holdings") or [])
+                if job.job_type == FUND_HOLDING_JOB_TYPE
+                else []
+            ),
+            "child_collection_job_ids": (
+                list(checkpoint.get("child_job_ids") or [])
+                if job.job_type == FUND_HOLDING_JOB_TYPE
+                else []
+            ),
+            "task_summary": task_summary,
+            "resolution_summary": {
+                "total": sum(resolution_counts.values()),
+                "strict": int(resolution_counts.get("succeeded", 0)),
+                "degraded": int(resolution_counts.get("degraded", 0)),
+                "skipped": int(resolution_counts.get("skipped", 0)),
+                "failed": int(resolution_counts.get("failed", 0))
+                + int(resolution_counts.get("data_gap", 0)),
+                "by_status": dict(resolution_counts),
+            },
+            # List polling stays compact; GET /collection-jobs/{id} returns tasks.
+            "tasks": [],
+        }
+        if job.job_type == FUND_HOLDING_JOB_TYPE:
+            child_tasks = [
+                task
+                for child in child_rows
+                for task in tasks_by_job.get(child.id, [])
+            ]
+            payload["portfolio_summary"] = summarize_fund_portfolio(
+                checkpoint=checkpoint,
+                child_tasks=child_tasks,
+                dimensions_per_holding=len(self.registry.dimension_ids),
+                top_n=10,
+            )
+        return payload
 
     def get_collection_job(
         self, job_id: str, *, tenant_id: str, user_id: str
@@ -527,14 +717,26 @@ class MarketDataCenterService:
         )
 
     def retry_failed(
-        self, job_id: str, *, tenant_id: str, user_id: str, actor_id: str
+        self,
+        job_id: str,
+        *,
+        tenant_id: str,
+        user_id: str,
+        actor_id: str,
+        symbols: list[str] | None = None,
+        dimensions: list[str] | None = None,
     ) -> dict[str, Any]:
         try:
             coordinator = self._coordinator_for_job(
                 job_id, tenant_id=tenant_id, user_id=user_id
             )
             return coordinator.retry_failed(
-                job_id, tenant_id=tenant_id, user_id=user_id, actor_id=actor_id
+                job_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                actor_id=actor_id,
+                symbols=symbols,
+                dimensions=dimensions,
             )
         except CollectionJobError as exc:
             raise MarketDataServiceError(exc.code, exc.message, status_code=exc.status_code) from exc
@@ -928,7 +1130,7 @@ class MarketDataCenterService:
         except IncompleteBundleError as exc:
             raise MarketDataServiceError(
                 "market_data_bundle_incomplete",
-                f"{registry.expected_dimension_count} 个采集槽未全部达到 A/B 级完整门禁，不能发布 Bundle",
+                "22 个 UZI 采集槽尚未形成完整日级快照，不能发布 Bundle",
                 status_code=409,
                 details={
                     "missing_dimensions": exc.missing_dimensions,
@@ -1259,6 +1461,7 @@ class MarketDataCenterService:
             payload.setdefault("top_n", None)
             payload.setdefault("expanded_holdings", [])
             payload.setdefault("child_collection_job_ids", [])
+        payload.setdefault("scoped_retry_supported", True)
         return payload
 
     # Serializers ---------------------------------------------------------------------
@@ -1386,6 +1589,7 @@ class MarketDataCenterService:
             "invalidated_at": _iso(row.invalidated_at),
             "invalidation_reason": row.invalidation_reason,
             "report_reference_count": report_references,
+            **dict(row.coverage_json or {}),
         }
         if include_items:
             items = list(
@@ -1462,6 +1666,16 @@ def _symbol(value: Any) -> str:
     if not symbol:
         raise MarketDataServiceError("market_data_symbol_missing", "缺少证券代码")
     return symbol
+
+
+def _job_contains_symbol(job: MarketDataCollectionJob, requested_symbol: str) -> bool:
+    requested = str(requested_symbol or "").strip().upper()
+    requested_base = requested.split(".", 1)[0]
+    for raw_symbol in list(job.symbols_json or []):
+        candidate = str(raw_symbol or "").strip().upper()
+        if candidate == requested or candidate.split(".", 1)[0] == requested_base:
+            return True
+    return False
 
 
 def _normalize_market(value: str, symbol: str) -> str:

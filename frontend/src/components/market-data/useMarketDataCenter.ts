@@ -22,9 +22,11 @@ import type {
   SnapshotDetail,
   SnapshotSummary,
 } from './types'
+import { isActiveCollectionJob } from './status'
 
 const VALID_TABS = new Set<MarketDataTab>(['coverage', 'evidence', 'jobs', 'bundles', 'archive'])
 const VALID_ASSET_FAMILIES = new Set<AssetFamily>(['auto', 'equity', 'fund'])
+const COLLECTION_JOB_POLL_INTERVAL_MS = 3_000
 
 function localDate() {
   const date = new Date()
@@ -101,6 +103,7 @@ export function useMarketDataCenter(
   const [snapshots, setSnapshots] = useState<PageResult<SnapshotSummary>>(emptyPage)
   const [selectedSnapshot, setSelectedSnapshot] = useState<SnapshotDetail | null>(null)
   const [jobs, setJobs] = useState<PageResult<CollectionJob>>(emptyPage)
+  const [jobDetails, setJobDetails] = useState<Record<string, CollectionJob>>({})
   const [bundles, setBundles] = useState<PageResult<MarketDataBundle>>(emptyPage)
   const [selectedBundle, setSelectedBundle] = useState<MarketDataBundle | null>(null)
   const [providers, setProviders] = useState<PageResult<MarketDataProvider>>(emptyPage)
@@ -253,16 +256,62 @@ export function useMarketDataCenter(
     }
   }, [api, setLoadingKey, urlState.as_of_date, urlState.cutoff, urlState.dimension, urlState.symbol])
 
-  const loadJobs = useCallback(async (signal?: AbortSignal) => {
-    setLoadingKey('jobs', true)
+  const loadJobs = useCallback(async (signal?: AbortSignal, options: { silent?: boolean } = {}) => {
+    const silent = Boolean(options.silent)
+    if (!silent) setLoadingKey('jobs', true)
     try {
-      setJobs(await api.listJobs({ symbol: urlState.symbol, limit: 50, offset: 0 }, signal))
+      setJobs(await api.listJobs({
+        symbol: urlState.symbol,
+        asset_family: resolvedAssetFamily || undefined,
+        as_of_date: urlState.as_of_date,
+        limit: 50,
+        offset: 0,
+      }, signal))
     } catch (loadError) {
       if (!signal?.aborted) setError(displayError(loadError))
     } finally {
-      if (!signal?.aborted) setLoadingKey('jobs', false)
+      if (!silent && !signal?.aborted) setLoadingKey('jobs', false)
     }
-  }, [api, setLoadingKey, urlState.symbol])
+  }, [api, resolvedAssetFamily, setLoadingKey, urlState.as_of_date, urlState.symbol])
+
+  const loadJobDetail = useCallback(async (jobId: string) => {
+    try {
+      const detail = await api.getJob(jobId)
+      setJobDetails((current) => ({ ...current, [jobId]: detail }))
+      return detail
+    } catch (loadError) {
+      setError(displayError(loadError))
+      return null
+    }
+  }, [api])
+
+  const hasActiveJobs = jobs.items.some((job) => isActiveCollectionJob(job.status))
+
+  useEffect(() => {
+    if (urlState.tab !== 'jobs' || !hasActiveJobs) return
+    const controller = new AbortController()
+    let requestInFlight = false
+
+    const poll = async () => {
+      if (controller.signal.aborted || requestInFlight || document.visibilityState === 'hidden') return
+      requestInFlight = true
+      try {
+        await loadJobs(controller.signal, { silent: true })
+      } finally {
+        requestInFlight = false
+      }
+    }
+    const intervalId = window.setInterval(() => void poll(), COLLECTION_JOB_POLL_INTERVAL_MS)
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void poll()
+    }
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      controller.abort()
+      window.clearInterval(intervalId)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
+  }, [hasActiveJobs, loadJobs, urlState.tab])
 
   const loadBundles = useCallback(async (signal?: AbortSignal) => {
     setLoadingKey('bundles', true)
@@ -370,10 +419,33 @@ export function useMarketDataCenter(
       && job.end_date >= urlState.as_of_date) || null
   }, [jobs.items, resolvedAssetFamily, resolvedInstrument, urlState.as_of_date])
 
-  const canFreezeReport = Boolean(coverage?.report_ready && (resolvedAssetFamily === 'equity'
-    || (latestFundJob?.parent_bundle_id
+  const latestFundMissingSlots = latestFundJob?.portfolio_summary?.missing_slots
+    ?? latestFundJob?.expanded_holdings.reduce((sum, holding) => sum + (holding.missing_dimensions?.length || 0), 0)
+    ?? 0
+
+  const coverageCanGenerate = Boolean(
+    coverage?.report_ready || coverage?.report_generatable,
+  )
+  const canFreezeReport = Boolean((resolvedAssetFamily === 'equity'
+    ? coverageCanGenerate
+    : coverage?.report_ready && (latestFundJob?.parent_bundle_id
       && latestFundJob.expanded_holdings.length === 10
+      && latestFundMissingSlots === 0
       && ['completed', 'succeeded'].includes(latestFundJob.status))))
+
+  const freezeBlockReason = useMemo(() => {
+    if (!resolvedInstrument || !resolvedAssetFamily) return '请先解析一个受支持的股票或基金'
+    if (!(coverage?.report_ready || (resolvedAssetFamily === 'equity' && coverage?.report_generatable))) return resolvedAssetFamily === 'fund'
+      ? '基金持仓披露槽尚未完成'
+      : '仍有动态契约槽未就绪、过期或存在冲突'
+    if (resolvedAssetFamily === 'equity') return ''
+    if (!latestFundJob) return '尚未创建该日期的基金前十大持仓采集任务'
+    if (!latestFundJob.parent_bundle_id) return '基金持仓父 Bundle 尚未冻结'
+    if (latestFundJob.expanded_holdings.length !== 10) return `持仓只冻结了 ${latestFundJob.expanded_holdings.length}/10 只股票`
+    if (latestFundMissingSlots) return `前十大股票仍缺 ${latestFundMissingSlots} 个 UZI 原生槽位`
+    if (!['completed', 'succeeded'].includes(latestFundJob.status)) return '组合采集任务尚未完成最终校验'
+    return ''
+  }, [coverage?.report_generatable, coverage?.report_ready, latestFundJob, latestFundMissingSlots, resolvedAssetFamily, resolvedInstrument])
 
   return {
     urlState,
@@ -389,8 +461,11 @@ export function useMarketDataCenter(
     selectedSnapshot,
     selectSnapshot,
     jobs,
+    jobDetails,
+    loadJobDetail,
     latestFundJob,
     canFreezeReport,
+    freezeBlockReason,
     bundles,
     selectedBundle,
     selectBundle,
@@ -434,9 +509,11 @@ export function useMarketDataCenter(
         : `采集任务 ${job.job_id} 已创建；数据源调用只会发生在该显式任务中。`,
       loadJobs,
     ),
-    retryFailed: (jobId: string) => runAction(
-      () => api.retryFailed(jobId),
-      () => '已仅重新入队失败槽位。',
+    retryFailed: (jobId: string, scope?: { symbols?: string[]; dimensions?: string[] }) => runAction(
+      () => api.retryFailed(jobId, scope),
+      () => scope?.symbols?.length === 1
+        ? `${scope.symbols[0]} 的可重试失败槽已单独入队。`
+        : '已仅重新入队失败槽位。',
       loadJobs,
     ),
     cancelJob: (jobId: string) => runAction(
@@ -446,7 +523,7 @@ export function useMarketDataCenter(
     ),
     createManualSnapshot: (payload: ManualSnapshotInput) => runAction(
       () => api.createManualSnapshot(payload),
-      (snapshot) => `人工快照 ${snapshot.snapshot_id} 已落库并进入严格校验。`,
+      (snapshot) => `人工快照 ${snapshot.snapshot_id} 已落库；UZI 数据预检与扩展审计已分别计算。`,
       async () => { await loadCoverage(); await loadSnapshots() },
     ),
     revokeSnapshot: (snapshotId: string, reason: string, supersededById?: string) => runAction(

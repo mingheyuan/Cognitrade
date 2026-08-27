@@ -406,7 +406,7 @@ board_lot, settlement_rule, fee_model_id, calendar_id
 
 ## 9. API 设计
 
-新接口作为 `/api/v2/finance` 的增量资源，不破坏现有行情和模拟盘合同。旧自由参数回测接口在迁移期只作为引擎诊断接口，前端不再调用；完整切换并验证后再单独删除。
+新接口作为 `/api/v2/finance` 的增量资源，不破坏现有行情和模拟盘合同。迁移已经完成：旧自由参数回测接口、服务和策略目录均已删除，只保留旧结果文件的只读引用索引。
 
 ### 9.1 策略
 
@@ -557,7 +557,7 @@ research_system/api/routes/strategy_backtests.py
 - `AgentOS` 与 `stock_check`：继续执行完整 UZI，不复制一套研究逻辑。
 - `FundSnapshotSkill`：增加 `as_of_date` 和公开时间元数据，不在信号层重写基金采集。
 - `TradingCalendar`：统一日报生效日、调度日和回测交易日。
-- `HikyuuBacktestService`：保留隔离子进程思想，拆成 runner 与三类资产适配器。
+- Hikyuu 技术核心：已拆为单一 report-gated signal runner 与三类资产的确定性账本适配器。
 - `PaperTradingService`：在 Promoted 阶段抽出 instrument/fee/settlement 规则，避免继续写死股票规则。
 
 最终可删除或替换：
@@ -566,7 +566,7 @@ research_system/api/routes/strategy_backtests.py
 - `frontend/src/components/ReportSignalMapping.tsx`：由完整策略规则编辑器替代。
 - `frontend/src/components/Methodology.tsx`：拆成策略工作台与治理标签后删除。
 - `FundHoldingReportService` 的文件扫描、批次内去重和独立线程状态：新日报 coordinator 完整接管后删除；导出渲染能力保留为独立服务。
-- `backtest_strategies.py` 的 UI 自由策略目录：转为内部技术规则 registry；旧自由回测入口退出后删除不再使用的解析代码。
+- `backtest_strategies.py` 的 UI 自由策略目录：已随旧自由回测入口删除；冻结 MA 规则来自不可变策略版本。
 
 不会修改或删除与本方案无关的现有未提交 UZI qualitative 代码。
 
@@ -580,7 +580,7 @@ research_system/api/routes/strategy_backtests.py
 6. 现有回测 JSON 导入为 `legacy_technical` 元数据，保留原文件，只读展示；不能用于 Verified/Promoted。
 7. 旧 localStorage 策略只允许用户主动导入为新草稿。
 8. 新前端切换 `/strategies` 后删除 `/methodology` 路由映射与旧组件。
-9. 新策略回测稳定后停止前端调用旧 `/backtests`；旧 API 的最终删除单独执行并更新 API 主版本/弃用说明。
+9. 已完成：前端停止调用旧 `/backtests`，旧 API、运行服务和自由策略目录已删除，历史 JSON 只读保留。
 
 ## 13. 保留与清理
 

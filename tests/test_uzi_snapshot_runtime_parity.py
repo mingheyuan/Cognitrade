@@ -296,6 +296,10 @@ class UziSnapshotRuntimeParityTests(unittest.TestCase):
                     }
 
                 with patch.object(
+                    snapshot_collector,
+                    "_UZI_MINI_RACER_FETCHERS",
+                    frozenset({"7_industry", "10_valuation"}),
+                ), patch.object(
                     Uzi392FetcherRuntime,
                     "collect",
                     autospec=True,

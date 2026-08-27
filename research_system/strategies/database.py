@@ -72,9 +72,6 @@ class StrategyDatabase:
     def create_schema(self) -> None:
         Base.metadata.create_all(self.engine)
 
-    def drop_schema(self) -> None:
-        Base.metadata.drop_all(self.engine)
-
     def bootstrap_or_validate(self, *, allow_bootstrap: bool) -> None:
         existing = set(inspect(self.engine).get_table_names())
         if allow_bootstrap and self.is_sqlite:

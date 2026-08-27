@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date, datetime
+from datetime import date
 from enum import StrEnum
 from typing import Annotated, Literal
 
@@ -375,10 +375,6 @@ def next_weekday(value: date) -> date:
     """Backward-compatible name for the next XSHG trading session."""
 
     return next_trading_day(value)
-
-
-def iso_utc(value: datetime) -> str:
-    return value.isoformat().replace("+00:00", "Z")
 
 
 __all__ = [

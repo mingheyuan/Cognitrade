@@ -10,14 +10,14 @@ from __future__ import annotations
 
 import importlib
 import math
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import (
     UZI_SOURCE_COMMIT,
     Uzi392FetcherRuntime,
 )
-
 
 UZI_NATIVE_METHOD_IDS: tuple[str, ...] = (
     "dcf",
@@ -136,6 +136,7 @@ def build_uzi_raw(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str,
         fetcher_id = _FETCHER_BY_SNAPSHOT_TYPE.get(snapshot_type)
         if not fetcher_id:
             continue
+        excluded_from_scoring, degradation = _snapshot_scoring_exclusion(row)
         facts = row.get("facts") if isinstance(row.get("facts"), dict) else {}
         transported_root = (
             facts.get("_uzi_root_fields")
@@ -170,6 +171,9 @@ def build_uzi_raw(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str,
         raw = facts.get("_uzi_raw_result")
         if isinstance(raw, dict):
             native_result = dict(raw)
+            if excluded_from_scoring:
+                native_result["_excluded_from_scoring"] = True
+                native_result["_degradation"] = degradation
             native_data = dict(native_result.get("data") or {})
             # Recovery sources are allowed to fill an absent field only.  The
             # exact upstream fetcher object remains authoritative and is never
@@ -238,6 +242,16 @@ def build_uzi_raw(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str,
                     )
             else:
                 dimensions[fetcher_id] = native_result
+        elif excluded_from_scoring and fetcher_id != "similar_stocks":
+            dimensions[fetcher_id] = {
+                "data": {},
+                "error": str(
+                    degradation.get("reason_code")
+                    or "historical_unavailable_disclosure"
+                ),
+                "_excluded_from_scoring": True,
+                "_degradation": degradation,
+            }
     if has_root_transport:
         # Root-routed snapshots carry the exact lane-specific root envelope.
         # Preserve legacy's fetched_at/no-code shape and pipeline's code/full
@@ -266,6 +280,39 @@ def build_uzi_raw(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str,
             **top_level_fields,
         }
     return raw
+
+
+def _snapshot_scoring_exclusion(
+    row: Mapping[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    """Read the persisted, audit-backed scoring policy from a frozen row."""
+
+    scoring_policy = (
+        row.get("scoring_policy")
+        if isinstance(row.get("scoring_policy"), Mapping)
+        else {}
+    )
+    query_manifest = (
+        row.get("query_manifest")
+        if isinstance(row.get("query_manifest"), Mapping)
+        else {}
+    )
+    degradation = (
+        dict(query_manifest.get("degradation"))
+        if isinstance(query_manifest.get("degradation"), Mapping)
+        else {}
+    )
+    excluded = bool(
+        scoring_policy.get("excluded") is True
+        or degradation.get("excluded_from_scoring") is True
+    )
+    if excluded and not degradation:
+        degradation = {
+            "excluded_from_scoring": True,
+            "reason_code": scoring_policy.get("reason_code"),
+            "message": scoring_policy.get("reason"),
+        }
+    return excluded, degradation
 
 
 def _missing_native_value(value: object) -> bool:
@@ -978,7 +1025,7 @@ def _execute_stock_method(
                 not workflow_features.get("moat_known")
                 and workflow_features.get("moat_total") is None
             ):
-                # UZI b004d7a preserves a missing moat as None, while this
+                # UZI 1b5cdcb preserves a missing moat as None, while this
                 # older internal screen still performs one direct comparison.
                 # Keep raw/features truthful and normalize only its reader copy.
                 workflow_features["moat_total"] = 0

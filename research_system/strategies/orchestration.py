@@ -19,7 +19,6 @@ from research_system.market_data.report_inputs import bundle_hashes_for_symbols
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
-from research_system.schemas.protocol import RequestEnvelope
 from research_system.strategies.contracts import (
     JobStatus,
     ReportSetStatus,
@@ -97,9 +96,6 @@ class ReportOrchestrationService:
                 daemon=True,
             )
             self._scheduler_thread.start()
-
-    def bind_signal_engine(self, service) -> None:
-        self.signal_engine = service
 
     def close(self) -> None:
         self._closed = True
@@ -1364,38 +1360,6 @@ class ReportOrchestrationService:
             gaps,
         )
 
-    def _canonical_reuse(
-        self,
-        scope: OwnerScope,
-        *,
-        holdings: list[dict[str, Any]],
-        as_of: date,
-        pin_hash: str,
-        manifest_hashes: dict[str, str] | None = None,
-    ) -> dict[str, dict[str, Any]]:
-        reuse: dict[str, dict[str, Any]] = {}
-        with self.database.session() as session:
-            for holding in holdings:
-                symbol = str(holding.get("symbol") or "")
-                canonical_key = self._canonical_uzi_key(
-                    symbol,
-                    as_of,
-                    pin_hash,
-                    (manifest_hashes or {}).get(symbol, "legacy-unverified"),
-                )
-                analysis = self._canonical_analysis(
-                    session,
-                    scope,
-                    canonical_key,
-                )
-                if analysis is not None and analysis.run_id:
-                    reuse[symbol] = self._canonical_payload(analysis)
-                    continue
-                node = self._canonical_node(session, scope, canonical_key)
-                if node is not None and node.run_id:
-                    reuse[symbol] = self._canonical_payload(node)
-        return reuse
-
     def _canonical_plan(
         self,
         scope: OwnerScope,
@@ -1788,25 +1752,6 @@ class ReportOrchestrationService:
                 if available:
                     return run_id
         return None
-
-    def _create_current_fund_run(self, scope: OwnerScope, fund_code: str) -> str | None:
-        request = RequestEnvelope(
-            intent="fund_research",
-            user_query=f"分析基金 {fund_code}，评估风险收益、基准表现和前十大持仓。",
-            user_id=None if self._is_local(scope) else scope.user_id,
-            tenant_id=None if self._is_local(scope) else scope.tenant_id,
-            idempotency_key=f"scheduled-fund-report:{fund_code}:{date.today().isoformat()}",
-            slots={
-                "fund_codes": [fund_code],
-                "fund_category": "全部",
-                "investment_cycle": "mid_term",
-                "candidate_pool_size": 1,
-            },
-            constraints={"background": False, "daily_strategy_report": True},
-        )
-        response = self.run_service.run(request)
-        run_id = str(getattr(response, "run_id", "") or "")
-        return run_id or None
 
     @staticmethod
     def _fund_candidate(snapshot: dict[str, Any], fund_code: str) -> dict[str, Any]:

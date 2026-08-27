@@ -26,6 +26,8 @@ assemble_report.py 做 `from lib.report.institutional import *` · 调用不变.
 """
 from __future__ import annotations
 
+import html
+
 from lib.report.svg_primitives import (
     COLOR_BULL, COLOR_BEAR, COLOR_GOLD, COLOR_CYAN, COLOR_MUTED,
     svg_gauge, svg_progress_row,
@@ -40,6 +42,13 @@ def _safe(v, default="—"):
     if v is None or v == "" or v == "—":
         return default
     return v
+
+
+def _number(v, default=0.0) -> float:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
 
 
 def trap_color_emoji(level: str) -> tuple[str, str]:
@@ -63,14 +72,25 @@ def _render_dcf_block(dim20: dict) -> str:
     if not dcf or "intrinsic_per_share" not in dcf:
         return '<div class="dcf-block"><p class="muted">DCF 数据缺失</p></div>'
 
-    wacc_info = dcf.get("wacc_breakdown", {}) or {}
-    wacc_pct = wacc_info.get("wacc", 0) * 100
-    ke_pct = wacc_info.get("cost_of_equity", 0) * 100
-    kd_pct = wacc_info.get("after_tax_kd", 0) * 100
+    if dcf.get("intrinsic_per_share") is None:
+        verdict = html.escape(
+            str(_safe(dcf.get("verdict"), "亏损期自由现金流为负，DCF 无法收敛")),
+            quote=True,
+        )
+        return (
+            '<div class="dcf-block"><p class="muted">'
+            f'DCF 暂不可用：{verdict}。亏损期请结合 PB 分位、LBO 与 Comps 估值交叉判断。'
+            '</p></div>'
+        )
 
-    intrinsic = dcf.get("intrinsic_per_share", 0)
-    cur_px = dcf.get("current_price", 0)
-    sm = dcf.get("safety_margin_pct", 0)
+    wacc_info = dcf.get("wacc_breakdown", {}) or {}
+    wacc_pct = _number(wacc_info.get("wacc")) * 100
+    ke_pct = _number(wacc_info.get("cost_of_equity")) * 100
+    kd_pct = _number(wacc_info.get("after_tax_kd")) * 100
+
+    intrinsic = _number(dcf.get("intrinsic_per_share"))
+    cur_px = _number(dcf.get("current_price"))
+    sm = _number(dcf.get("safety_margin_pct"))
     verdict = dcf.get("verdict", "")
 
     # Methodology log
@@ -243,7 +263,14 @@ def _render_initiating_coverage(dim21: dict) -> str:
     cur = head.get("current_price", 0)
     ups = head.get("upside_pct", 0)
 
-    rating_color = "#10b981" if "买入" in rating or "增持" in rating else ("#f59e0b" if "持有" in rating else "#ef4444")
+    is_rated = "未评级" not in rating
+    rating_color = (
+        "#6b7280" if not is_rated else
+        ("#10b981" if "买入" in rating or "增持" in rating else
+         ("#f59e0b" if "持有" in rating else "#ef4444"))
+    )
+    target_display = f"¥{tp}" if is_rated and _number(tp) > 0 else "—"
+    upside_display = f"{_number(ups):+.1f}%" if is_rated else "—"
     pillars = ic.get("investment_thesis") or []
     risks = ic.get("key_risks") or []
 
@@ -266,9 +293,9 @@ def _render_initiating_coverage(dim21: dict) -> str:
       </div>
       <div style="display:flex;gap:24px;margin-bottom:14px;padding:12px;background:#f9fafb;border-radius:8px">
         <div><div style="font-size:11px;color:#6b7280">RATING</div><div style="font-size:18px;font-weight:800;color:{rating_color}">{rating}</div></div>
-        <div><div style="font-size:11px;color:#6b7280">TARGET</div><div style="font-size:18px;font-weight:800">¥{tp}</div></div>
+        <div><div style="font-size:11px;color:#6b7280">TARGET</div><div style="font-size:18px;font-weight:800">{target_display}</div></div>
         <div><div style="font-size:11px;color:#6b7280">CURRENT</div><div style="font-size:18px;font-weight:800">¥{cur}</div></div>
-        <div><div style="font-size:11px;color:#6b7280">UPSIDE</div><div style="font-size:18px;font-weight:800;color:{rating_color}">{ups:+.1f}%</div></div>
+        <div><div style="font-size:11px;color:#6b7280">UPSIDE</div><div style="font-size:18px;font-weight:800;color:{rating_color}">{upside_display}</div></div>
       </div>
       <div style="padding:10px;background:#f0f9ff;border-left:3px solid #0369a1;margin-bottom:14px;font-size:13px;line-height:1.6">{ic.get("executive_summary", "")}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
@@ -651,4 +678,3 @@ def _render_institutional_section(raw: dict) -> str:
         _render_catalyst_calendar(d21) +
         _render_competitive_analysis(d22)
     )
-

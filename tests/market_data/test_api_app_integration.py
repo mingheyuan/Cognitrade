@@ -103,6 +103,10 @@ class _MarketDataCenter:
         self.read_calls.append("snapshots")
         return {"items": [], "total_count": 0, **kwargs}
 
+    def list_collection_jobs(self, **kwargs):
+        self.read_calls.append("collection_jobs")
+        return {"items": [], "total_count": 0, **kwargs}
+
     def get_snapshot(self, snapshot_id: str):
         self.read_calls.append("snapshot")
         raise MarketDataServiceError(
@@ -196,7 +200,6 @@ class MarketDataApiAppIntegrationTests(unittest.TestCase):
             finance_market_data_factory=lambda _settings: self.legacy,
             market_data_center_factory=center_factory,
             paper_trading_factory=lambda _settings, _market: _Closable(),
-            backtesting_factory=lambda _settings, _market: _Closable(),
             signal_engine_factory=lambda _database: _Closable(),
             strategy_backtesting_factory=lambda _settings, _database, _market: _Closable(),
             strategy_verification_factory=lambda _database: _Closable(),
@@ -276,6 +279,28 @@ class MarketDataApiAppIntegrationTests(unittest.TestCase):
         self.assertEqual(created.status_code, 202, created.text)
         self.assertEqual(created.json()["id"], "job-explicit-1")
         self.assertEqual(len(self.center.explicit_collection_calls), 1)
+
+    def test_collection_job_list_forwards_backtest_scope_filters(self) -> None:
+        query_date = datetime.now(timezone.utc).date().isoformat()
+        response = self.client.get(
+            "/api/v2/finance/market-data/collection-jobs",
+            headers=auth_headers(),
+            params={
+                "symbol": "020464",
+                "asset_family": "fund",
+                "as_of_date": query_date,
+                "status": "partial",
+                "limit": 25,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["symbol"], "020464")
+        self.assertEqual(payload["asset_family"], "fund")
+        self.assertEqual(payload["as_of_date"], query_date)
+        self.assertEqual(payload["status"], "partial")
+        self.assertEqual(payload["limit"], 25)
 
     def test_collection_and_subscription_http_contract_rejects_concurrency_above_five(
         self,

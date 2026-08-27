@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import difflib
-import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path

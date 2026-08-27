@@ -476,6 +476,14 @@ class FinanceProviderExecutionTests(unittest.TestCase):
                 patch.object(snapshot_collector, "initialize_akshare_js_runtime"),
                 patch.object(snapshot_collector, "_run_snapshot_skill", side_effect=blocked_snapshot),
                 patch.object(snapshot_collector, "_fetcher_timeout_snapshot", side_effect=timeout_snapshot) as timeout,
+                patch.object(
+                    snapshot_collector,
+                    "_scoped_capital_flow_recovery_snapshot",
+                    side_effect=lambda **kwargs: timeout_snapshot(
+                        snapshot_type="capital_flow",
+                        **kwargs,
+                    ),
+                ),
                 patch.object(snapshot_collector, "_UZI_SERIAL_FETCHER_TIMEOUT_SECONDS", 0.01),
             ):
                 rows = snapshot_collector.collect_snapshots(
@@ -490,7 +498,7 @@ class FinanceProviderExecutionTests(unittest.TestCase):
 
         self.assertLess(monotonic() - started, 0.3)
         self.assertEqual(calls, ["industry"])
-        self.assertEqual(timeout.call_count, 3)
+        self.assertEqual(timeout.call_count, 2)
         self.assertEqual(len(rows), 3)
 
 

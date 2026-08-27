@@ -930,7 +930,21 @@ def _collect_snapshots(
             )
             invocation_symbol = invocation_symbol_by_symbol.get(symbol, symbol)
             emit_progress(phase="collecting", snapshot_type=snapshot_type)
-            if _UZI_MINI_RACER_TIMEOUT_ACTIVE.is_set():
+            if snapshot_type == "capital_flow":
+                # A scoped retry is allowed to differ from UZI's full Agent
+                # workflow.  The native fetcher scans several all-market
+                # institutional datasets before it reaches the target-stock
+                # flow endpoint; when that scan times out the Python thread
+                # cannot be killed and competes with the fallback for the same
+                # EastMoney connection.  Go directly to the bounded recovery
+                # chain here.  Full 22-dimension root runs above remain exact
+                # native UZI workflows.
+                result = _scoped_capital_flow_recovery_snapshot(
+                    query=query,
+                    symbol=invocation_symbol,
+                    provider_registry=providers,
+                )
+            elif _UZI_MINI_RACER_TIMEOUT_ACTIVE.is_set():
                 result = _fetcher_timeout_snapshot(
                     query=query,
                     symbol=invocation_symbol,
@@ -1643,6 +1657,18 @@ def _run_uzi_fetcher_snapshot(
             symbol=target_symbol,
             provider_registry=provider_registry,
         )
+    elif snapshot_type == "kline" and len(
+        data.get("ohlcv")
+        or data.get("bars")
+        or data.get("candles_60d")
+        or []
+    ) < 260:
+        snapshot = _recover_kline_snapshot(
+            snapshot=snapshot,
+            query=query,
+            symbol=target_symbol,
+            provider_registry=provider_registry,
+        )
     elif snapshot_type == "valuation" and not _valuation_has_core(data):
         snapshot = _recover_valuation_snapshot(
             snapshot=snapshot,
@@ -1750,6 +1776,13 @@ def _fetcher_timeout_snapshot(
             symbol=symbol,
             provider_registry=provider_registry,
         )
+    elif snapshot_type == "kline":
+        snapshot = _recover_kline_snapshot(
+            snapshot=snapshot,
+            query=query,
+            symbol=symbol,
+            provider_registry=provider_registry,
+        )
     elif snapshot_type == "valuation":
         snapshot = _recover_valuation_snapshot(
             snapshot=snapshot,
@@ -1777,6 +1810,65 @@ def _fetcher_timeout_snapshot(
             provider_registry=provider_registry,
         )
     return _apply_dimension_quality_contract(snapshot)
+
+
+def _scoped_capital_flow_recovery_snapshot(
+    *,
+    query: str,
+    symbol: str,
+    provider_registry: VendorProviderRegistry | None,
+) -> dict[str, Any]:
+    """Run the target-stock recovery chain without a native universe scan."""
+
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+    snapshot = {
+        "snapshot_type": "capital_flow",
+        "symbol": symbol,
+        "query": query,
+        "snapshot_date": retrieved_at[:10],
+        "retrieved_at": retrieved_at,
+        "facts": {
+            "availability": "data_gap",
+            "_uzi_fetcher_id": "12_capital_flow",
+            "_uzi_raw_result": {
+                "ticker": symbol,
+                "data": {},
+                "fallback": True,
+                "source": "scoped_recovery",
+                "error": "native universe scan skipped for scoped recovery",
+            },
+        },
+        "quality_status": "data_gap",
+        "degraded": True,
+        "degrade_reason": "native universe scan skipped for scoped recovery",
+        "missing_fields": ["capital_flow"],
+        "fallback_applied": True,
+        "source": {
+            "skill": "uzi_capital_flow_snapshot_skill",
+            "vendor": "UZI-Skill",
+            "provider_id": "uzi_3_9_2.12_capital_flow",
+            "source_id": "scoped_recovery",
+            "chain_position": 0,
+            "dim": "capital_flow",
+            "from_cache": False,
+        },
+        "source_trace": [
+            {
+                "source_id": "uzi_3_9_2",
+                "provider_id": "uzi_3_9_2.12_capital_flow",
+                "status": "skipped",
+                "fallback": True,
+                "error_type": "ScopedRecovery",
+            }
+        ],
+    }
+    recovered = _recover_capital_flow_snapshot(
+        snapshot=snapshot,
+        query=query,
+        symbol=symbol,
+        provider_registry=provider_registry,
+    )
+    return _apply_dimension_quality_contract(recovered)
 
 
 def _run_recovery_with_deadline(
@@ -1888,6 +1980,64 @@ def _recover_market_snapshot(
         projected=projected,
         partial_reason="uzi_market_incomplete_provider_fields_recovered",
         force_fields={"price"},
+    )
+
+
+def _recover_kline_snapshot(
+    *,
+    snapshot: dict[str, Any],
+    query: str,
+    symbol: str | None,
+    provider_registry: VendorProviderRegistry | None,
+) -> dict[str, Any]:
+    """Recover the full unadjusted history hidden by UZI's 60-row view shape."""
+
+    if not symbol:
+        return snapshot
+    registry = provider_registry or _default_provider_registry()
+    fallback_settings = registry.settings.model_copy(deep=True)
+    fallback_settings.provider_policy_overrides["market"] = (
+        "direct_http_market,efinance_market,baostock_market,tushare_market"
+    )
+    fallback_registry = VendorProviderRegistry(
+        fallback_settings,
+        data_sources=registry.data_sources,
+    )
+    recovery, error_type = _run_recovery_with_deadline(
+        lambda: KlineSnapshotSkill(provider_registry=fallback_registry).run(
+            query=query,
+            symbol=symbol,
+        )
+    )
+    if recovery is None:
+        return _append_recovery_failure(
+            snapshot,
+            "kline_history_fallback",
+            error_type or "ProviderError",
+        )
+    recovery_facts = (
+        recovery.get("facts")
+        if isinstance(recovery.get("facts"), dict)
+        else {}
+    )
+    history = (
+        recovery_facts.get("history")
+        if isinstance(recovery_facts.get("history"), dict)
+        else {}
+    )
+    bars = list(history.get("bars") or [])
+    if len(bars) < 260:
+        return _append_recovery_trace(snapshot, recovery)
+    return _merge_recovered_fields(
+        snapshot,
+        recovery=recovery,
+        projected={
+            "ohlcv": bars,
+            "history": history,
+            "ohlcv_adjustment": str(history.get("adjust") or "none") or "none",
+        },
+        partial_reason="uzi_kline_display_window_recovered_as_full_unadjusted_history",
+        force_fields={"ohlcv", "history", "ohlcv_adjustment"},
     )
 
 
@@ -2062,8 +2212,20 @@ def _recover_capital_flow_snapshot(
     if not symbol:
         return snapshot
     registry = provider_registry or _default_provider_registry()
+    # Native UZI has already attempted its AkShare capital-flow endpoint.
+    # Starting the recovery chain with AkShare again can consume the entire
+    # recovery deadline and prevent the healthy eFinance adapter from ever
+    # running.  Recovery therefore starts at the independent zero-key source.
+    fallback_settings = registry.settings.model_copy(deep=True)
+    fallback_settings.provider_policy_overrides["capital_flow"] = (
+        "efinance_capital_flow,tushare_capital_flow"
+    )
+    fallback_registry = VendorProviderRegistry(
+        fallback_settings,
+        data_sources=registry.data_sources,
+    )
     recovery, error_type = _run_recovery_with_deadline(
-        lambda: CapitalFlowSnapshotSkill(provider_registry=registry).run(
+        lambda: CapitalFlowSnapshotSkill(provider_registry=fallback_registry).run(
             query=query,
             symbol=symbol,
         )
@@ -2308,37 +2470,6 @@ def _merge_recovered_fields(
         }
     )
     return merged_snapshot
-
-
-def _uzi_dependency_result(snapshot: dict[str, Any]) -> dict[str, Any] | None:
-    """Expose verified recovery fields to dependent UZI dimensions.
-
-    The pinned native result remains byte-for-byte represented in
-    ``_uzi_raw_result``.  This function creates a transient dependency copy so
-    downstream fetchers can consume fields recovered by Agent OS without
-    rewriting the upstream evidence object.
-    """
-
-    raw = _uzi_raw_result(snapshot)
-    if raw is None:
-        return None
-    dependency = dict(raw)
-    data = dict(raw.get("data") or {}) if isinstance(raw.get("data"), dict) else {}
-    facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
-    metadata = {
-        "availability",
-        "data_gap",
-        "message",
-        "market_overview",
-    }
-    for field, value in facts.items():
-        if field.startswith("_") or field in metadata:
-            continue
-        merged, changed = _merge_missing_values(data.get(field), value)
-        if changed:
-            data[field] = merged
-    dependency["data"] = data
-    return dependency
 
 
 def _dimension_observations(snapshot: dict[str, Any]) -> dict[str, Any]:

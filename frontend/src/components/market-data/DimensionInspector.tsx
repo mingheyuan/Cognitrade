@@ -126,7 +126,7 @@ export function DimensionInspector({
                 <JsonTree value={selectedSnapshot.query_manifest} />
               </details>
               <details className="mdc-audit-section">
-                <summary>严格校验结果 <span>validation</span></summary>
+                <summary>扩展审计结果 <span>validation</span></summary>
                 <JsonTree value={selectedSnapshot.validation} />
               </details>
               <section className="mdc-evidence-list" aria-labelledby="mdc-evidence-title">

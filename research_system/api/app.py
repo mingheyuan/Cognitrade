@@ -21,7 +21,6 @@ from research_system.api.agent_os_run_service import AgentOSRunService
 from research_system.api.config import ApiConfig
 from research_system.api.finance_market_data_service import FinanceMarketDataService
 from research_system.api.fund_holding_report_service import FundHoldingReportService
-from research_system.api.hikyuu_backtest_service import HikyuuBacktestService
 from research_system.api.paper_trading_service import PaperTradingService
 from research_system.api.dependencies import (
     ApiRuntimeState,
@@ -223,7 +222,6 @@ def create_app(
     finance_market_data_factory: Callable[[Settings], Any] | None = None,
     market_data_center_factory: Callable[[Settings, Any], Any] | None = None,
     paper_trading_factory: Callable[[Settings, Any], Any] | None = None,
-    backtesting_factory: Callable[[Settings, Any], Any] | None = None,
     strategy_service_factory: Callable[[Settings], Any] | None = None,
     signal_engine_factory: Callable[[Any], Any] | None = None,
     report_orchestration_factory: Callable[[Settings, Any, Any, Any, Any], Any] | None = None,
@@ -253,12 +251,6 @@ def create_app(
             database_path=current_settings.workspace_root / "paper_trading" / "paper_trading.sqlite3",
             market_data=market_data,
             enforce_market_hours=current_settings.paper_trading_enforce_market_hours,
-        )
-    )
-    build_backtesting = backtesting_factory or (
-        lambda current_settings, market_data: HikyuuBacktestService(
-            result_root=current_settings.workspace_root / "backtests",
-            market_data=market_data,
         )
     )
     build_strategy_service = strategy_service_factory or (
@@ -348,7 +340,6 @@ def create_app(
                 bind_chat_completion(chat_service.record_run_completion)
             finance_market_data = build_finance_market_data(effective_settings)
             paper_trading = build_paper_trading(effective_settings, finance_market_data)
-            backtesting = build_backtesting(effective_settings, finance_market_data)
             strategy_service = build_strategy_service(effective_settings)
             strategy_database = getattr(strategy_service, "database", None)
             if strategy_database is not None:
@@ -402,7 +393,6 @@ def create_app(
                 finance_market_data=finance_market_data,
                 market_data_center=market_data_service,
                 paper_trading=paper_trading,
-                backtesting=backtesting,
                 strategies=strategy_service,
                 report_orchestration=report_orchestration,
                 signal_engine=signal_engine,

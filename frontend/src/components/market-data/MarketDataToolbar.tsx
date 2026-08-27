@@ -67,10 +67,11 @@ export function MarketDataToolbar({ controller, onManual, onReport }: {
           <button className="secondary-button" type="button" disabled={loading.action || !contract} onClick={onManual}>
             <FilePlus2 size={15} aria-hidden="true" />手工录入
           </button>
-          <button className="primary-button" type="button" disabled={loading.action || !controller.canFreezeReport} onClick={onReport} title={!controller.canFreezeReport ? (controller.resolvedAssetFamily === 'fund' ? '需先完成基金持仓父 Bundle 与前十大股票子任务' : '正式报告要求所有动态契约槽位就绪') : undefined}>
+          <button className="primary-button" type="button" disabled={loading.action || !controller.canFreezeReport} onClick={onReport} title={!controller.canFreezeReport ? controller.freezeBlockReason : undefined}>
             <Play size={15} aria-hidden="true" />{controller.resolvedAssetFamily === 'fund' ? '冻结十大持仓组合' : '冻结报告输入'}
           </button>
         </div>
+        {!controller.canFreezeReport && controller.freezeBlockReason ? <p className="mdc-freeze-block-reason">冻结受阻：{controller.freezeBlockReason}</p> : null}
       </div>
     </section>
   )

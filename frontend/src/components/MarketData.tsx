@@ -144,7 +144,7 @@ export function MarketData({ state, setState }: MarketDataProps) {
         {controller.contract && controller.urlState.tab === 'coverage' ? (
           controller.loading.coverage && !controller.coverage ? <LoadingState label="正在读取数据库覆盖率…" /> : controller.coverage ? (
             <div className="mdc-stack">
-              <ReadinessSummary contract={controller.contract} coverage={controller.coverage} />
+              <ReadinessSummary contract={controller.contract} coverage={controller.coverage} fundJob={controller.latestFundJob} />
               <DimensionReadinessMatrix
                 contract={controller.contract}
                 coverage={controller.coverage}
@@ -181,10 +181,12 @@ export function MarketData({ state, setState }: MarketDataProps) {
             contract={controller.contract}
             urlState={controller.urlState}
             jobs={controller.jobs}
+            jobDetails={controller.jobDetails}
             loading={controller.loading.jobs}
             actionLoading={controller.loading.action}
             onCreate={controller.createJob}
             onRefresh={controller.refreshJobs}
+            onLoadDetail={controller.loadJobDetail}
             onRetry={controller.retryFailed}
             onCancel={controller.cancelJob}
           />

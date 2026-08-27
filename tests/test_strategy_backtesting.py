@@ -258,6 +258,37 @@ class StrategyBacktestTests(unittest.TestCase):
             first["result"]["benchmarks"]["fund_buy_and_hold"]["return_pct"],
         )
 
+    def test_backtest_history_can_be_scoped_before_it_reaches_the_frontend(self) -> None:
+        common = {
+            "strategy_version_id": self.version["id"],
+            "fund_code": "510300",
+            "start_date": date(2026, 8, 4),
+            "end_date": date(2026, 8, 10),
+            "initial_cash": 1_000_000,
+        }
+        fund = self._wait(
+            self.backtests.create(self.owner, mode=BacktestMode.FUND_ONLY, **common)["id"]
+        )
+        holdings = self._wait(
+            self.backtests.create(
+                self.owner,
+                mode=BacktestMode.HOLDINGS_PORTFOLIO,
+                **common,
+            )["id"]
+        )
+
+        scoped = self.backtests.list(
+            self.owner,
+            strategy_id=self.strategy_id,
+            fund_code="510300",
+            mode=BacktestMode.FUND_ONLY,
+            status="completed",
+            limit=1,
+        )
+
+        self.assertEqual([row["id"] for row in scoped["backtests"]], [fund["id"]])
+        self.assertNotEqual(fund["id"], holdings["id"])
+
     def test_fund_only_loads_final_day_report_for_valuation_without_trading_its_future_signal(self) -> None:
         with self.database.session() as session:
             source = next(

@@ -27,6 +27,22 @@ def _f(v, default=0.0) -> float:
         return default
 
 
+def sanitize_features(features: dict | None) -> dict:
+    """Return a copy without top-level ``None`` values.
+
+    Institutional workflows use ``dict.get(key, conservative_default)``. A
+    present key whose value is ``None`` bypasses that default and can trigger
+    numeric ``TypeError`` exceptions. Keep this sanitizer at the modeling
+    boundary only: the investor evaluator intentionally uses ``None`` to mark
+    unavailable evidence and skip a rule instead of scoring it as a failure.
+    """
+    return {
+        key: value
+        for key, value in (features or {}).items()
+        if value is not None
+    }
+
+
 def _pct_change(values: list, n: int = 1) -> float:
     """n-period % change between first and last."""
     if not values or len(values) < 2:

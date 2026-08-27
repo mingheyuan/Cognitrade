@@ -4,6 +4,8 @@ from datetime import date, datetime
 from importlib import import_module
 from typing import Any
 
+import requests
+
 from research_system.adapters.vendors.akshare_utils import (
     coerce_numeric,
     normalize_value,
@@ -17,12 +19,31 @@ class EFinanceCapitalFlowAdapter:
 
     def get_capital_flow_snapshot(self, *, symbol: str) -> dict[str, Any]:
         provider_symbol = self._provider_symbol(symbol)
-        ef = import_module("efinance")
-        history = ef.stock.get_history_bill(provider_symbol)
-        if history is None or getattr(history, "empty", True):
-            raise ValueError(f"no capital flow data returned for symbol {symbol}")
+        bounded_error: Exception | None = None
+        try:
+            rows = self._bounded_history_rows(provider_symbol)
+        except Exception as exc:
+            bounded_error = exc
+            rows = []
+        if not rows:
+            # Retain the installed efinance SDK as a compatibility fallback.
+            # Current efinance versions request the complete history with
+            # lmt=100000, which EastMoney may disconnect before returning.  A
+            # bounded 60-row request is sufficient for the strict 20-day
+            # contract and avoids turning a target-stock retry into an
+            # unbounded source call.
+            try:
+                ef = import_module("efinance")
+                history = ef.stock.get_history_bill(provider_symbol)
+            except Exception:
+                if bounded_error is not None:
+                    raise bounded_error
+                raise
+            if history is None or getattr(history, "empty", True):
+                raise ValueError(f"no capital flow data returned for symbol {symbol}")
+            rows = list(history.to_dict("records"))
 
-        rows = [self._normalize_row(row) for row in history.to_dict("records")]
+        rows = [self._normalize_row(row) for row in rows]
         rows.sort(key=self._date_sort_key)
         main_fund_flow_20d = rows[-20:]
         recent_flows = list(reversed(main_fund_flow_20d))
@@ -42,6 +63,61 @@ class EFinanceCapitalFlowAdapter:
             "main_flow_rank": None,
             "main_flow_rank_status": "not_provided_by_efinance_history_bill",
         }
+
+    @staticmethod
+    def _bounded_history_rows(provider_symbol: str) -> list[dict[str, Any]]:
+        market = "1" if provider_symbol.startswith(("5", "6", "9")) else "0"
+        fields = {
+            "f51": "日期",
+            "f52": "主力净流入",
+            "f53": "小单净流入",
+            "f54": "中单净流入",
+            "f55": "大单净流入",
+            "f56": "超大单净流入",
+            "f57": "主力净流入占比",
+            "f58": "小单流入净占比",
+            "f59": "中单流入净占比",
+            "f60": "大单流入净占比",
+            "f61": "超大单流入净占比",
+            "f62": "收盘价",
+            "f63": "涨跌幅",
+        }
+        response = requests.get(
+            "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
+            params={
+                "lmt": "60",
+                "klt": "101",
+                "secid": f"{market}.{provider_symbol}",
+                "fields1": "f1,f2,f3,f7",
+                "fields2": ",".join(fields),
+            },
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 Chrome/138 Safari/537.36"
+                ),
+                "Referer": "https://quote.eastmoney.com/",
+                "Connection": "close",
+            },
+            timeout=12,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        klines = data.get("klines") if isinstance(data, dict) else None
+        if not isinstance(klines, list) or not klines:
+            return []
+        columns = list(fields.values())
+        name = str(data.get("name") or "")
+        rows: list[dict[str, Any]] = []
+        for encoded in klines:
+            values = str(encoded or "").split(",")
+            if len(values) != len(columns):
+                continue
+            row = dict(zip(columns, values, strict=True))
+            row.update({"股票代码": provider_symbol, "股票名称": name})
+            rows.append(row)
+        return rows
 
     @staticmethod
     def _provider_symbol(symbol: str) -> str:

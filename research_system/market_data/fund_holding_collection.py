@@ -331,8 +331,34 @@ class FundHoldingCollectionCoordinator:
         tenant_id: str,
         user_id: str,
         actor_id: str,
+        symbols: list[str] | None = None,
+        dimensions: list[str] | None = None,
         submit: bool = True,
     ) -> dict[str, Any]:
+        requested_symbols = list(
+            dict.fromkeys(
+                str(symbol or "").strip().upper()
+                for symbol in (symbols or [])
+                if str(symbol or "").strip()
+            )
+        )
+        requested_dimensions = list(
+            dict.fromkeys(
+                str(dimension or "").strip()
+                for dimension in (dimensions or [])
+                if str(dimension or "").strip()
+            )
+        )
+        scoped = bool(requested_symbols or requested_dimensions)
+        unknown_dimensions = set(requested_dimensions).difference(
+            self.equity_collection.registry.dimension_ids
+        )
+        if unknown_dimensions:
+            raise CollectionJobError(
+                "collection_retry_scope_invalid",
+                "重试范围包含未知维度：" + "、".join(sorted(unknown_dimensions)),
+                status_code=422,
+            )
         with self.database.session() as session:
             job = self._owned_parent_job(
                 session,
@@ -350,14 +376,85 @@ class FundHoldingCollectionCoordinator:
                     status_code=409,
                 )
             task = self._parent_task(session, job.id)
-            if not task.retryable or task.attempt_count >= task.max_attempts:
+            if not scoped and (
+                not task.retryable or task.attempt_count >= task.max_attempts
+            ):
                 raise CollectionJobError(
                     "collection_retry_unavailable",
                     "没有可重试的实时采集缺口；历史 PIT 不允许 live 回填",
                     status_code=409,
                 )
+            checkpoint = dict(job.checkpoint_json or {})
+            if scoped:
+                holdings = {
+                    str(holding.get("symbol") or "").upper()
+                    for holding in list(checkpoint.get("holdings") or [])
+                    if str(holding.get("symbol") or "").strip()
+                }
+                selected_symbols = set(requested_symbols) if requested_symbols else holdings
+                unknown_symbols = selected_symbols.difference(holdings)
+                if unknown_symbols:
+                    raise CollectionJobError(
+                        "collection_retry_scope_invalid",
+                        "重试范围包含非本基金持仓股票："
+                        + "、".join(sorted(unknown_symbols)),
+                        status_code=422,
+                    )
+                child_ids = [
+                    str(child_id)
+                    for child_id in list(checkpoint.get("child_job_ids") or [])
+                    if str(child_id).strip()
+                ]
+                child_tasks = (
+                    list(
+                        session.scalars(
+                            select(MarketDataCollectionTask).where(
+                                MarketDataCollectionTask.job_id.in_(child_ids),
+                                MarketDataCollectionTask.symbol.in_(selected_symbols),
+                            )
+                        )
+                    )
+                    if child_ids
+                    else []
+                )
+                child_order = {child_id: index for index, child_id in enumerate(child_ids)}
+                latest_tasks: dict[tuple[str, str], MarketDataCollectionTask] = {}
+                for child_task in child_tasks:
+                    slot = (child_task.symbol, child_task.dimension)
+                    current = latest_tasks.get(slot)
+                    if current is None or child_order.get(child_task.job_id, -1) > child_order.get(
+                        current.job_id, -1
+                    ):
+                        latest_tasks[slot] = child_task
+                dimension_scope = set(requested_dimensions)
+                retry_scope: dict[str, list[str]] = defaultdict(list)
+                for child_task in latest_tasks.values():
+                    if dimension_scope and child_task.dimension not in dimension_scope:
+                        continue
+                    if child_task.status not in {
+                        CollectionStatus.FAILED.value,
+                        CollectionStatus.PARTIAL.value,
+                    }:
+                        continue
+                    if not child_task.retryable or child_task.attempt_count >= child_task.max_attempts:
+                        continue
+                    retry_scope[child_task.symbol].append(child_task.dimension)
+                if not retry_scope:
+                    raise CollectionJobError(
+                        "collection_retry_unavailable",
+                        "所选股票当前没有可手动重试的失败维度",
+                        status_code=409,
+                    )
+                checkpoint["retry_scope_by_symbol"] = {
+                    symbol: sorted(set(retry_scope[symbol]))
+                    for symbol in sorted(retry_scope)
+                }
+            else:
+                checkpoint.pop("retry_scope_by_symbol", None)
+            job.checkpoint_json = checkpoint
             now = self._now()
             task.status = CollectionStatus.QUEUED.value
+            task.retryable = True
             task.next_retry_at = None
             task.lease_owner = None
             task.lease_until = None
@@ -703,6 +800,12 @@ class FundHoldingCollectionCoordinator:
                 "equity_dimensions": list(
                     request.get("equity_dimensions") or self.equity_collection.registry.dimension_ids
                 ),
+                "retry_scope_by_symbol": {
+                    str(symbol): [str(dimension) for dimension in dimensions]
+                    for symbol, dimensions in dict(
+                        dict(job.checkpoint_json or {}).get("retry_scope_by_symbol") or {}
+                    ).items()
+                },
                 "attempt": task.attempt_count,
                 "checkpoint": dict(job.checkpoint_json or {}),
             }
@@ -949,13 +1052,25 @@ class FundHoldingCollectionCoordinator:
             return recovered_runs
 
         groups: dict[tuple[str, ...], list[str]] = defaultdict(list)
+        retry_scope = dict(claimed.get("retry_scope_by_symbol") or {})
         for holding in holdings:
             symbol = str(holding["symbol"])
+            if retry_scope and symbol not in retry_scope:
+                continue
+            requested_dimensions = (
+                [
+                    dimension
+                    for dimension in claimed["equity_dimensions"]
+                    if dimension in set(retry_scope[symbol])
+                ]
+                if retry_scope
+                else claimed["equity_dimensions"]
+            )
             missing = tuple(
                 self._missing_equity_dimensions(
                     symbol,
                     claimed["as_of_date"],
-                    claimed["equity_dimensions"],
+                    requested_dimensions,
                 )
             )
             if missing:
@@ -1186,7 +1301,11 @@ class FundHoldingCollectionCoordinator:
         return [
             dimension
             for dimension in requested_dimensions
-            if dimension not in by_dimension or not by_dimension[dimension].eligible
+            if dimension not in by_dimension
+            or not (
+                by_dimension[dimension].eligible
+                or by_dimension[dimension].degraded
+            )
         ]
 
     def _ensure_equity_bundle(self, symbol: str, as_of_date: date):
@@ -1226,6 +1345,7 @@ class FundHoldingCollectionCoordinator:
                     exchange_timezone=FUND_EXCHANGE_TIMEZONE,
                     published_by="fund_holding_collection",
                     now=now,
+                    allow_degraded=as_of_date != self._local_today(),
                 )
         except (BundleIntegrityError, IncompleteBundleError, ValueError):
             return None
@@ -1250,6 +1370,7 @@ class FundHoldingCollectionCoordinator:
             if job is None or task is None:
                 return
             checkpoint = dict(job.checkpoint_json or {})
+            checkpoint.pop("retry_scope_by_symbol", None)
             checkpoint.update(
                 {
                     "holdings": [

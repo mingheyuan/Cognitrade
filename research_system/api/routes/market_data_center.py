@@ -52,6 +52,31 @@ class CollectionJobRequest(BaseModel):
         return value
 
 
+class CollectionRetryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbols: list[str] = Field(default_factory=list, max_length=100)
+    dimensions: list[str] = Field(default_factory=list, max_length=100)
+
+    @field_validator("symbols")
+    @classmethod
+    def normalize_retry_symbols(cls, value: list[str]) -> list[str]:
+        return list(
+            dict.fromkeys(
+                str(item or "").strip().upper() for item in value if str(item or "").strip()
+            )
+        )
+
+    @field_validator("dimensions")
+    @classmethod
+    def normalize_retry_dimensions(cls, value: list[str]) -> list[str]:
+        return list(
+            dict.fromkeys(
+                str(item or "").strip() for item in value if str(item or "").strip()
+            )
+        )
+
+
 class ManualSnapshotRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -236,6 +261,9 @@ async def create_collection_job(
 @router.get("/collection-jobs")
 async def list_collection_jobs(
     job_status: str | None = Query(default=None, alias="status"),
+    symbol: Annotated[str | None, Query(min_length=1, max_length=64)] = None,
+    asset_family: Literal["equity", "fund"] | None = None,
+    as_of_date: date | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     principal: ApiPrincipal = _PRINCIPAL_DEPENDENCY,
@@ -248,6 +276,9 @@ async def list_collection_jobs(
         tenant_id=tenant_id,
         user_id=user_id,
         status=job_status,
+        symbol=symbol,
+        asset_family=asset_family,
+        as_of_date=as_of_date,
         limit=limit,
         offset=offset,
     )
@@ -272,6 +303,7 @@ async def get_collection_job(
 @router.post("/collection-jobs/{job_id}/retry-failed", status_code=status.HTTP_202_ACCEPTED)
 async def retry_failed_collection_tasks(
     job_id: str,
+    request: CollectionRetryRequest | None = None,
     principal: ApiPrincipal = _PRINCIPAL_DEPENDENCY,
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
@@ -283,6 +315,8 @@ async def retry_failed_collection_tasks(
         tenant_id=tenant_id,
         user_id=user_id,
         actor_id=actor_id,
+        symbols=list(request.symbols) if request else None,
+        dimensions=list(request.dimensions) if request else None,
     )
 
 

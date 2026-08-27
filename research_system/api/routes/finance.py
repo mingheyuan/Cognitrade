@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -8,7 +8,6 @@ from starlette.concurrency import run_in_threadpool
 
 from research_system.api.dependencies import (
     ApiPrincipal,
-    get_backtesting,
     get_finance_market_data,
     get_paper_trading,
     require_principal,
@@ -19,7 +18,6 @@ from research_system.api.finance_market_data_service import (
     FinanceMarketDataService,
 )
 from research_system.api.paper_trading_service import PaperTradingError, PaperTradingService
-from research_system.api.hikyuu_backtest_service import BacktestError, HikyuuBacktestService
 from research_system.runtime.presentation.display import localize_public_error_fields
 
 
@@ -45,17 +43,6 @@ class PaperAccountResetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     initial_cash: float = Field(default=1_000_000, ge=10_000, le=1_000_000_000)
-
-
-class BacktestRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    symbol: str = Field(min_length=1, max_length=64)
-    strategy: str = Field(default="ma_cross", pattern=r"^[a-z][a-z0-9_]{1,63}$")
-    strategy_parameters: dict[str, Any] = Field(default_factory=dict)
-    initial_cash: float = Field(default=1_000_000, ge=10_000, le=1_000_000_000)
-    trade_size: int = Field(default=1000, ge=100, le=10_000_000)
-    refresh: bool = False
 
 
 @router.get("/securities")
@@ -222,56 +209,6 @@ async def cancel_paper_order(
         raise _paper_error(exc) from exc
 
 
-@router.get("/backtests/engine")
-async def backtest_engine(
-    service: HikyuuBacktestService = Depends(get_backtesting),
-) -> dict:
-    return _public(await run_in_threadpool(service.engine_status))
-
-
-@router.get("/backtests")
-async def list_backtests(
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    service: HikyuuBacktestService = Depends(get_backtesting),
-) -> dict:
-    results = await run_in_threadpool(service.list_results, limit=limit, offset=offset)
-    total_count = await run_in_threadpool(service.count_results)
-    return _public({"results": results, "total_count": total_count, "limit": limit, "offset": offset})
-
-
-@router.post("/backtests", status_code=status.HTTP_201_CREATED)
-async def run_backtest(
-    request: BacktestRequest,
-    service: HikyuuBacktestService = Depends(get_backtesting),
-) -> dict:
-    try:
-        return _public(await run_in_threadpool(
-            service.run,
-            symbol=request.symbol,
-            strategy_id=request.strategy,
-            strategy_parameters=request.strategy_parameters,
-            initial_cash=request.initial_cash,
-            trade_size=request.trade_size,
-            refresh=request.refresh,
-        ))
-    except FinanceMarketDataError as exc:
-        raise _market_error(exc) from exc
-    except BacktestError as exc:
-        raise _backtest_error(exc) from exc
-
-
-@router.get("/backtests/{backtest_id}")
-async def get_backtest(
-    backtest_id: str,
-    service: HikyuuBacktestService = Depends(get_backtesting),
-) -> dict:
-    try:
-        return _public(await run_in_threadpool(service.get_result, backtest_id))
-    except BacktestError as exc:
-        raise _backtest_error(exc) from exc
-
-
 def _owner(principal: ApiPrincipal) -> tuple[str, str]:
     return (
         str(principal.tenant_id or "local"),
@@ -299,15 +236,6 @@ def _market_error(exc: FinanceMarketDataError) -> ApiError:
 
 
 def _paper_error(exc: PaperTradingError) -> ApiError:
-    return ApiError(
-        status_code=exc.status_code,
-        code=exc.code,
-        message=exc.message,
-        details=exc.details,
-    )
-
-
-def _backtest_error(exc: BacktestError) -> ApiError:
     return ApiError(
         status_code=exc.status_code,
         code=exc.code,

@@ -28,7 +28,7 @@ from domain_packs.finance_ashare.subagents.uzi_panel_profiles import get_profile
 from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_structured
 
 
-LATEST_UZI_SOURCE_COMMIT = "b004d7a988ca53a4805bf36784af091fa1209f22"
+LATEST_UZI_SOURCE_COMMIT = "1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4"
 _LOGGER = logging.getLogger("uvicorn.error")
 _ROLEPLAY_STAGE_CACHE_SCHEMA_VERSION = "uzi-3.9.4-roleplay-stage-v1"
 PERSONAS_DIR = (

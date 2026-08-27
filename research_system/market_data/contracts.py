@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-CONTRACT_VERSION = "uzi-3.9.4-b004d7a-v1"
+CONTRACT_VERSION = "uzi-3.9.4-1b5cdcb-v1"
 
 
 class EvidenceGrade(str, Enum):
@@ -269,6 +269,12 @@ class DimensionCoverage(BaseModel):
     reason: str | None = None
     published_at: datetime | None = None
     observed_at: datetime | None = None
+    degraded: bool = False
+    excluded_from_scoring: bool = False
+    native_quality: str | None = None
+    audit_eligible: bool = False
+    audit_reason: str | None = None
+    audit_errors: list[str] = Field(default_factory=list)
 
 
 class CoverageResult(BaseModel):
@@ -290,6 +296,15 @@ class CoverageResult(BaseModel):
     structurally_complete: bool
     report_ready: bool
     dimensions: list[DimensionCoverage]
+    resolved_dimension_count: int = 0
+    degraded_dimension_count: int = 0
+    report_generatable: bool = False
+    quality: Literal["strict", "degraded", "blocked"] = "blocked"
+    gate_policy: str = "uzi-3.9.4-medium"
+    uzi_integrity: dict[str, Any] = Field(default_factory=dict)
+    uzi_integrity_by_profile: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    audit_ready_dimension_count: int = 0
+    audit_ready: bool = False
 
     def snapshot_ids(self) -> dict[str, str]:
         return {

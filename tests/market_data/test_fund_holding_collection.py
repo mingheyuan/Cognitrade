@@ -709,6 +709,66 @@ def test_retry_of_the_same_full_gap_uses_a_new_persisted_generation(harness) -> 
         assert second_child.idempotency_key == f"{first_child.idempotency_key}:1"
 
 
+def test_scoped_retry_collects_only_selected_holding_dimensions(harness) -> None:
+    database, _skill, _adapter, equity, coordinator = harness
+    today = coordinator._local_today()
+    equity.blocked_symbols.update(HOLDING_SYMBOLS)
+    parent = _create_parent(coordinator, as_of_date=today)
+    coordinator.run_job_now(parent["id"])
+    partial = coordinator.get_job(parent["id"], tenant_id="tenant", user_id="user")
+
+    assert partial["status"] == "partial"
+    selected_symbol = HOLDING_SYMBOLS[3]
+    selected_dimensions = list(equity.registry.dimension_ids[:2])
+    equity.blocked_symbols.remove(selected_symbol)
+
+    coordinator.retry_failed(
+        parent["id"],
+        tenant_id="tenant",
+        user_id="user",
+        actor_id="actor",
+        symbols=[selected_symbol],
+        dimensions=selected_dimensions,
+        submit=False,
+    )
+    queued = coordinator.get_job(parent["id"], tenant_id="tenant", user_id="user")
+    assert queued["checkpoint"]["retry_scope_by_symbol"] == {
+        selected_symbol: selected_dimensions
+    }
+
+    coordinator.run_job_now(parent["id"])
+    retried = coordinator.get_job(parent["id"], tenant_id="tenant", user_id="user")
+
+    assert retried["status"] == "partial"
+    assert "retry_scope_by_symbol" not in retried["checkpoint"]
+    retry_child_id = retried["child_collection_job_ids"][-1]
+    with database.session() as session:
+        retry_child = session.get(MarketDataCollectionJob, retry_child_id)
+        assert retry_child is not None
+        assert retry_child.symbols_json == [selected_symbol]
+        assert retry_child.dimensions_json == selected_dimensions
+
+
+def test_scoped_retry_rejects_a_non_holding_symbol(harness) -> None:
+    _database, _skill, _adapter, equity, coordinator = harness
+    today = coordinator._local_today()
+    equity.blocked_symbols.update(HOLDING_SYMBOLS)
+    parent = _create_parent(coordinator, as_of_date=today)
+    coordinator.run_job_now(parent["id"])
+
+    with pytest.raises(CollectionJobError) as captured:
+        coordinator.retry_failed(
+            parent["id"],
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600999.SH"],
+            submit=False,
+        )
+
+    assert captured.value.code == "collection_retry_scope_invalid"
+
+
 def test_historical_day_without_stored_pit_never_calls_live_skill(harness) -> None:
     database, skill, _adapter, _equity, coordinator = harness
     historical = coordinator._local_today() - timedelta(days=30)

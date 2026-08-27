@@ -43,7 +43,6 @@ class ApiRuntimeState:
     finance_market_data: Any
     market_data_center: Any | None
     paper_trading: Any
-    backtesting: Any
     strategies: Any
     report_orchestration: Any | None
     signal_engine: Any | None
@@ -117,10 +116,6 @@ def get_market_data_center(request: Request):
 
 def get_paper_trading(request: Request):
     return get_api_runtime(request).paper_trading
-
-
-def get_backtesting(request: Request):
-    return get_api_runtime(request).backtesting
 
 
 def get_strategies(request: Request):
@@ -280,7 +275,6 @@ __all__ = [
     "get_api_runtime",
     "get_agent_os",
     "get_chat_service",
-    "get_backtesting",
     "get_strategies",
     "get_report_orchestration",
     "get_signal_engine",

@@ -18,6 +18,7 @@ from threading import RLock
 from typing import Any, Protocol, runtime_checkable
 from zoneinfo import ZoneInfo
 
+from research_system.market_data.contracts import CONTRACT_VERSION
 from research_system.schemas.protocol import RequestEnvelope
 
 FORMAL_REPORT_INTENTS = frozenset(
@@ -365,6 +366,7 @@ class DatabaseReportInputGateway:
                     )
                 materialized = materializer.materialize(bundle.id)
                 bundle_items = repository.list_bundle_items(bundle.id)
+                bundle_coverage = dict(bundle.coverage_json or {})
                 frozen_items.append(
                     {
                         "ordinal": item.ordinal,
@@ -382,7 +384,22 @@ class DatabaseReportInputGateway:
                             "cutoff_at": _aware_utc(bundle.cutoff_at).isoformat(),
                             "contract_version": bundle.contract_version,
                             "status": bundle.status,
-                            "report_ready": True,
+                            "report_ready": bool(bundle_coverage.get("report_ready")),
+                            "report_generatable": bool(
+                                bundle_coverage.get("report_generatable")
+                            ),
+                            "quality": bundle_coverage.get("quality") or "strict",
+                            "gate_policy": bundle_coverage.get("gate_policy"),
+                            "uzi_integrity": dict(
+                                bundle_coverage.get("uzi_integrity") or {}
+                            ),
+                            "uzi_integrity_by_profile": dict(
+                                bundle_coverage.get("uzi_integrity_by_profile") or {}
+                            ),
+                            "audit_ready": bool(bundle_coverage.get("audit_ready")),
+                            "degraded_dimension_count": int(
+                                bundle_coverage.get("degraded_dimension_count") or 0
+                            ),
                             "expected_dimension_count": bundle.expected_dimension_count,
                             "ready_dimension_count": bundle.ready_dimension_count,
                             "available_count": bundle.available_count,
@@ -556,6 +573,7 @@ class DatabaseReportInputGateway:
                         f"{symbol} Bundle item 数量不完整",
                     )
                 evaluation_times.append(_aware_utc(bundle.cutoff_at))
+                bundle_coverage = dict(bundle.coverage_json or {})
                 frozen_items.append(
                     {
                         "ordinal": ordinal,
@@ -573,7 +591,22 @@ class DatabaseReportInputGateway:
                             "cutoff_at": _aware_utc(bundle.cutoff_at).isoformat(),
                             "contract_version": bundle.contract_version,
                             "status": bundle.status,
-                            "report_ready": True,
+                            "report_ready": bool(bundle_coverage.get("report_ready")),
+                            "report_generatable": bool(
+                                bundle_coverage.get("report_generatable")
+                            ),
+                            "quality": bundle_coverage.get("quality") or "strict",
+                            "gate_policy": bundle_coverage.get("gate_policy"),
+                            "uzi_integrity": dict(
+                                bundle_coverage.get("uzi_integrity") or {}
+                            ),
+                            "uzi_integrity_by_profile": dict(
+                                bundle_coverage.get("uzi_integrity_by_profile") or {}
+                            ),
+                            "audit_ready": bool(bundle_coverage.get("audit_ready")),
+                            "degraded_dimension_count": int(
+                                bundle_coverage.get("degraded_dimension_count") or 0
+                            ),
                             "expected_dimension_count": bundle.expected_dimension_count,
                             "ready_dimension_count": bundle.ready_dimension_count,
                             "available_count": bundle.available_count,
@@ -1200,11 +1233,27 @@ def _validate_manifest_item(item: Mapping[str, Any], all_rows: Sequence[Mapping[
     status = str(bundle.get("status") or "").strip().lower()
     if status != "published":
         raise ReportInputError("bundle_not_published", f"{symbol} Bundle 未发布：{status}")
-    if bundle.get("report_ready") is not True:
-        raise ReportInputError("bundle_not_report_ready", f"{symbol} Bundle 已过期或不满足报告门禁")
+    if (
+        bundle.get("report_ready") is not True
+        and bundle.get("report_generatable") is not True
+    ):
+        raise ReportInputError(
+            "bundle_not_report_ready",
+            f"{symbol} Bundle 已过期或结构不完整，无法作为 UZI Agent 输入",
+        )
+    degraded_bundle = bool(
+        bundle.get("report_ready") is not True
+        and bundle.get("report_generatable") is True
+        and bundle.get("quality") == "degraded"
+    )
     bundle_contract = str(bundle.get("contract_version") or "").strip()
     if not bundle_contract or bundle_contract != str(item.get("contract_version") or "").strip():
         raise ReportInputError("bundle_contract_mismatch", f"{symbol} Bundle 契约与报告 manifest 不一致")
+    uses_uzi_gate = bundle_contract == CONTRACT_VERSION
+    # UZI's data-integrity output is recovery input, not the final publication
+    # gate.  A structurally complete Bundle may contain explicit provider gaps;
+    # the native full Agent workflow repairs them and only final self_review
+    # criticals can block HTML/PDF assembly.
     expected_count = _positive_int(
         bundle.get("expected_dimension_count")
         or item.get("expected_dimension_count")
@@ -1241,7 +1290,27 @@ def _validate_manifest_item(item: Mapping[str, Any], all_rows: Sequence[Mapping[
         if dimension in actual_by_dimension:
             raise ReportInputError("bundle_snapshot_dimension_duplicate", f"{symbol} 重复维度：{dimension}")
         quality = _snapshot_status(row)
-        if quality not in _PASSING_STATUSES:
+        query_manifest = (
+            dict(row.get("query_manifest") or {})
+            if isinstance(row.get("query_manifest"), Mapping)
+            else {}
+        )
+        degradation = (
+            dict(query_manifest.get("degradation") or {})
+            if isinstance(query_manifest.get("degradation"), Mapping)
+            else {}
+        )
+        safe_degradation = bool(
+            degraded_bundle
+            and quality == "data_gap"
+            and degradation.get("safe_for_report") is True
+            and degradation.get("excluded_from_scoring") is True
+        )
+        if (
+            not uses_uzi_gate
+            and quality not in _PASSING_STATUSES
+            and not safe_degradation
+        ):
             raise ReportInputError(
                 "bundle_snapshot_not_eligible",
                 f"{symbol}/{dimension} 状态 {quality or 'unknown'} 不能用于正式报告",
@@ -1251,7 +1320,11 @@ def _validate_manifest_item(item: Mapping[str, Any], all_rows: Sequence[Mapping[
             or (row.get("_market_data") or {}).get("evidence_grade")
             or ""
         ).strip().upper()
-        if evidence_grade not in {"A", "B"}:
+        if (
+            not uses_uzi_gate
+            and evidence_grade not in {"A", "B"}
+            and not safe_degradation
+        ):
             raise ReportInputError(
                 "bundle_snapshot_evidence_ineligible",
                 f"{symbol}/{dimension} 证据等级 {evidence_grade} 不能用于正式报告",
@@ -1262,7 +1335,14 @@ def _validate_manifest_item(item: Mapping[str, Any], all_rows: Sequence[Mapping[
                 "bundle_snapshot_contract_mismatch",
                 f"{symbol}/{dimension} 快照契约与 Bundle 不一致",
             )
-        if not [ref for ref in row.get("source_refs") or [] if isinstance(ref, Mapping)]:
+        if (
+            not uses_uzi_gate
+            and not [
+                ref
+                for ref in row.get("source_refs") or []
+                if isinstance(ref, Mapping)
+            ]
+        ):
             raise ReportInputError(
                 "bundle_snapshot_evidence_missing",
                 f"{symbol}/{dimension} 快照没有可审计证据引用",
@@ -1485,7 +1565,10 @@ def _canonical_fund_dependency_context(payload) -> dict[str, Any]:
 
 
 def _materialize_fund_dependency(repository, bundle):
-    from research_system.market_data.bundles import BundleIntegrityError, BundleMaterializer
+    from research_system.market_data.bundles import (
+        BundleIntegrityError,
+        BundleMaterializer,
+    )
     from research_system.market_data.fund_holdings_contracts import (
         FUND_HOLDINGS_CONTRACT_VERSION,
         FUND_TOP_HOLDINGS_DIMENSION,

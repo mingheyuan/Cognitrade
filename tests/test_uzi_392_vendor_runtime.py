@@ -12,6 +12,8 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import yaml
+
 from domain_packs.finance_ashare.tools import snapshot_collector
 from domain_packs.finance_ashare.vendor.uzi_3_9_2 import (
     UZI_COMMAND_IDS,
@@ -48,6 +50,26 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
         self.assertTrue(report["standalone_skill_tree_matches"])
         self.assertIn("quick-scan", UZI_COMMAND_IDS)
         self.assertEqual(len(UZI_FETCHER_IDS), 22)
+
+    def test_capability_ledger_report_hashes_match_runtime_integrity_lock(self) -> None:
+        ledger_path = (
+            Path(__file__).resolve().parents[1]
+            / "domain_packs"
+            / "finance_ashare"
+            / "migration"
+            / "uzi_3_9_2_capability_ledger.yaml"
+        )
+        ledger = yaml.safe_load(ledger_path.read_text(encoding="utf-8"))
+        native_report = ledger["native_report"]
+
+        self.assertEqual(
+            native_report["template_sha256"],
+            uzi_runtime.UZI_REPORT_TEMPLATE_SHA256,
+        )
+        self.assertEqual(
+            native_report["renderer_helpers"],
+            uzi_runtime.UZI_REPORT_RENDERER_SHA256,
+        )
 
     def test_all_referenced_standalone_skill_resources_are_vendored(self) -> None:
         root = (
@@ -701,6 +723,10 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
                 "COGNITRADE_SENSITIVE_SOURCE_ALLOWLIST": "",
                 "COGNITRADE_XUEQIU_COOKIE": "",
             },
+        ), patch.object(
+            snapshot_collector,
+            "_UZI_MINI_RACER_FETCHERS",
+            frozenset({"7_industry", "10_valuation"}),
         ), patch.object(Uzi392FetcherRuntime, "collect", autospec=True) as mocked:
             mocked.side_effect = lambda _self, fetcher_id, **kwargs: collect(fetcher_id, **kwargs)
             rows = snapshot_collector.collect_snapshots(

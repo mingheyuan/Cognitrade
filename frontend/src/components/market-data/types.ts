@@ -64,6 +64,13 @@ export interface DimensionCoverage {
   published_at?: string | null
   observed_at?: string | null
   conflict_id?: string | null
+  degraded?: boolean
+  excluded_from_scoring?: boolean
+  eligible?: boolean
+  native_quality?: string | null
+  audit_eligible?: boolean
+  audit_reason?: string | null
+  audit_errors?: string[]
 }
 
 export interface CoverageCounts {
@@ -72,6 +79,7 @@ export interface CoverageCounts {
   data_gap: number
   conflict: number
   stale: number
+  degraded: number
 }
 
 export interface BundleReference {
@@ -91,9 +99,30 @@ export interface MarketDataCoverage {
   counts: CoverageCounts
   structurally_complete: boolean
   report_ready: boolean
+  report_generatable: boolean
+  resolved_dimension_count: number
+  degraded_dimension_count: number
+  quality: 'strict' | 'degraded' | 'blocked'
   dimensions: DimensionCoverage[]
   latest_bundle: BundleReference | null
   contract_version?: string
+  gate_policy?: string
+  uzi_integrity?: UziDataPrecheck
+  uzi_integrity_by_profile?: Record<'lite' | 'medium' | 'deep', UziDataPrecheck>
+  audit_ready_dimension_count?: number
+  audit_ready?: boolean
+}
+
+export interface UziDataPrecheck {
+    coverage_pct?: number
+    passed_checks?: number
+    total_checks?: number
+    critical_count?: number
+    warning_count?: number
+    gate_passed?: boolean
+    profile?: string
+    gate_policy?: string
+    issues?: Array<{ severity: string; check: string; dimension?: string; message?: string }>
 }
 
 export interface EvidenceRecord {
@@ -162,6 +191,8 @@ export interface CollectionProgress {
   completed: number
   failed: number
   skipped: number
+  child_complete?: number
+  child_total?: number
 }
 
 export interface CollectionTask {
@@ -171,10 +202,63 @@ export interface CollectionTask {
   status: string
   attempt: number
   max_attempts?: number
+  retryable?: boolean
   error_code?: string | null
   error_message?: string | null
+  failure_kind?: string | null
+  failure_stage?: string | null
+  failure_label?: string | null
+  raw_data_present?: boolean
   retry_at?: string | null
   snapshot_id?: string | null
+  resolution_status?: string
+  degraded_count?: number
+}
+
+export interface CollectionResolutionSummary {
+  total: number
+  strict: number
+  degraded: number
+  skipped: number
+  failed: number
+  by_status: Record<string, number>
+}
+
+export interface CollectionDiagnosticBucket {
+  key: string
+  count: number
+  retryable_count: number
+  blocked_count: number
+  active_count: number
+  sample_message?: string | null
+}
+
+export interface CollectionTaskSummary {
+  total: number
+  by_status: Record<string, number>
+  active: number
+  succeeded: number
+  skipped: number
+  retryable_failed: number
+  blocked_failed: number
+  by_error_code: CollectionDiagnosticBucket[]
+  by_dimension: CollectionDiagnosticBucket[]
+}
+
+export interface FundPortfolioSummary {
+  total_holdings: number
+  ready_holdings: number
+  dimensions_per_holding: number
+  total_slots: number
+  ready_slots: number
+  missing_slots: number
+  retryable_slots: number
+  blocked_slots: number
+  active_slots: number
+  attempt: number
+  current_child_job_ids: string[]
+  by_error_code: CollectionDiagnosticBucket[]
+  by_dimension: CollectionDiagnosticBucket[]
 }
 
 export interface ExpandedFundHolding {
@@ -208,6 +292,7 @@ export interface CollectionJob {
   end_date: string
   max_concurrency: number
   publish_when_complete: boolean
+  scoped_retry_supported?: boolean
   progress: CollectionProgress
   requested_by?: string | null
   created_at: string
@@ -218,6 +303,9 @@ export interface CollectionJob {
   parent_bundle_hash?: string | null
   expanded_holdings: ExpandedFundHolding[]
   child_collection_job_ids: string[]
+  task_summary?: CollectionTaskSummary
+  resolution_summary?: CollectionResolutionSummary
+  portfolio_summary?: FundPortfolioSummary
   tasks?: CollectionTask[]
 }
 
@@ -258,6 +346,8 @@ export interface MarketDataProvider {
   missing_requirements?: string[]
   last_tested_at?: string | null
   last_error?: string | null
+  supports_historical_reconstruction?: boolean
+  historical_capabilities?: Record<string, 'current_only' | 'dated_series' | 'published_archive'>
 }
 
 export interface MarketDataSubscription {
@@ -308,6 +398,11 @@ export interface CollectionJobInput {
   mode: 'missing_or_stale' | 'force_all'
   max_concurrency: number
   publish_when_complete: boolean
+}
+
+export interface CollectionRetryInput {
+  symbols?: string[]
+  dimensions?: string[]
 }
 
 export interface ManualSnapshotInput {

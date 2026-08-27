@@ -11,7 +11,6 @@ from research_system.market_data.models import (
     MarketDataBundle,
     MarketDataBundleItem,
     MarketDataCollectionJob,
-    MarketDataCollectionTask,
     MarketDataConflict,
     MarketDataEvidence,
     MarketDataObservation,
@@ -100,39 +99,6 @@ class MarketDataRepository:
         statement = statement.order_by(
             MarketDataSnapshot.published_at.desc(), MarketDataSnapshot.created_at.desc()
         ).offset(max(0, offset)).limit(max(1, min(limit, 1000)))
-        return list(self.session.scalars(statement))
-
-    def list_candidate_snapshots(
-        self,
-        *,
-        symbol: str,
-        market: str,
-        dimension: str,
-        as_of_date: date,
-        contract_version: str,
-        cutoff_at: datetime,
-    ) -> list[MarketDataSnapshot]:
-        cutoff_at = require_aware_utc(cutoff_at, field_name="cutoff_at")
-        statement = (
-            select(MarketDataSnapshot)
-            .where(
-                MarketDataSnapshot.symbol == symbol.strip().upper(),
-                MarketDataSnapshot.market == market.strip().upper(),
-                MarketDataSnapshot.dimension == dimension,
-                MarketDataSnapshot.as_of_date == as_of_date,
-                MarketDataSnapshot.contract_version == contract_version,
-                MarketDataSnapshot.published_at <= cutoff_at,
-                MarketDataSnapshot.revoked_at.is_(None),
-                MarketDataSnapshot.status.in_(("available", "verified_empty")),
-                MarketDataSnapshot.evidence_grade.in_(("A", "B")),
-            )
-            .order_by(
-                MarketDataSnapshot.source_priority.asc(),
-                MarketDataSnapshot.published_at.desc(),
-                MarketDataSnapshot.observed_at.desc(),
-                MarketDataSnapshot.created_at.desc(),
-            )
-        )
         return list(self.session.scalars(statement))
 
     def add_snapshot_evidence(
@@ -410,19 +376,6 @@ class MarketDataRepository:
             max(1, min(limit, 1000))
         )
         return list(self.session.scalars(statement))
-
-    def list_collection_tasks(self, job_id: str) -> list[MarketDataCollectionTask]:
-        return list(
-            self.session.scalars(
-                select(MarketDataCollectionTask)
-                .where(MarketDataCollectionTask.job_id == job_id)
-                .order_by(
-                    MarketDataCollectionTask.symbol,
-                    MarketDataCollectionTask.dimension,
-                    MarketDataCollectionTask.start_date,
-                )
-            )
-        )
 
     # Bundles --------------------------------------------------------------------------
     def get_bundle(self, bundle_id: str) -> MarketDataBundle | None:

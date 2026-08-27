@@ -1,5 +1,5 @@
 import { ArchiveRestore, CheckCircle2, PlugZap, RefreshCw, ServerOff, ShieldCheck } from 'lucide-react'
-import { useMemo, useRef } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { formatDateTime } from './status'
 import { EmptyState, LoadingState, StatusBadge } from './shared'
 import type { MarketDataProvider, MarketDataSubscription, PageResult } from './types'
@@ -25,7 +25,23 @@ export function ProviderSubscriptionPanel({ symbol, market, providers, subscript
   const current = useMemo(() => subscriptions.items.find((item) => item.symbol === symbol), [subscriptions.items, symbol])
   const storedSchedule = current?.schedule_time || '23:15'
   const scheduleRef = useRef<HTMLInputElement>(null)
+  const [providerSearch, setProviderSearch] = useState('')
+  const [providerState, setProviderState] = useState<'all' | 'ready' | 'gap'>('all')
+  const [providerCapability, setProviderCapability] = useState('all')
   const timezone = current?.timezone || exchangeTimezone(market)
+  const providerCapabilities = useMemo(() => Array.from(new Set(providers.items.flatMap((provider) => provider.capabilities || []))).sort(), [providers.items])
+  const readyProviderCount = providers.items.filter((provider) => provider.installed && provider.configured).length
+  const visibleProviders = useMemo(() => {
+    const query = providerSearch.trim().toLowerCase()
+    return providers.items.filter((provider) => {
+      const ready = provider.installed && provider.configured
+      if (providerState === 'ready' && !ready) return false
+      if (providerState === 'gap' && ready) return false
+      if (providerCapability !== 'all' && !(provider.capabilities || []).includes(providerCapability)) return false
+      if (query && !`${provider.label} ${provider.provider_id} ${(provider.capabilities || []).join(' ')}`.toLowerCase().includes(query)) return false
+      return true
+    }).sort((left, right) => Number(left.installed && left.configured) - Number(right.installed && right.configured) || left.label.localeCompare(right.label, 'zh-CN'))
+  }, [providerCapability, providerSearch, providerState, providers.items])
   const update = (enabled: boolean) => {
     void onUpdate({
       ...current,
@@ -74,10 +90,23 @@ export function ProviderSubscriptionPanel({ symbol, market, providers, subscript
           <button className="secondary-button" type="button" disabled={loading} onClick={() => void onRefresh()}><RefreshCw className={loading ? 'is-spinning' : ''} size={14} />刷新状态</button>
         </header>
         <p className="mdc-form-note">这里只展示是否安装/配置，不返回 Cookie、密钥或凭据内容。配置检查不联网；实际可用性只由显式采集任务证明。</p>
+        <div className="mdc-provider-summary" aria-label="数据源配置摘要">
+          <span><strong>{providers.total_count}</strong> 已登记</span>
+          <span><strong>{readyProviderCount}</strong> 配置就绪</span>
+          <span className={providers.total_count - readyProviderCount ? 'is-warning' : ''}><strong>{providers.total_count - readyProviderCount}</strong> 能力缺口</span>
+          <span><strong>0</strong> 网络探测（设计上不自动执行）</span>
+        </div>
+        <div className="mdc-provider-filters">
+          <label>搜索数据源<input type="search" value={providerSearch} onChange={(event) => setProviderSearch(event.target.value)} placeholder="名称、ID 或能力" /></label>
+          <label>配置状态<select value={providerState} onChange={(event) => setProviderState(event.target.value as typeof providerState)}><option value="all">全部状态</option><option value="gap">仅能力缺口</option><option value="ready">仅配置就绪</option></select></label>
+          <label>能力<select value={providerCapability} onChange={(event) => setProviderCapability(event.target.value)}><option value="all">全部能力</option>{providerCapabilities.map((capability) => <option key={capability} value={capability}>{capability}</option>)}</select></label>
+          <span>显示 {visibleProviders.length} / {providers.total_count}</span>
+        </div>
         {loading && !providers.items.length ? <LoadingState label="正在读取 Provider 能力…" /> : null}
         {!loading && !providers.items.length ? <EmptyState title="没有 Provider 状态" detail="后端尚未注册可用数据源适配器。" /> : null}
+        {!loading && providers.items.length && !visibleProviders.length ? <EmptyState title="没有匹配的数据源" detail="请调整搜索、配置状态或能力筛选。" /> : null}
         <div className="mdc-provider-grid">
-          {providers.items.map((provider) => {
+          {visibleProviders.map((provider) => {
             const capable = provider.installed && provider.configured
             return (
               <article key={provider.provider_id} className={capable ? 'is-capable' : 'is-gap'}>
@@ -89,6 +118,7 @@ export function ProviderSubscriptionPanel({ symbol, market, providers, subscript
                 <div className="mdc-provider-flags">
                   <span>{provider.installed ? <CheckCircle2 size={13} /> : <ServerOff size={13} />}依赖{provider.installed ? '已安装' : '未安装'}</span>
                   <span>{provider.configured ? <ShieldCheck size={13} /> : <ServerOff size={13} />}配置{provider.configured ? '已就绪' : '缺失'}</span>
+                  <span>{provider.supports_historical_reconstruction ? <ArchiveRestore size={13} /> : <ServerOff size={13} />}历史{provider.supports_historical_reconstruction ? '可重建' : '仅当前/归档'}</span>
                 </div>
                 {!!provider.capabilities?.length && <p>{provider.capabilities.join(' · ')}</p>}
                 {!!provider.missing_requirements?.length && <p className="is-warning">缺少：{provider.missing_requirements.join('、')}</p>}

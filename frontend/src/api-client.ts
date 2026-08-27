@@ -12,7 +12,6 @@ import type {
   SystemStatus,
 } from './research-contracts'
 import type {
-  MarketDataResponse,
   MarketQuote,
   PaperAccount,
   PaperOrder,
@@ -21,7 +20,6 @@ import type {
   PaperOrderInput,
   PaperPortfolio,
   QuantEngineStatus,
-  SecuritySearchResponse,
 } from './finance-contracts'
 import { localizeErrorMessage } from './utils/error-message'
 import type {
@@ -29,7 +27,6 @@ import type {
   BacktestPreflight,
   DailyReportSet,
   PaperStrategyBinding,
-  StrategyPaperOrder,
   ReportJob,
   StrategyAssignment,
   StrategyBacktest,
@@ -194,10 +191,6 @@ export class CognitradeApiClient {
     return Array.from(new Map(rows.map((run) => [run.run_id, run])).values())
   }
 
-  createRun(payload: ResearchRequest): Promise<ResearchResponse> {
-    return this.request('/runs', { method: 'POST', body: JSON.stringify(payload) })
-  }
-
   createChatThread(): Promise<ChatThreadRecord> {
     return this.request('/chat/threads', { method: 'POST' })
   }
@@ -251,10 +244,6 @@ export class CognitradeApiClient {
   listFundHoldingReportBatches(sourceRunId: string, fundCode?: string): Promise<FundHoldingReportBatch[]> {
     const query = fundCode ? `?fund_code=${encodeURIComponent(fundCode)}` : ''
     return this.request(`/runs/${encodeURIComponent(sourceRunId)}/holding-report-batches${query}`)
-  }
-
-  getFundHoldingReportBatch(batchId: string): Promise<FundHoldingReportBatch> {
-    return this.request(`/holding-report-batches/${encodeURIComponent(batchId)}`)
   }
 
   cancelFundHoldingReportBatch(batchId: string): Promise<FundHoldingReportBatch> {
@@ -351,26 +340,10 @@ export class CognitradeApiClient {
     )
   }
 
-  searchSecurities(query: string, limit = 8): Promise<SecuritySearchResponse> {
-    return this.financeRequest(
-      `/finance/securities?query=${encodeURIComponent(query)}&limit=${limit}`,
-    )
-  }
-
-  getMarketData(symbol: string, refresh = false): Promise<MarketDataResponse> {
-    return this.financeRequest(
-      `/finance/market-data/${encodeURIComponent(symbol)}?refresh=${refresh}`,
-    )
-  }
-
   getMarketQuote(symbol: string, refresh = false): Promise<MarketQuote> {
     return this.financeRequest(
       `/finance/quotes/${encodeURIComponent(symbol)}?refresh=${refresh}`,
     )
-  }
-
-  getPaperAccount(): Promise<PaperAccount> {
-    return this.financeRequest('/finance/paper/account')
   }
 
   resetPaperAccount(initialCash = 1_000_000): Promise<PaperAccount> {
@@ -409,10 +382,6 @@ export class CognitradeApiClient {
     return this.financeRequest(`/finance/paper/orders/${encodeURIComponent(orderId)}/cancel`, {
       method: 'POST',
     })
-  }
-
-  listStrategyCatalog(): Promise<{ strategies: StrategyRecord[] }> {
-    return this.financeRequest('/finance/strategy-catalog')
   }
 
   listStrategies(includeArchived = false): Promise<{ strategies: StrategyRecord[] }> {
@@ -456,10 +425,6 @@ export class CognitradeApiClient {
 
   restoreStrategy(strategyId: string): Promise<StrategyRecord> {
     return this.financeRequest(`/finance/strategies/${encodeURIComponent(strategyId)}/restore`, { method: 'POST' })
-  }
-
-  listStrategyVersions(strategyId: string): Promise<{ strategy_id: string; versions: StrategyRecord['versions'] }> {
-    return this.financeRequest(`/finance/strategies/${encodeURIComponent(strategyId)}/versions`)
   }
 
   getStrategyVersion(strategyId: string, versionId: string): Promise<Record<string, unknown>> {
@@ -554,8 +519,16 @@ export class CognitradeApiClient {
     return this.financeRequest('/finance/strategy-backtests', { method: 'POST', body: JSON.stringify(payload) })
   }
 
-  listStrategyBacktests(): Promise<{ backtests: StrategyBacktest[] }> {
-    return this.financeRequest('/finance/strategy-backtests')
+  listStrategyBacktests(filters: { strategyId?: string; strategyVersionId?: string; fundCode?: string; mode?: BacktestMode; status?: string; limit?: number } = {}): Promise<{ backtests: StrategyBacktest[] }> {
+    const query = new URLSearchParams()
+    if (filters.strategyId) query.set('strategy_id', filters.strategyId)
+    if (filters.strategyVersionId) query.set('strategy_version_id', filters.strategyVersionId)
+    if (filters.fundCode) query.set('fund_code', filters.fundCode)
+    if (filters.mode) query.set('mode', filters.mode)
+    if (filters.status) query.set('status', filters.status)
+    if (filters.limit) query.set('limit', String(filters.limit))
+    const suffix = query.size ? `?${query.toString()}` : ''
+    return this.financeRequest(`/finance/strategy-backtests${suffix}`)
   }
 
   getStrategyBacktest(backtestId: string): Promise<StrategyBacktest> {
@@ -589,28 +562,6 @@ export class CognitradeApiClient {
 
   listPaperStrategyBindings(): Promise<{ bindings: PaperStrategyBinding[] }> {
     return this.financeRequest('/finance/paper-strategy-bindings')
-  }
-
-  listStrategyPaperOrders(bindingId?: string): Promise<{ orders: StrategyPaperOrder[] }> {
-    const query = bindingId ? `?binding_id=${encodeURIComponent(bindingId)}` : ''
-    return this.financeRequest(`/finance/strategy-paper-orders${query}`)
-  }
-
-  submitStrategyPaperOrder(bindingId: string, payload: {
-    signal_id: string
-    side: 'buy' | 'sell'
-    quantity: number
-    technical_reason: string
-    client_order_id: string
-    trading_date?: string
-    order_type?: 'market' | 'limit'
-    limit_price?: number
-  }): Promise<StrategyPaperOrder> {
-    return this.financeRequest(`/finance/paper-strategy-bindings/${encodeURIComponent(bindingId)}/orders`, {
-      method: 'POST',
-      headers: { 'Idempotency-Key': payload.client_order_id },
-      body: JSON.stringify(payload),
-    })
   }
 
   async getRunDetail(runId: string): Promise<RunDetail> {

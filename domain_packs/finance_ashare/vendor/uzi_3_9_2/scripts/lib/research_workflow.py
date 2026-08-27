@@ -19,6 +19,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
+from lib.stock_features import sanitize_features
+
 
 def _num(v, default=0.0) -> float:
     try:
@@ -42,6 +44,7 @@ def build_initiating_coverage(
     Maps to JPMorgan / Goldman / MS format. Returns a structured dict that
     the report template renders as a long-form "机构首次覆盖报告".
     """
+    features = sanitize_features(features)
     dims = raw_data.get("dimensions", {}) or {}
     basic = (dims.get("0_basic") or {}).get("data") or {}
     fin = (dims.get("1_financials") or {}).get("data") or {}
@@ -54,8 +57,9 @@ def build_initiating_coverage(
 
     # Target price: blend DCF + comps if available
     targets = []
-    if dcf_result and dcf_result.get("intrinsic_per_share", 0) > 0:
-        targets.append(("DCF", dcf_result["intrinsic_per_share"]))
+    dcf_intrinsic = _num((dcf_result or {}).get("intrinsic_per_share"))
+    if dcf_intrinsic > 0:
+        targets.append(("DCF", dcf_intrinsic))
     if comps_result:
         implied = comps_result.get("implied_price") or {}
         for k, v in implied.items():
@@ -64,12 +68,14 @@ def build_initiating_coverage(
     if targets:
         blended = round(sum(t[1] for t in targets) / len(targets), 2)
     else:
-        blended = price * 1.15 if price > 0 else 0
+        blended = 0
 
-    upside_pct = round((blended - price) / price * 100, 1) if price > 0 else 0
+    upside_pct = round((blended - price) / price * 100, 1) if targets and price > 0 else 0
 
     # Rating logic
-    if upside_pct >= 25:
+    if not targets:
+        rating = "未评级 (Not Rated)"
+    elif upside_pct >= 25:
         rating = "买入 (Overweight)"
     elif upside_pct >= 10:
         rating = "增持 (Outperform)"
@@ -81,11 +87,18 @@ def build_initiating_coverage(
     # Executive summary
     roe_hist = fin.get("roe_history") or []
     roe_last = _num(roe_hist[-1]) if roe_hist else 0
-    exec_summary = (
-        f"我们首次覆盖{name}（{basic.get('code','-')}），给予「{rating}」评级，"
-        f"目标价 ¥{blended:.2f}，较现价 ¥{price:.2f} 空间 {upside_pct:+.1f}%。"
-        f"公司属于{industry}行业，最新 ROE {roe_last:.1f}%。"
-    )
+    if targets:
+        exec_summary = (
+            f"我们首次覆盖{name}（{basic.get('code','-')}），给予「{rating}」评级，"
+            f"目标价 ¥{blended:.2f}，较现价 ¥{price:.2f} 空间 {upside_pct:+.1f}%。"
+            f"公司属于{industry}行业，最新 ROE {roe_last:.1f}%。"
+        )
+    else:
+        exec_summary = (
+            f"我们首次覆盖{name}（{basic.get('code','-')}），暂不给出目标价或方向评级。"
+            f"DCF 与可比公司估值均缺少有效结果，应待盈利恢复或补齐 PB/Comps 数据后重估。"
+            f"公司属于{industry}行业，最新 ROE {roe_last:.1f}%。"
+        )
 
     # Investment thesis (3-5 pillars)
     thesis_pillars = _build_thesis_pillars(features, fin, moat)
@@ -95,25 +108,31 @@ def build_initiating_coverage(
 
     # Valuation bridge
     valuation_bridge = []
-    if dcf_result:
+    if dcf_intrinsic > 0:
+        wacc_breakdown = dcf_result.get("wacc_breakdown") or {}
+        assumptions = dcf_result.get("assumptions") or {}
         valuation_bridge.append({
             "method": "DCF",
-            "value": dcf_result.get("intrinsic_per_share", 0),
-            "rationale": f"WACC {dcf_result.get('wacc_breakdown', {}).get('wacc', 0)*100:.1f}% + 终值 g {dcf_result.get('assumptions', {}).get('terminal_g', 0)*100:.1f}%",
+            "value": dcf_intrinsic,
+            "rationale": f"WACC {_num(wacc_breakdown.get('wacc'))*100:.1f}% + 终值 g {_num(assumptions.get('terminal_g'))*100:.1f}%",
         })
     if comps_result:
         implied = comps_result.get("implied_price") or {}
         for k, v in implied.items():
+            value = _num(v)
+            if value <= 0:
+                continue
             valuation_bridge.append({
                 "method": f"Comps ({k})",
-                "value": _num(v),
+                "value": value,
                 "rationale": f"同行中位数估值法",
             })
-    valuation_bridge.append({
-        "method": "Blended",
-        "value": blended,
-        "rationale": f"平均 {len(targets)} 种估值方法",
-    })
+    if targets:
+        valuation_bridge.append({
+            "method": "Blended",
+            "value": blended,
+            "rationale": f"平均 {len(targets)} 种估值方法",
+        })
 
     # Key financial table (5yr hist + 3yr fwd projection stub)
     rev_hist = fin.get("revenue_history") or []
@@ -634,6 +653,7 @@ def run_idea_screen(features: dict, style: str = "quality") -> dict:
 
     Styles: value / growth / quality / short / gulp (growth@reasonable price)
     """
+    features = sanitize_features(features)
     screens = {
         "value": [
             ("PE < 15", features.get("pe", 100) < 15),

@@ -3,32 +3,34 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshot_bundle
 from domain_packs.finance_ashare.subagents.fund_methodology import build_fund_analysis
-from domain_packs.finance_ashare.subagents.uzi_methodology import (
-    build_features,
-    build_quick_scan,
-    select_profile,
+from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
+    execute_native_analysis,
 )
-from domain_packs.finance_ashare.subagents.uzi_392_native_methods import execute_native_method
 from domain_packs.finance_ashare.subagents.uzi_392_native_commands import (
     execute_panel_only,
     execute_scan_trap,
     execute_segmental_model,
 )
-from domain_packs.finance_ashare.subagents.uzi_392_analysis import execute_native_analysis
+from domain_packs.finance_ashare.subagents.uzi_392_native_methods import (
+    execute_native_method,
+)
+from domain_packs.finance_ashare.subagents.uzi_methodology import (
+    build_quick_scan,
+    select_profile,
+)
 from domain_packs.finance_ashare.subagents.uzi_portfolio_contract import (
     normalize_portfolio_holdings,
     result_ticker,
     result_ticker_identities,
     ticker_identity,
 )
+from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshot_bundle
 from research_system.adapters.vendors.akshare_utils import coerce_numeric
-from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.market_data.report_inputs import validate_bundle_only_input
+from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.schemas.artifacts import ArtifactDraft
 from research_system.schemas.execution_runtime import NodeExecutionOutput
-
 
 _SCREEN_STYLE_CRITERIA = {
     "value": (
@@ -181,7 +183,9 @@ def collect_fund_snapshot(context):
     else:
         # Direct Pack unit tests can use a minimal execution context. Production
         # Graph execution always invokes the governed Pack tool above.
-        from domain_packs.finance_ashare.skills.fund_snapshot.skill import FundSnapshotSkill
+        from domain_packs.finance_ashare.skills.fund_snapshot.skill import (
+            FundSnapshotSkill,
+        )
 
         payload = FundSnapshotSkill().run(**arguments)
         governed_source_refs = []
@@ -569,10 +573,22 @@ def _normalize_snapshot_record(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 def _snapshot_quality_reasons(snapshot: dict[str, Any]) -> list[str]:
     facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
+    query_manifest = (
+        snapshot.get("query_manifest")
+        if isinstance(snapshot.get("query_manifest"), dict)
+        else {}
+    )
+    degradation = (
+        query_manifest.get("degradation")
+        if isinstance(query_manifest.get("degradation"), dict)
+        else {}
+    )
     values = [
         *list(snapshot.get("degrade_reasons") or []),
         snapshot.get("degrade_reason"),
         *list(facts.get("data_gap") or []),
+        degradation.get("reason_code"),
+        degradation.get("message"),
     ]
     reasons: list[str] = []
     for value in values:
@@ -665,12 +681,26 @@ def _snapshot_artifact_content(snapshot: dict[str, Any]) -> dict[str, Any]:
     if snapshot.get("theme") is not None and "theme" not in facts:
         facts["theme"] = snapshot.get("theme")
     source = snapshot.get("source") if isinstance(snapshot.get("source"), dict) else {}
+    query_manifest = (
+        dict(snapshot.get("query_manifest"))
+        if isinstance(snapshot.get("query_manifest"), dict)
+        else {}
+    )
+    degradation = (
+        dict(query_manifest.get("degradation"))
+        if isinstance(query_manifest.get("degradation"), dict)
+        else {}
+    )
     snapshot_type = str(snapshot.get("snapshot_type") or "snapshot").strip()
     scope = "symbol" if snapshot.get("symbol") else (
         "sector" if snapshot.get("sector") or snapshot_type in {"sector", "policy", "macro"} else "symbol"
     )
     return {
         "snapshot_type": snapshot_type,
+        "dimension_id": str(
+            snapshot.get("dimension_id") or snapshot.get("dimension") or ""
+        )
+        or None,
         "scope": scope,
         "symbol": str(snapshot.get("symbol") or "") or None,
         "sector": str(snapshot.get("sector") or "") or None,
@@ -687,6 +717,12 @@ def _snapshot_artifact_content(snapshot: dict[str, Any]) -> dict[str, Any]:
             if str(item).strip()
         ],
         "degrade_reasons": _snapshot_quality_reasons(snapshot),
+        "query_manifest": query_manifest,
+        "scoring_policy": {
+            "excluded": degradation.get("excluded_from_scoring") is True,
+            "reason_code": degradation.get("reason_code"),
+            "reason": degradation.get("message"),
+        },
         "facts": facts,
         "source": source,
         "source_trace": [
@@ -956,7 +992,11 @@ def compose_uzi_native_delivery(context):
         ],
         "risk": [str(row.get("issue") or "") for row in [*critical_issues, *warning_issues]],
         "follow_up": [str(row.get("suggested_fix") or "") for row in critical_issues],
-        "quality_status": "available" if allowed else "quality_gate_blocked",
+        "quality_status": (
+            str(content.get("quality_status") or "degraded")
+            if allowed
+            else "quality_gate_blocked"
+        ),
         "delivery_type": "uzi_native_3_9_4",
         "native_analysis_artifact_id": analysis.artifact_id,
         "report_allowed": allowed,
@@ -1068,7 +1108,14 @@ def compose_stock_comparison_delivery(context):
             if str(issue.get("suggested_fix") or "").strip()
         ],
         "delivery_type": "uzi_versus_3_9_4",
-        "quality_status": "available" if allowed else "data_gap",
+        "quality_status": (
+            "degraded"
+            if allowed
+            and any(row.get("quality_status") == "degraded" for row in successful_results)
+            else "available"
+            if allowed
+            else "data_gap"
+        ),
         "native_analysis_artifact_id": analysis.artifact_id,
         "report_allowed": allowed,
         # Aggregate runners model unavailable constituents as ``failed`` rather
@@ -1205,7 +1252,14 @@ def compose_uzi_portfolio_delivery(context):
         "risk": [str(row.get("issue") or "") for row in [*critical_issues, *warning_issues]],
         "follow_up": [str(row.get("suggested_fix") or "") for row in critical_issues],
         "delivery_type": "uzi_portfolio_3_9_4",
-        "quality_status": "available" if allowed else "data_gap",
+        "quality_status": (
+            "degraded"
+            if allowed
+            and any(row.get("quality_status") == "degraded" for row in successful_results)
+            else "available"
+            if allowed
+            else "data_gap"
+        ),
         "native_analysis_artifact_id": analysis.artifact_id,
         "report_allowed": allowed,
         "critical_count": 0,

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MarketData, type MarketDataViewState } from './MarketData'
 
@@ -60,8 +60,16 @@ function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } })
 }
 
-function installApi(options: { ready?: boolean } = {}) {
+const pollingJob = {
+  id: 'job-poll-1', status: 'running', mode: 'missing_or_stale', asset_family: 'equity', top_n: 10,
+  symbols: ['600519.SH'], dimensions: ['d0', 'd1', 'd2'], start_date: '2026-08-20', end_date: '2026-08-20',
+  max_concurrency: 5, publish_when_complete: true, progress: { total: 3, completed: 0, by_status: { running: 3 } },
+  created_at: '2026-08-20T08:00:00Z',
+}
+
+function installApi(options: { ready?: boolean; jobResponses?: unknown[][] } = {}) {
   const requests: Array<{ url: string; init?: RequestInit }> = []
+  let jobRequestIndex = 0
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     requests.push({ url, init })
@@ -87,7 +95,12 @@ function installApi(options: { ready?: boolean } = {}) {
       start_date: '2026-08-20', end_date: '2026-08-20', max_concurrency: 5, publish_when_complete: true,
       progress: { total: 3, completed: 0, by_status: { queued: 3 } }, created_at: '2026-08-20T08:00:00Z',
     })
-    if (url.includes('/market-data/collection-jobs')) return json({ items: [], total_count: 0, limit: 50, offset: 0 })
+    if (url.includes('/market-data/collection-jobs')) {
+      const responses = options.jobResponses || []
+      const items = responses[Math.min(jobRequestIndex, Math.max(0, responses.length - 1))] || []
+      jobRequestIndex += 1
+      return json({ items, total_count: items.length, limit: 50, offset: 0 })
+    }
     if (url.endsWith('/market-data/manual-snapshots') && init?.method === 'POST') return json({
       id: 'manual-snapshot-1', symbol: '600519.SH', dimension: 'd0', status: 'available', evidence_grade: 'B',
     })
@@ -139,10 +152,42 @@ const completedFundJob = {
   max_concurrency: 5, publish_when_complete: true, progress: { total: 1, completed: 1, by_status: { succeeded: 1 } },
   checkpoint: { parent_bundle_id: 'fund-bundle-1', parent_bundle_hash: 'fund-bundle-hash', holdings: expandedHoldings, child_job_ids: ['child-job-a', 'child-job-b'] },
   expanded_holdings: expandedHoldings, child_collection_job_ids: ['child-job-a', 'child-job-b'], created_at: '2026-08-20T08:00:00Z',
+  task_summary: { total: 1, by_status: { succeeded: 1 }, active: 0, succeeded: 1, skipped: 0, retryable_failed: 0, blocked_failed: 0, by_error_code: [], by_dimension: [] },
+  portfolio_summary: { total_holdings: 10, ready_holdings: 10, dimensions_per_holding: 22, total_slots: 220, ready_slots: 220, missing_slots: 0, retryable_slots: 0, blocked_slots: 0, active_slots: 0, attempt: 1, current_child_job_ids: ['child-job-a', 'child-job-b'], by_error_code: [], by_dimension: [] },
 }
 
-function installFundApi() {
+const equityDimensions = Array.from({ length: 22 }, (_, index) => `${index}_dimension`)
+const partialHoldings = expandedHoldings.map((holding, index) => ({
+  ...holding,
+  missing_dimensions: index < 8 ? equityDimensions : index === 8 ? equityDimensions.slice(0, 20) : equityDimensions.slice(0, 1),
+}))
+
+const partialFundJob = {
+  ...completedFundJob,
+  status: 'partial',
+  progress: { total: 1, completed: 1, child_complete: 0, child_total: 10, by_status: { partial: 1 } },
+  checkpoint: { ...completedFundJob.checkpoint, holdings: partialHoldings },
+  expanded_holdings: partialHoldings,
+  task_summary: { total: 1, by_status: { partial: 1 }, active: 0, succeeded: 0, skipped: 0, retryable_failed: 1, blocked_failed: 0, by_error_code: [], by_dimension: [] },
+  portfolio_summary: {
+    total_holdings: 10, ready_holdings: 0, dimensions_per_holding: 22, total_slots: 220, ready_slots: 23, missing_slots: 197,
+    retryable_slots: 134, blocked_slots: 63, active_slots: 0, attempt: 2, current_child_job_ids: ['child-job-b'],
+    by_error_code: [
+      { key: 'provider_degraded', count: 134, retryable_count: 134, blocked_count: 0, active_count: 0, sample_message: '上游暂时降级' },
+      { key: 'strict_contract_gap', count: 63, retryable_count: 0, blocked_count: 63, active_count: 0, sample_message: '证据等级或字段合同不通过' },
+    ],
+    by_dimension: [{ key: '12_capital_flow', count: 10, retryable_count: 7, blocked_count: 3, active_count: 0, sample_message: '资金流证据缺失' }],
+  },
+  tasks: [{
+    id: 'fund-task-1', symbol: '020464', dimension_id: 'fund_top_holdings', status: 'partial',
+    attempt_count: 1, max_attempts: 3, retryable: true, error_code: 'fund_child_collection_incomplete',
+    error_message: '一个或多个持仓股票仍缺少报告所需行情维度或已发布 Bundle',
+  }],
+}
+
+function installFundApi(options: { job?: typeof completedFundJob | typeof partialFundJob } = {}) {
   const requests: Array<{ url: string; init?: RequestInit }> = []
+  const responseJob = options.job || completedFundJob
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     requests.push({ url, init })
@@ -158,8 +203,9 @@ function installFundApi() {
       latest_bundle: { bundle_id: 'fund-bundle-1', status: 'published', manifest_hash: 'fund-bundle-hash' },
       dimensions: [{ dimension: 'fund_top_holdings', ordinal: 0, status: 'available', stale: false, conflict: false, eligible: true, snapshot_id: 'fund-snapshot-1', evidence_grade: 'A' }],
     })
+    if (url.endsWith('/retry-failed') && init?.method === 'POST') return json({ ...responseJob, status: 'queued' })
     if (url.endsWith('/market-data/collection-jobs') && init?.method === 'POST') return json({ ...completedFundJob, status: 'queued', progress: { total: 1, completed: 0, by_status: { queued: 1 } } })
-    if (url.includes('/market-data/collection-jobs')) return json({ items: [completedFundJob], total_count: 1, limit: 50, offset: 0 })
+    if (url.includes('/market-data/collection-jobs')) return json({ items: [responseJob], total_count: 1, limit: 50, offset: 0 })
     if (url.endsWith('/market-data/report-manifests') && init?.method === 'POST') return json({ manifest_id: 'fund-manifest-1', status: 'frozen' })
     if (url.includes('/market-data/bundles/fund-bundle-1')) return json({
       id: 'fund-bundle-1', symbol: '020464', market: 'CN_FUND', as_of_date: '2026-08-20', cutoff_at: '2026-08-20T15:59:59Z',
@@ -185,6 +231,7 @@ describe('MarketDataCenter', () => {
 
   afterEach(() => {
     cleanup()
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
     vi.clearAllMocks()
   })
@@ -237,6 +284,42 @@ describe('MarketDataCenter', () => {
     expect(await screen.findByRole('heading', { name: '新建采集任务' })).toBeInTheDocument()
     expect(screen.getByRole('spinbutton', { name: '采集并发' })).toHaveAttribute('max', '5')
     expect(window.location.search).toContain('tab=jobs')
+  })
+
+  it('silently polls while a collection job is active and stops after it becomes terminal', async () => {
+    const intervals: Array<{ id: number; callback: () => void }> = []
+    let nextIntervalId = 41
+    vi.spyOn(window, 'setInterval').mockImplementation((handler: TimerHandler) => {
+      const id = nextIntervalId += 1
+      if (typeof handler === 'function') intervals.push({ id, callback: handler as () => void })
+      return id
+    })
+    const clearInterval = vi.spyOn(window, 'clearInterval')
+    window.history.replaceState({}, '', '/market-data?symbol=600519.SH&as_of_date=2026-08-20&cutoff=eod&tab=jobs')
+    const completedJob = {
+      ...pollingJob,
+      status: 'succeeded',
+      progress: { total: 3, completed: 3, by_status: { succeeded: 3 } },
+      completed_at: '2026-08-20T08:03:00Z',
+    }
+    const { requests } = installApi({ jobResponses: [[pollingJob], [pollingJob], [completedJob]] })
+    renderPage()
+
+    expect(await screen.findByText('job-poll-1')).toBeInTheDocument()
+    expect(screen.getByText(/运行中任务每 3 秒静默刷新/)).toBeInTheDocument()
+    const collectionReads = () => requests.filter((request) => request.url.includes('/market-data/collection-jobs') && request.init?.method !== 'POST').length
+    expect(collectionReads()).toBeGreaterThanOrEqual(1)
+    expect(intervals.length).toBeGreaterThanOrEqual(1)
+    const activeInterval = intervals.at(-1) as { id: number; callback: () => void }
+
+    act(() => activeInterval.callback())
+    await waitFor(() => expect(screen.getByText('3 / 3 已结算')).toBeInTheDocument())
+    expect(screen.getByText(/没有运行中任务/)).toBeInTheDocument()
+    const readsAfterCompletion = collectionReads()
+    expect(clearInterval).toHaveBeenCalledWith(activeInterval.id)
+
+    act(() => activeInterval.callback())
+    expect(collectionReads()).toBe(readsAfterCompletion)
   })
 
   it('freezes a ready bundle and launches the selected report profile', async () => {
@@ -294,7 +377,8 @@ describe('MarketDataCenter', () => {
     expect(await screen.findByRole('heading', { name: '基金持仓入口完整度' })).toBeInTheDocument()
     expect(screen.getByText('基金前十大持仓披露')).toBeInTheDocument()
     expect(screen.getByText('fund_top_holdings')).toBeInTheDocument()
-    expect(screen.getByText('/ 1')).toBeInTheDocument()
+    expect(screen.getByText('/ 10')).toBeInTheDocument()
+    expect(screen.getByText('220 / 220')).toBeInTheDocument()
     expect(screen.queryByText('基础行情')).not.toBeInTheDocument()
     expect(screen.getByText(/基金本身只占一个持仓披露槽/)).toBeInTheDocument()
     expect(requests.some((request) => request.url.includes('/contract?market=CN_FUND'))).toBe(true)
@@ -308,7 +392,7 @@ describe('MarketDataCenter', () => {
     expect(await screen.findByRole('heading', { name: '新建采集任务' })).toBeInTheDocument()
     const jobCode = await screen.findByText('fund-job-1')
     fireEvent.click(jobCode.closest('summary') as HTMLElement)
-    expect(screen.getByRole('heading', { name: '冻结前十大股票组合' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '前十大持仓采集链路' })).toBeInTheDocument()
     expect(screen.getByText('持仓股票 1')).toBeInTheDocument()
     expect(screen.getByText('持仓股票 10')).toBeInTheDocument()
     expect(screen.getByText('child-job-a')).toBeInTheDocument()
@@ -320,6 +404,23 @@ describe('MarketDataCenter', () => {
     expect(JSON.parse(String(creation?.init?.body))).toMatchObject({
       symbols: ['020464'], asset_family: 'fund', top_n: 10, dimensions: 'all', max_concurrency: 5,
     })
+  })
+
+  it('groups a partial fund workflow and exposes recovery for retryable holding gaps', async () => {
+    window.history.replaceState({}, '', '/market-data?symbol=020464&asset_family=fund&as_of_date=2026-08-20&cutoff=eod&tab=jobs')
+    const { requests } = installFundApi({ job: partialFundJob })
+    renderPage()
+
+    expect(await screen.findByRole('heading', { name: '前十大持仓采集链路' })).toBeInTheDocument()
+    expect(screen.getByText('0/10 只就绪')).toBeInTheDocument()
+    expect(screen.getAllByText('缺 22 槽')).toHaveLength(8)
+    expect(screen.getByText('134 个槽可恢复，63 个槽需修复')).toBeInTheDocument()
+    expect(screen.getByText(/合格 23\/220 槽/)).toBeInTheDocument()
+    expect(screen.getByText('strict_contract_gap')).toBeInTheDocument()
+    const retry = screen.getByRole('button', { name: /重试 134 个可重试槽/ })
+    fireEvent.click(retry)
+
+    await waitFor(() => expect(requests.some((request) => request.url.endsWith('/collection-jobs/fund-job-1/retry-failed') && request.init?.method === 'POST')).toBe(true))
   })
 
   it('freezes a fund report as the backend-derived ten-stock portfolio', async () => {

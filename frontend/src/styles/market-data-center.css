@@ -169,6 +169,15 @@
   gap: 8px;
 }
 
+.mdc-freeze-block-reason {
+  max-width: 520px;
+  margin: 0;
+  color: var(--warning);
+  font-size: 8px;
+  line-height: 1.45;
+  text-align: right;
+}
+
 .mdc-instrument-identity {
   display: grid;
   min-width: 240px;
@@ -723,72 +732,176 @@
 .mdc-job-card > summary::-webkit-details-marker { display: none; }
 .mdc-job-card > summary > span { display: grid; gap: 4px; min-width: 0; }
 .mdc-job-card > summary > span:first-child { display: flex; align-items: center; }
+.mdc-job-card > summary > span:first-child { flex-wrap: wrap; }
 .mdc-job-card > summary code { overflow: hidden; color: var(--text-faint); font-size: 8px; text-overflow: ellipsis; }
 .mdc-job-card > summary strong { overflow: hidden; color: var(--text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .mdc-job-card > summary small { color: var(--text-faint); font-size: 8px; }
 .mdc-job-card[open] > summary { background: var(--mint-soft); }
+.mdc-job-card.is-fund[open] > summary { background: color-mix(in srgb, var(--gold) 6%, var(--panel)); }
 .mdc-job-card[open] > summary > svg { transform: rotate(180deg); }
 .mdc-job-card-body { padding: 12px 16px 16px; border-top: 1px solid var(--border); background: var(--panel-soft); }
+.mdc-job-card:not([open]) > .mdc-job-card-body { display: none; }
 .mdc-job-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .mdc-job-meta span { padding: 4px 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-faint); font-size: 8px; }
 .mdc-job-error, .mdc-form-error { color: var(--rose); font-size: 9px; }
 
-.mdc-fund-expansion {
+.mdc-retry-available {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 6px;
+  border: 1px solid color-mix(in srgb, var(--warning) 34%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warning) 9%, transparent);
+  color: var(--warning);
+  font-size: 7px;
+  font-weight: 700;
+}
+
+.mdc-blocked-count {
+  padding: 3px 6px;
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  color: var(--rose);
+  font-size: 7px;
+  font-weight: 700;
+}
+
+.mdc-fund-progress .mdc-progress-track span { background: var(--gold); }
+
+.mdc-fund-workflow {
   margin: 10px 0;
-  border: 1px solid color-mix(in srgb, var(--mint) 24%, var(--border));
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--mint) 4%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--gold) 24%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--gold) 2%, var(--panel));
   overflow: hidden;
 }
 
-.mdc-fund-expansion > header {
+.mdc-fund-workflow > header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  padding: 11px 12px;
+  gap: 14px;
+  padding: 14px;
   border-bottom: 1px solid var(--border);
 }
 
-.mdc-fund-expansion > header h3 {
-  margin: 3px 0 0;
-  color: var(--text-muted);
-  font-size: 11px;
-}
+.mdc-fund-workflow > header h3 { margin: 3px 0 0; color: var(--text); font-size: 13px; }
+.mdc-fund-workflow > header p { max-width: 620px; margin: 4px 0 0; color: var(--text-faint); font-size: 8px; line-height: 1.55; }
 
-.mdc-fund-expansion > header > strong {
-  color: var(--mint);
-  font-family: var(--font-mono);
-  font-size: 13px;
-}
-
-.mdc-fund-expansion > p {
-  margin: 0;
-  padding: 14px 12px;
-  color: var(--text-faint);
-  font-size: 9px;
-}
-
-.mdc-fund-expansion td:nth-child(2) {
+.mdc-fund-stages {
   display: grid;
-  gap: 2px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
 }
 
-.mdc-fund-expansion td:nth-child(2) strong { color: var(--text-muted); font-size: 9px; }
-.mdc-fund-expansion td:nth-child(2) small { color: var(--text-faint); font-family: var(--font-mono); font-size: 8px; }
-
-.mdc-child-job-list {
-  display: flex;
-  flex-wrap: wrap;
+.mdc-fund-stages article {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 6px;
-  padding: 10px 12px;
-  border-top: 1px solid var(--border);
+  gap: 9px;
+  min-height: 70px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-soft);
 }
 
-.mdc-child-job-list > span,
-.mdc-child-job-list > small { color: var(--text-faint); font-size: 8px; }
-.mdc-child-job-list > code { padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; color: var(--blue); font-size: 7px; }
+.mdc-fund-stages article > span { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 8px; background: color-mix(in srgb, var(--text-faint) 8%, transparent); color: var(--text-faint); }
+.mdc-fund-stages article > div { display: grid; min-width: 0; gap: 2px; }
+.mdc-fund-stages article small { color: var(--text-faint); font-size: 7px; text-transform: uppercase; }
+.mdc-fund-stages article strong { color: var(--text-muted); font-size: 9px; }
+.mdc-fund-stages article p { margin: 0; color: var(--text-faint); font-size: 7px; line-height: 1.4; }
+.mdc-fund-stages article b { color: var(--text-faint); font-family: var(--font-mono); font-size: 9px; }
+.mdc-fund-stages article.is-complete { border-color: color-mix(in srgb, var(--mint) 25%, var(--border)); background: var(--mint-soft); }
+.mdc-fund-stages article.is-complete > span, .mdc-fund-stages article.is-complete b { color: var(--mint); }
+.mdc-fund-stages article.is-warning { border-color: color-mix(in srgb, var(--warning) 30%, var(--border)); background: color-mix(in srgb, var(--warning) 6%, var(--panel)); }
+.mdc-fund-stages article.is-warning > span, .mdc-fund-stages article.is-warning b { color: var(--warning); }
+
+.mdc-fund-holdings-table { border-bottom: 1px solid var(--border); }
+.mdc-holding-cell-stack { display: grid; align-content: center; gap: 3px; min-width: 0; }
+.mdc-fund-holdings-table td:nth-child(2) strong { color: var(--text-muted); font-size: 9px; }
+.mdc-fund-holdings-table td:nth-child(2) small, .mdc-fund-holdings-table td:nth-child(5) small { max-width: 190px; overflow: hidden; color: var(--text-faint); font-family: var(--font-mono); font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.mdc-holding-readiness { width: fit-content; padding: 3px 6px; border-radius: 999px; font-size: 7px; font-weight: 700; }
+.mdc-holding-readiness.is-ready { background: var(--mint-soft); color: var(--mint); }
+.mdc-holding-readiness.is-gap { background: color-mix(in srgb, var(--warning) 10%, transparent); color: var(--warning); }
+.mdc-holding-detail-toggle { display: inline-flex; align-items: center; width: fit-content; padding: 0; border: 0; background: transparent; color: var(--blue); font-size: 7px; cursor: pointer; }
+.mdc-holding-detail-toggle svg { transition: transform 160ms ease; }
+.mdc-holding-detail-toggle svg.is-open { transform: rotate(180deg); }
+.mdc-fund-holdings-table .mdc-holding-detail-row > td { display: table-cell; padding: 0; background: color-mix(in srgb, var(--blue) 3%, var(--panel)); }
+.mdc-holding-detail { padding: 12px 14px 14px; border-top: 1px solid color-mix(in srgb, var(--blue) 18%, var(--border)); }
+.mdc-holding-detail > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.mdc-holding-detail > header > div { display: grid; gap: 3px; }
+.mdc-holding-detail > header strong { color: var(--text-muted); font-size: 10px; }
+.mdc-holding-detail > header small { color: var(--text-faint); font-size: 7px; }
+.mdc-holding-detail > header .secondary-button { min-height: 32px; white-space: nowrap; }
+.mdc-holding-retry-feedback { margin: 0 0 10px; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--blue) 24%, var(--border)); border-radius: 6px; background: color-mix(in srgb, var(--blue) 7%, transparent); color: var(--blue); font-size: 7px; line-height: 1.45; }
+.mdc-holding-retry-feedback.is-error { border-color: color-mix(in srgb, var(--danger) 30%, var(--border)); background: color-mix(in srgb, var(--danger) 7%, transparent); color: var(--danger); }
+.mdc-holding-task-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.mdc-holding-task-grid article { display: grid; min-width: 0; gap: 5px; padding: 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel); }
+.mdc-holding-task-grid article > div { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.mdc-holding-task-grid code { overflow: hidden; color: var(--text-muted); font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.mdc-holding-task-grid p { min-height: 2.8em; margin: 0; color: var(--text-faint); font-size: 7px; line-height: 1.4; }
+.mdc-holding-task-grid .mdc-holding-task-diagnostic { display: -webkit-box; min-height: 2.8em; overflow: hidden; color: color-mix(in srgb, var(--text-faint) 82%, transparent); line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.mdc-holding-task-grid small { color: var(--text-faint); font-family: var(--font-mono); font-size: 6px; }
+.mdc-holding-task-grid footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.mdc-holding-task-grid footer button { display: inline-flex; align-items: center; gap: 3px; padding: 3px 5px; border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--border)); border-radius: 5px; background: color-mix(in srgb, var(--blue) 7%, transparent); color: var(--blue); font-size: 6px; cursor: pointer; }
+.mdc-holding-task-grid footer button:disabled { cursor: wait; opacity: .55; }
+.mdc-holding-detail-loading { margin: 0; padding: 10px; color: var(--text-faint); font-size: 8px; text-align: center; }
+.mdc-fund-waiting { margin: 0; padding: 16px 14px; border-bottom: 1px solid var(--border); color: var(--text-faint); font-size: 9px; }
+
+.mdc-fund-child-jobs { padding: 12px; border-bottom: 1px solid var(--border); }
+.mdc-fund-child-jobs > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.mdc-fund-child-jobs > header > div { display: grid; gap: 2px; }
+.mdc-fund-child-jobs > header strong { color: var(--text-muted); font-size: 10px; }
+.mdc-fund-child-jobs > header small, .mdc-fund-child-jobs > header > span { color: var(--text-faint); font-size: 8px; }
+.mdc-fund-child-jobs > article { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 48px; padding: 7px 0; border-top: 1px solid var(--border); }
+.mdc-fund-child-jobs > article > div { display: grid; min-width: 0; gap: 3px; }
+.mdc-fund-child-jobs > article > div:last-child { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; color: var(--text-faint); font-size: 7px; }
+.mdc-fund-child-jobs > article strong { color: var(--text-muted); font-size: 9px; }
+.mdc-fund-child-jobs > article code { overflow: hidden; color: var(--text-faint); font-size: 7px; text-overflow: ellipsis; }
+.mdc-fund-child-jobs > article small { width: 100%; text-align: right; }
+.mdc-fund-child-jobs > p { margin: 0; color: var(--text-faint); font-size: 8px; }
+.mdc-child-job-code { display: inline-block; margin: 3px 5px 3px 0; color: var(--blue); font-size: 7px; }
+
+.mdc-fund-diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border);
+}
+
+.mdc-fund-diagnostics { min-width: 0; padding: 12px; }
+.mdc-fund-diagnostics + .mdc-fund-diagnostics { border-left: 1px solid var(--border); }
+.mdc-fund-diagnostics > header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.mdc-fund-diagnostics > header strong { color: var(--text-muted); font-size: 9px; }
+.mdc-fund-diagnostics > header small { color: var(--text-faint); font-size: 7px; }
+.mdc-fund-diagnostics > div { display: grid; gap: 5px; }
+.mdc-fund-diagnostics article { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; padding: 7px 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-soft); }
+.mdc-fund-diagnostics article code { overflow: hidden; color: var(--text-muted); font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.mdc-fund-diagnostics article strong { color: var(--warning); font-family: var(--font-mono); font-size: 9px; }
+.mdc-fund-diagnostics article small { grid-column: 1 / -1; color: var(--text-faint); font-size: 7px; }
+
+.mdc-fund-recovery {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 14px;
+}
+
+.mdc-fund-recovery > svg { color: var(--warning); }
+.mdc-fund-recovery > div { display: grid; gap: 3px; }
+.mdc-fund-recovery strong { color: var(--text-muted); font-size: 10px; }
+.mdc-fund-recovery p { max-width: 660px; margin: 0; color: var(--text-faint); font-size: 8px; line-height: 1.55; }
+.mdc-fund-recovery.is-retryable { background: color-mix(in srgb, var(--warning) 7%, transparent); }
+.mdc-fund-recovery.is-active { background: color-mix(in srgb, var(--blue) 6%, transparent); }
+.mdc-fund-recovery.is-active > svg { color: var(--blue); }
+.mdc-fund-recovery.is-blocked { background: color-mix(in srgb, var(--danger) 6%, transparent); }
+.mdc-fund-recovery.is-blocked > svg { color: var(--rose); }
+.mdc-fund-recovery .primary-button { min-height: 38px; white-space: nowrap; }
 
 .mdc-progress { min-width: 0; }
 .mdc-progress-label { display: flex; justify-content: space-between; color: var(--text-faint); font-size: 8px; }
@@ -826,6 +939,33 @@
 .mdc-mini-audit > div:last-child { border-right: 0; }
 .mdc-mini-audit dt { color: var(--text-faint); font-size: 7px; }
 .mdc-mini-audit dd { margin: 3px 0 0; overflow: hidden; color: var(--text-muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+
+.mdc-provider-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin: 14px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.mdc-provider-summary span { display: grid; gap: 2px; min-height: 58px; align-content: center; padding: 9px 10px; background: var(--panel-soft); color: var(--text-faint); font-size: 7px; }
+.mdc-provider-summary strong { color: var(--mint); font-family: var(--font-mono); font-size: 15px; }
+.mdc-provider-summary span.is-warning strong { color: var(--warning); }
+
+.mdc-provider-filters {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(130px, .45fr) minmax(150px, .55fr) auto;
+  align-items: end;
+  gap: 8px;
+  margin: 0 14px;
+}
+
+.mdc-provider-filters label { display: grid; gap: 4px; color: var(--text-faint); font-size: 8px; }
+.mdc-provider-filters input, .mdc-provider-filters select { min-height: 36px; width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-soft); color: var(--text); }
+.mdc-provider-filters > span { min-height: 36px; display: flex; align-items: center; padding: 0 9px; border: 1px solid var(--border); border-radius: 8px; color: var(--text-faint); font-size: 8px; white-space: nowrap; }
 
 .mdc-provider-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 14px; }
 .mdc-provider-grid article { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-soft); }
@@ -925,6 +1065,8 @@
   .mdc-readiness-primary { border-right: 0; border-bottom: 1px solid var(--border); }
   .mdc-jobs-layout, .mdc-archive-layout { grid-template-columns: minmax(290px, .85fr) minmax(0, 1.15fr); }
   .mdc-provider-grid { grid-template-columns: 1fr; }
+  .mdc-provider-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mdc-provider-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 900px) {
@@ -953,6 +1095,7 @@
   .mdc-input-with-icon, .mdc-security-form > label > select, .mdc-security-form > button { min-height: 44px; }
   .mdc-toolbar-actions { display: grid; grid-template-columns: repeat(2, 1fr); }
   .mdc-toolbar-actions button { min-height: 44px; }
+  .mdc-freeze-block-reason { text-align: left; }
   .mdc-row-action { width: 44px; height: 44px; }
   .mdc-tabs { grid-template-columns: repeat(5, 145px); scroll-snap-type: x proximity; }
   .mdc-tabs > button { min-height: 56px; scroll-snap-align: start; }
@@ -979,10 +1122,22 @@
   .mdc-job-card > summary { grid-template-columns: 1fr auto; }
   .mdc-job-card > summary > span:nth-child(2), .mdc-job-card .mdc-progress { grid-column: 1; }
   .mdc-job-card > summary > svg { grid-column: 2; grid-row: 1; }
+  .mdc-fund-workflow > header { align-items: stretch; flex-direction: column; }
+  .mdc-fund-stages { grid-template-columns: 1fr; }
+  .mdc-holding-detail > header { align-items: stretch; flex-direction: column; }
+  .mdc-holding-task-grid { grid-template-columns: 1fr; }
+  .mdc-fund-child-jobs > article { grid-template-columns: 1fr; }
+  .mdc-fund-child-jobs > article > div:last-child { justify-content: flex-start; }
+  .mdc-fund-child-jobs > article small { text-align: left; }
+  .mdc-fund-recovery { grid-template-columns: auto 1fr; }
+  .mdc-fund-recovery .primary-button { grid-column: 1 / -1; min-height: 44px; }
+  .mdc-fund-diagnostic-grid { grid-template-columns: 1fr; }
+  .mdc-fund-diagnostics + .mdc-fund-diagnostics { border-top: 1px solid var(--border); border-left: 0; }
   .mdc-bundle-list > button { min-height: 74px; }
   .mdc-provider-grid { padding: 10px; }
   .mdc-provider-grid footer { align-items: stretch; flex-direction: column; }
   .mdc-provider-grid footer button { min-height: 44px; }
+  .mdc-provider-summary, .mdc-provider-filters { grid-template-columns: 1fr; }
   .mdc-mini-audit { grid-template-columns: 1fr; }
   .mdc-mini-audit > div { border-right: 0; border-bottom: 1px solid var(--border); }
   .mdc-mini-audit > div:last-child { border-bottom: 0; }

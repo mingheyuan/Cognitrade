@@ -26,7 +26,7 @@ export function BundleHistoryPanel({ bundles, selected, loading, actionLoading, 
             <button className="primary-button" type="button" disabled={actionLoading || !canPublish} onClick={() => void onPublish().catch(() => undefined)}><UploadCloud size={14} />发布当前 Bundle</button>
           </div>
         </header>
-        {!canPublish && <p className="mdc-form-note">只有契约所有槽位满足 A/B 级证据、时点和时效门槛，才允许发布。</p>}
+        {!canPublish && <p className="mdc-form-note">需要先让 22 个 UZI 采集槽全部形成日级快照；明确的数据源失败也可作为缺口快照冻结，交给 Agent 后续恢复。</p>}
         {loading && !bundles.items.length ? <LoadingState label="正在读取 Bundle 历史…" /> : null}
         {!loading && !bundles.items.length ? <EmptyState title="尚未发布 Bundle" detail="完成全部采集槽后可在此发布；已发布内容永不修改。" /> : null}
         <div className="mdc-bundle-list">

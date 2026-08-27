@@ -10,7 +10,7 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 - Finance Workspace：证券解析与数据库优先的 Point-in-Time 行情数据中心；覆盖、快照/证据、采集任务、Bundle 修订、归档订阅和 provider 能力均可审计。
 - 策略工作台：`/strategies` 从零创建或复制系统模板，编辑、发布不可变版本、绑定基金、生成日报、预演四态信号、回测、验证和晋级；旧 `/methodology` 与 `/backtesting` 前端入口已删除。
 - 报告与信号：一天一份 point-in-time 基金报告，前十大持仓必须生成可复用的 canonical UZI 个股子报告；基金本体、持仓 UZI 与结构质量共同生成可配置复合信号，缺失数据不重权也不伪造中性值。Lite / Medium / Deep、持仓和日报只消费已冻结 Bundle/manifest，报告阶段不联网补数。
-- 策略回测：仅接受已发布的不可变策略版本；Hikyuu 生成技术事件，Cognitrade 确定性账本执行 `fund_only`、ETF/LOF 与场外基金 NAV、`holdings_portfolio` 三类资产适配。成交逐笔追溯到策略版本、日报和信号，不允许页面临时覆盖阈值、均线或费率。
+- 基金回测：`/strategy-backtests/**` 是唯一公开回测入口，仅接受已发布的不可变策略版本；默认执行 `fund_only` 基金本体净值回测，`holdings_portfolio` 仅保留为高级穿透研究。相同输入的重复运行默认折叠，完整审计记录不删除。
 - 模拟交易：VeighNa PaperAccount 到价撮合，服务端现金/持仓账本、限价挂单、资金冻结、撤单、费用、T+1 和幂等订单；只有人工确认的 Verified 版本可晋级 Promoted 并通过策略链路下单。
 - DomainPack：`finance_ashare` 与 `legal_contract` 通过声明式能力、工具、Gate 和报告合同接入。
 - UZI 报告：研究工作台可从 ArtifactBoard 直接打开与上游 v3.9.4 分析及呈现层逐文件对齐的原生 HTML，或下载同源 PDF；旧 UZI 文件数据缓存不迁移、不回退、不作为新报告的事实源。
@@ -38,7 +38,7 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 | 能力 | v1.0 | 2.0 |
 | --- | --- | --- |
 | 策略定义 | 没有独立策略业务域 | 草稿、发布不可变版本、版本 diff、归档和审计事件 |
-| 回测 | 没有受治理的策略回测 | `fund_only` / `holdings_portfolio`，异步运行、预检、取消和重试 |
+| 回测 | 没有受治理的策略回测 | 单一基金回测入口；`fund_only` 默认，持仓组合为高级模式，支持异步运行、预检、取消和重试 |
 | 数据时点 | 模拟下单时取服务端最新行情 | 日报、信号、行情/NAV 和持仓按 point-in-time 固化，禁止前视 |
 | 执行模型 | A 股手工模拟订单即时成交 | Hikyuu 技术事件 + 基金/A 股确定性账本，完整计费和 T+1/确认日约束 |
 | 可追溯性 | 订单和账户流水 | 每笔成交关联策略版本、内容哈希、信号、日报及市场数据哈希 |
@@ -61,8 +61,8 @@ UZI 对齐细节见 [《Cognitrade 2.0 中文版本说明》](./RELEASE_NOTES_2.
 ```text
 显式采集 Job / 显式启用的归档订阅
   -> 统一证券身份解析
-  -> PIT 四时间与 A/B 级证据校验
-  -> 股票：按动态契约验收 22 个原始 collector
+  -> 原生 UZI 结果按日落库，PIT / 证据 / 字段契约独立审计
+  -> 股票：冻结 22 个原始 collector 结果槽（含显式 data_gap）
   -> 基金：冻结 1 个 fund_top_holdings 父槽，展开 10 只 A 股 × 完整 22 槽
   -> 发布不可变日级 Bundle
   -> 冻结单股/组合 report manifest
@@ -85,9 +85,14 @@ collector（`6_fund_holders`、`similar_stocks`）”。`20_valuation_models`、
 已有 `StrategyDocument` 仍可能保存旧版 5–20 配置，但严格父 Bundle 执行只接受 10；
 这些旧文档需要在再次执行前显式迁移，系统不会静默改写其历史内容。
 
-只有通过契约的 `available` 或有限来源全部成功后证明为空的
-`verified_empty` 才计入完整度；正式 Bundle 只接受 A/B 级证据。超时、未配置、
-无权限、解析失败或开放搜索无命中都是 `data_gap`，不能冒充空数据。
+股票可用性与报告门严格跟随 UZI：provider 返回的原生 `DimResult`
+决定该维是否有可用数据；`required_fields`、A/B 证据、PIT、过期与冲突
+只进入独立审计，不再把 UZI 认为有数据的维度改判为“不可用”。
+`report_generatable` 表示 22 个结果槽已冻结，可交给完整 Agent 恢复流程；
+`report_ready` 是 UZI Medium 数据阶段预检。最终是否能输出 HTML/PDF，仍由
+UZI 完整 Agent 流程结束后的原生 self-review 决定：有 critical 阻断，
+warning 允许出报告并披露。超时、未配置、无权限、解析失败或开放搜索
+无命中会如实落为 `data_gap`，不会被填成中性分。
 
 外部采集默认关闭：打开页面、访问任何 GET、查询 coverage 或创建报告都不会隐式
 联网。用户可创建采集 Job，或同时显式开启单标的订阅和全局
@@ -101,15 +106,23 @@ checkpoint；基金父快照一旦成功落库，重试会复用它并只补尚�
 模拟订单或显式请求挂单重新撮合时，服务端才会走独立的实时成交报价路径，这条路径
 不写入研究 Bundle，也不能被正式报告消费。
 
-历史 PIT 不用当前值伪造。基金的外部持仓获取只允许在上海时区当日的
+历史 PIT 不用当前值伪造。股票历史 Job 按维度/来源能力处理：宏观、研报、资金流、
+政策、事件、龙虎榜和舆情等带独立日期记录的来源会自动查询并裁剪到目标日 cutoff；
+能满足严格契约的结果按 B 级历史重建落库，查询过但没有可验证目标日记录，或仅提供
+当前状态的来源，则写入可审计 `data_gap`，自动排除评分并在报告中披露。只要 22 个槽
+都已有原生结果或明确缺口记录，就可发布 `quality=degraded` 的不可变 Bundle，
+再由 UZI Agent 尝试恢复并执行最终 self-review；`report_ready`、`report_generatable`
+与 `audit_ready` 始终分别展示。
+
+基金的外部持仓获取只允许在上海时区当日的
 采集 Job 中发生（用户显式创建，或由双 opt-in 订阅授权调度）；历史日只能
 复用已落库、且能证明在 cutoff 前可见的
-基金快照/Bundle，缺失时直接失败，不 live 回填。当原生 UZI provider 不支持 `as_of` 时，历史采集记录
-`data_gap`，不发布正式 Bundle；只有带不可变证据、能证明 cutoff 前已公开的
-人工 B 级快照，或未来实现的 PIT-aware adapter，才能补该缺口。完整方案与已知边界见
+基金快照/Bundle，缺失时直接失败，不 live 回填：没有父持仓披露就无法知道目标日
+应分析哪 10 只股票，不能安全降级成另一个持仓集合。完整方案与已知边界见
 [《Point-in-Time 数据中心实施方案》](./plan/market-data-report-decoupling-plan.md)。
 Agent OS 正式研究可用 ISO 日期约束 `analysis_as_of_date=YYYY-MM-DD` 精确选择历史
-Bundle；日期不存在、Bundle 不完整或 cutoff 晚于评估时点都会直接失败，绝不回退当前值。
+Bundle；未解决槽、无 Bundle 或 cutoff 晚于评估时点仍会失败，安全降级槽则随
+manifest 冻结、从 UZI 维度加权中剔除，并进入报告数据缺口区，绝不回退当前值。
 基金报告冻结时，10 个股票 Bundle 之外还会把父基金 Bundle ID、
 Bundle manifest hash 以及父快照 hash 写入 report manifest 依赖和最终 hash；
 父披露变更或失效时，原报告输入不会被静默复用。升级环境需在备份后
@@ -191,9 +204,10 @@ COGNITRADE_API_HOST=127.0.0.1 \
 
 首次安装会下载 VeighNa、Hikyuu 及其量化/绘图依赖，体积明显大于纯 API
 依赖。VeighNa 的 headless 撮合状态固定写入
-`<workspace>/paper_trading/veighna_runtime/.vntrader`；Hikyuu 回测在受控子进程和
-`<workspace>/backtests/.hikyuu_runtime` 隔离目录运行。两者都不会依赖运行用户的主目录，
-Hikyuu 也不会自动下载远程策略仓库。
+`<workspace>/paper_trading/veighna_runtime/.vntrader`；基金回测的 Hikyuu 技术信号在受控
+子进程和 `<strategy_object_store>/.hikyuu_runtime` 隔离目录运行。两者都不会依赖运行
+用户的主目录，Hikyuu 也不会自动下载远程策略仓库。旧 `<workspace>/backtests/*.json`
+仅作为只读历史文件保留，不再由 API 生成或列出。
 
 前端：
 
@@ -248,7 +262,8 @@ UZI 报告不再给所有请求套同一个 480 秒上限：Lite、Medium、Deep
 `UZI_LLM_REQUEST_TIMEOUT_SECONDS` 仅作为未归属档位的兼容回退。`similar_stocks`
 在原生 UZI 中是 bonus fetcher，但在数据中心契约中是 22 个原始 collector 之一。
 直接/legacy 路径的单次 HTTP 默认 5 秒，v3 spawn 路径由上游进程调度器执行
-30 秒硬终止；超时会如实记录为 `data_gap`，并阻止正式 Bundle 发布，不伪造同行数据。
+30 秒硬终止；当前日超时会如实记录为可重试 `data_gap` 并阻止严格 Bundle 发布；
+历史查询穷尽后可转成排除评分的终态披露，不伪造同行数据。
 
 正式的 Lite、Medium、Deep 个股分析统一执行 UZI `SKILL.md` 的完整 Agent 工作流：
 20 个编号维度逐项审阅、66 席 persona 角色评审、宏观/政策、行业/事件、原料/期货三组

@@ -47,15 +47,27 @@ describe('MarketDataCenterApi', () => {
     const coverage = normalizeMarketDataCoverage({
       symbol: '600519.SH', market: 'cn_equity', as_of_date: '2026-08-20', cutoff_at: '2026-08-20T15:59:59Z',
       expected_dimension_count: 2, available_count: 1, verified_empty_count: 0, gap_count: 0, conflict_count: 1, stale_count: 1,
-      structurally_complete: false, report_ready: false,
+      structurally_complete: true, report_ready: false, report_generatable: true,
+      gate_policy: 'uzi-3.9.4-native-data-self-review-medium',
+      uzi_integrity: { profile: 'medium', coverage_pct: 50, critical_count: 0, warning_count: 1, gate_passed: true, issues: [] },
+      uzi_integrity_by_profile: {
+        lite: { profile: 'lite', coverage_pct: 100, critical_count: 0, warning_count: 0, gate_passed: true, issues: [] },
+        medium: { profile: 'medium', coverage_pct: 50, critical_count: 0, warning_count: 1, gate_passed: true, issues: [] },
+        deep: { profile: 'deep', coverage_pct: 50, critical_count: 0, warning_count: 1, gate_passed: true, issues: [] },
+      },
+      audit_ready_dimension_count: 1, audit_ready: false,
       dimensions: [
-        { dimension: 'first', ordinal: 0, status: 'available', eligible: true, stale: true, conflict: false, snapshot_id: 's1', evidence_grade: 'A' },
-        { dimension: 'later', ordinal: 1, status: 'available', eligible: false, stale: false, conflict: true, snapshot_id: 's2', evidence_grade: 'B' },
+        { dimension: 'first', ordinal: 0, status: 'available', eligible: true, native_quality: 'available', audit_eligible: true, stale: true, conflict: false, snapshot_id: 's1', evidence_grade: 'A' },
+        { dimension: 'later', ordinal: 1, status: 'available', eligible: true, native_quality: 'partial', audit_eligible: false, audit_reason: 'extended shape warning', stale: false, conflict: true, snapshot_id: 's2', evidence_grade: 'B' },
       ],
     })
-    expect(coverage.counts).toEqual({ available: 1, verified_empty: 0, data_gap: 0, conflict: 1, stale: 1 })
+    expect(coverage.counts).toEqual({ available: 1, verified_empty: 0, data_gap: 0, conflict: 1, stale: 1, degraded: 0 })
     expect(coverage.dimensions[0]).toMatchObject({ dimension_id: 'first', freshness_status: 'stale' })
-    expect(coverage.dimensions[1]).toMatchObject({ dimension_id: 'later', status: 'conflict' })
+    expect(coverage.dimensions[1]).toMatchObject({ dimension_id: 'later', status: 'conflict', eligible: true, native_quality: 'partial', audit_eligible: false })
+    expect(coverage.report_generatable).toBe(true)
+    expect(coverage.uzi_integrity).toMatchObject({ profile: 'medium', coverage_pct: 50, gate_passed: true })
+    expect(coverage.uzi_integrity_by_profile?.lite).toMatchObject({ profile: 'lite', coverage_pct: 100 })
+    expect(coverage.audit_ready_dimension_count).toBe(1)
   })
 
   it('maps UI cutoff semantics to the current read-only v2 query without legacy refresh collection', async () => {
@@ -80,6 +92,55 @@ describe('MarketDataCenterApi', () => {
     expect(requests[0]).not.toContain('cutoff_at=')
     expect(requests[1]).not.toContain('cutoff')
     expect(requests.some((url) => url.includes('refresh='))).toBe(false)
+  })
+
+  it('preserves fund child progress and task retryability from collection jobs', async () => {
+    let requestedUrl = ''
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      requestedUrl = String(input)
+      return json({
+      items: [{
+        id: 'fund-job-1', job_type: 'fund_holding_expansion', asset_family: 'fund', status: 'partial',
+        symbols: ['020464'], dimensions: ['fund_top_holdings'], start_date: '2026-08-20', end_date: '2026-08-20',
+        max_concurrency: 5, publish_when_complete: true, created_at: '2026-08-20T08:00:00Z',
+        progress: { completed: 1, total: 1, child_complete: 3, child_total: 10, by_status: { partial: 1 } },
+        task_summary: { total: 1, by_status: { partial: 1 }, active: 0, succeeded: 0, skipped: 0, retryable_failed: 1, blocked_failed: 0, by_error_code: [], by_dimension: [] },
+        portfolio_summary: { total_holdings: 10, ready_holdings: 3, dimensions_per_holding: 22, total_slots: 220, ready_slots: 91, missing_slots: 129, retryable_slots: 80, blocked_slots: 49, active_slots: 0, attempt: 2, current_child_job_ids: ['child-2'], by_error_code: [{ key: 'strict_contract_gap', count: 49, retryable_count: 0, blocked_count: 49, active_count: 0 }], by_dimension: [] },
+        tasks: [{ id: 'task-1', symbol: '020464', dimension_id: 'fund_top_holdings', status: 'partial', attempt_count: 1, max_attempts: 3, retryable: true }],
+      }],
+      total_count: 1,
+      limit: 50,
+      offset: 0,
+    }) }))
+    const api = new MarketDataCenterApi({ baseUrl: 'http://127.0.0.1:8000/api/v1', token: '' })
+    const page = await api.listJobs({ symbol: '020464', asset_family: 'fund', as_of_date: '2026-08-20', status: 'partial' })
+
+    expect(page.items[0].progress).toMatchObject({ child_complete: 3, child_total: 10 })
+    expect(page.items[0].tasks?.[0]).toMatchObject({ task_id: 'task-1', attempt: 1, max_attempts: 3, retryable: true })
+    expect(page.items[0].task_summary).toMatchObject({ retryable_failed: 1, blocked_failed: 0 })
+    expect(page.items[0].portfolio_summary).toMatchObject({ ready_slots: 91, retryable_slots: 80, blocked_slots: 49 })
+    expect(requestedUrl).toContain('symbol=020464')
+    expect(requestedUrl).toContain('asset_family=fund')
+    expect(requestedUrl).toContain('as_of_date=2026-08-20')
+    expect(requestedUrl).toContain('status=partial')
+  })
+
+  it('sends a scoped retry body for one fund holding', async () => {
+    let requestBody = ''
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestBody = String(init?.body || '')
+      return json({
+        id: 'fund-job-1', asset_family: 'fund', status: 'queued', symbols: ['020464'],
+        dimensions: ['fund_top_holdings'], start_date: '2026-08-20', end_date: '2026-08-20',
+        max_concurrency: 5, publish_when_complete: true, created_at: '2026-08-20T08:00:00Z',
+        progress: { total: 1, by_status: { queued: 1 } }, expanded_holdings: [], child_collection_job_ids: [],
+      })
+    }))
+    const api = new MarketDataCenterApi({ baseUrl: 'http://127.0.0.1:8000/api/v1', token: '' })
+
+    await api.retryFailed('fund-job-1', { symbols: ['600001.SH'], dimensions: ['0_basic'] })
+
+    expect(JSON.parse(requestBody)).toEqual({ symbols: ['600001.SH'], dimensions: ['0_basic'] })
   })
 
   it('sends strict manual evidence and strips subscription response-only fields', async () => {

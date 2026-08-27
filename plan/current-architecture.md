@@ -1,8 +1,8 @@
 # Cognitrade 当前架构
 
 本文只描述当前可运行主线。历史 CLI、ResearchOrchestrator、动态 Subagent discovery、
-`/methodology` 与自由参数 `/backtesting` 前端入口均已退出；旧 `/api/v2/finance/backtests/**`
-仅保留为内部技术诊断兼容 API。
+`/methodology`、自由参数 `/backtesting` 前端和旧 `/api/v2/finance/backtests/**` API 均已退出。
+当前只有受版本治理的基金回测主线。
 
 ## 一图看懂
 
@@ -19,7 +19,7 @@ flowchart TB
     API --> STRATEGY["策略业务域<br/>草稿 → 不可变版本 → Assignment"]
     STRATEGY --> REPORT["point-in-time 日报<br/>基金报告 + top N canonical UZI 子报告"]
     REPORT --> SIGNAL["确定性复合信号<br/>基金 + 持仓 + 结构质量<br/>ALLOW_BUY / WATCH / AVOID / BLOCKED"]
-    SIGNAL --> BT["版本化回测<br/>fund_only / holdings_portfolio"]
+    SIGNAL --> BT["基金回测<br/>fund_only 默认 / 持仓穿透高级"]
     BT --> HK["Hikyuu 隔离 runner<br/>股票 · ETF/LOF · 场外基金 NAV"]
     BT --> VERIFY["机器验证 + 人工 Verified"]
     VERIFY --> PROMOTE["人工 Promoted<br/>账户 + 基金 + 模式唯一主版本"]
@@ -56,11 +56,11 @@ flowchart TB
 | `strategies/service.py` | 策略 CRUD、乐观锁、不可变版本、Assignment、治理状态与审计 |
 | `strategies/orchestration.py` | 一天一份报告、attempt/lease、top N UZI 去重、失败重试、暂停/恢复、补跑与 late revision |
 | `strategies/signals.py` | 纯函数式基金/持仓四态信号、coverage/confidence、carry 与 supersession |
-| `strategies/backtesting.py` | 严格版本输入、point-in-time 预检、三类资产、两种模式、费用与逐笔 lineage |
+| `strategies/backtesting/` | 严格版本输入、point-in-time 预检、三类资产、默认基金本体与高级持仓穿透、费用及逐笔 lineage |
 | `strategies/verification.py` | 无前视、lineage、确定性、coverage、样本、费用及绩效门槛 |
 | `strategies/paper_execution.py` | 仅 Promoted 版本、精确信号和冻结执行配置可进入现有模拟盘 |
 | `api/paper_trading_service.py` | 独立资金/持仓/费用/T+1/FIFO 账本，接受策略版本冻结 execution profile |
-| `api/hikyuu_backtest_runner.py` | API 主进程外执行 Hikyuu，消费策略服务准备的资产与信号数据 |
+| `strategies/backtesting/hikyuu_signal_runner.py` | API 主进程外执行唯一受治理的 Hikyuu 技术信号操作 |
 
 ## 报告到交易的时序
 
@@ -100,8 +100,8 @@ workspace/
   cache/                   # 可重建数据缓存
   memory/                  # episodic/domain/policy memory
   paper_trading/           # VeighNa 外围资金账本
-  backtests/               # 旧技术回测只读 JSON 与 Hikyuu 隔离目录
-  strategy_objects/        # 内容寻址的报告/曲线/快照
+  backtests/               # 旧技术回测只读 JSON；不再生成或通过 API 列出
+  strategy_objects/        # 内容寻址的报告/曲线/快照与 Hikyuu 隔离运行时
   backups/strategy_migrations/
   .migrations/             # 工作区与旧对象索引标记
   cognitrade.sqlite3       # 本地单实例策略业务库
@@ -114,6 +114,6 @@ workspace/
 ## 兼容边界
 
 - `FundHoldingReportService` 仍承担旧批次 API 与报告导出，并被新日报协调器作为受控运行适配器调用；其仍被调用的部分不能删除。
-- 旧 `/backtests/**` 后端 API 与 `backtest_strategies.py` 暂留内部诊断，但没有前端入口，也不能用于 Verified/Promoted；最终删除需单独升级 API 主版本。
+- 旧 `/backtests/**` 后端 API、自由参数策略目录和文件持久化服务均已删除；旧 JSON 只建立引用索引，不进入基金回测列表。
 - 已发布日报、版本、信号、验证、成交和它们引用的对象永久保留；旧文件只建索引，不移动或重写。
 - 与本方案无关的 UZI qualitative 代码保持原样。

@@ -916,7 +916,7 @@ class UziRootCollectionRouterTests(unittest.TestCase):
     def test_requested_capital_flow_only_still_executes_complete_v3_registry(self) -> None:
         executed: list[str] = []
         with TemporaryDirectory() as temporary:
-            runtime = self._runtime(Path(temporary))
+            self._runtime(Path(temporary))
             pipeline_run = importlib.import_module("lib.pipeline.run")
             pipeline_collect = importlib.import_module("lib.pipeline.collect")
             pipeline_registry = importlib.import_module("lib.pipeline.fetchers.registry")

@@ -21,14 +21,21 @@ from research_system.market_data.dimension_contracts import (
     DEFAULT_DIMENSION_REGISTRY,
     DimensionRegistry,
 )
+from research_system.market_data.historical import (
+    capability_for_dimension,
+    is_safe_degradation_manifest,
+    reconstruct_historical_snapshot,
+)
 from research_system.market_data.ingestion import (
     SnapshotIngestionError,
     SnapshotIngestionService,
 )
+from research_system.market_data.job_diagnostics import classify_collection_failure
 from research_system.market_data.models import (
     MarketDataCollectionJob,
     MarketDataCollectionTask,
     MarketDataCollectionTaskResult,
+    MarketDataSnapshot,
     MarketDataSubscription,
 )
 from research_system.market_data.repository import MarketDataRepository
@@ -41,6 +48,9 @@ SnapshotCollector = Callable[..., list[dict[str, Any]]]
 MIN_COLLECTION_CONCURRENCY = 1
 MAX_COLLECTION_CONCURRENCY = 5
 DEFAULT_COLLECTION_CONCURRENCY = 5
+UZI_BASIC_DEPENDENT_SNAPSHOT_TYPES = frozenset(
+    {"macro", "industry", "futures", "policy"}
+)
 EQUITY_COLLECTION_JOB_TYPES = frozenset({"current_refresh", "historical_backfill"})
 TERMINAL_COLLECTION_STATUSES = frozenset(
     {
@@ -448,24 +458,44 @@ class MarketDataCollectionCoordinator:
         tenant_id: str,
         user_id: str,
         actor_id: str,
+        symbols: list[str] | None = None,
+        dimensions: list[str] | None = None,
     ) -> dict[str, Any]:
+        requested_symbols = {
+            str(symbol or "").strip().upper() for symbol in (symbols or []) if str(symbol or "").strip()
+        }
+        requested_dimensions = {
+            str(dimension or "").strip() for dimension in (dimensions or []) if str(dimension or "").strip()
+        }
+        unknown_dimensions = requested_dimensions.difference(self.registry.dimension_ids)
+        if unknown_dimensions:
+            raise CollectionJobError(
+                "collection_retry_scope_invalid",
+                "重试范围包含未知维度：" + "、".join(sorted(unknown_dimensions)),
+                status_code=422,
+            )
         with self.database.session() as session:
             job = self._owned_job(session, job_id, tenant_id=tenant_id, user_id=user_id)
-            failed = list(
-                session.scalars(
-                    select(MarketDataCollectionTask).where(
-                        MarketDataCollectionTask.job_id == job.id,
-                        MarketDataCollectionTask.status.in_(
-                            (CollectionStatus.FAILED.value, CollectionStatus.PARTIAL.value)
-                        ),
-                    )
-                )
+            failed_query = select(MarketDataCollectionTask).where(
+                MarketDataCollectionTask.job_id == job.id,
+                MarketDataCollectionTask.status.in_(
+                    (CollectionStatus.FAILED.value, CollectionStatus.PARTIAL.value)
+                ),
             )
+            if requested_symbols:
+                failed_query = failed_query.where(
+                    MarketDataCollectionTask.symbol.in_(requested_symbols)
+                )
+            if requested_dimensions:
+                failed_query = failed_query.where(
+                    MarketDataCollectionTask.dimension.in_(requested_dimensions)
+                )
+            failed = list(session.scalars(failed_query))
             retryable = [task for task in failed if task.retryable and task.attempt_count < task.max_attempts]
             if not retryable:
                 raise CollectionJobError(
                     "collection_retry_unavailable",
-                    "没有可重试的失败维度；历史 PIT 或契约缺口需要补充数据/证据",
+                    "没有可重试的 UZI 原生失败维度；扩展审计提示不需要重采",
                     status_code=409,
                 )
             now = datetime.now(timezone.utc)
@@ -617,47 +647,109 @@ class MarketDataCollectionCoordinator:
                 self._finish_job(job_id, cancelled=cancellation.is_set())
                 return
 
-            today_specs = [
-                spec
-                for spec in task_specs
-                if spec["start_date"] <= self._local_today(spec["exchange_timezone"]) <= spec["end_date"]
-                and self._needs_provider(spec, mode=job_mode)
-            ]
-            snapshots: list[dict[str, Any]] = []
-            provider_error: Exception | None = None
-            if today_specs and not cancellation.is_set():
-                symbols = list(dict.fromkeys(spec["symbol"] for spec in today_specs))
-                dimensions = list(dict.fromkeys(spec["dimension"] for spec in today_specs))
-                snapshot_types = [self.registry.get(dimension).snapshot_type for dimension in dimensions]
-                if "market" not in snapshot_types:
+            by_key: dict[tuple[str, str, date], dict[str, Any]] = {}
+            provider_errors: dict[date, Exception] = {}
+            requested_dates = sorted(
+                {
+                    as_of
+                    for spec in task_specs
+                    for as_of in date_range(spec["start_date"], spec["end_date"])
+                }
+            )
+            for as_of in requested_dates:
+                provider_specs = [
+                    spec
+                    for spec in task_specs
+                    if spec["start_date"] <= as_of <= spec["end_date"]
+                    and self._needs_provider(spec, mode=job_mode, as_of_date=as_of)
+                    and (
+                        as_of == self._local_today(spec["exchange_timezone"])
+                        or capability_for_dimension(spec["dimension"]).can_reconstruct
+                    )
+                ]
+                if not provider_specs or cancellation.is_set():
+                    continue
+                symbols = list(dict.fromkeys(spec["symbol"] for spec in provider_specs))
+                dimensions = list(
+                    dict.fromkeys(spec["dimension"] for spec in provider_specs)
+                )
+                snapshot_types = [
+                    self.registry.get(dimension).snapshot_type
+                    for dimension in dimensions
+                ]
+                full_workflow_snapshot_types = {
+                    contract.snapshot_type for contract in self.registry
+                }
+                use_uzi_root_route = full_workflow_snapshot_types.issubset(
+                    set(snapshot_types)
+                )
+                if (
+                    "market" not in snapshot_types
+                    and UZI_BASIC_DEPENDENT_SNAPSHOT_TYPES.intersection(
+                        snapshot_types
+                    )
+                ):
                     # Native UZI dimensions such as industry/futures consume
                     # dimension 0 as a dependency inside the same provider wave.
                     snapshot_types.insert(0, "market")
                 try:
                     snapshots = self.collector(
-                        query="显式 Point-in-Time 行情数据采集",
+                        query=(
+                            "显式 Point-in-Time 行情数据采集"
+                            if all(
+                                as_of == self._local_today(spec["exchange_timezone"])
+                                for spec in provider_specs
+                            )
+                            else f"历史 Point-in-Time 自动重建，截至 {as_of.isoformat()}"
+                        ),
                         symbols=symbols,
                         snapshot_types=snapshot_types,
                         cache_root=None,
                         research_profile="deep",
                         max_workers=self._job_concurrency(job_id),
-                        uzi_root_route=True,
+                        # A complete 22-dimension run follows native UZI's root
+                        # Agent workflow.  A scoped retry must call only the
+                        # requested dimension (+ market dependency), otherwise
+                        # retrying one failed slot silently reruns all fetchers.
+                        uzi_root_route=use_uzi_root_route,
                         uzi_root_route_mode="single",
-                        no_resume=True,
+                        no_resume=use_uzi_root_route,
                         cancellation=cancellation,
                     )
                 except Exception as exc:  # noqa: BLE001 - provider failure becomes task state
-                    provider_error = exc
-
-            by_key: dict[tuple[str, str], dict[str, Any]] = {}
-            for snapshot in snapshots:
-                if not isinstance(snapshot, Mapping):
+                    provider_errors[as_of] = exc
                     continue
-                key = (
-                    symbol_key(str(snapshot.get("symbol") or "")),
-                    str(snapshot.get("snapshot_type") or ""),
+                dimension_by_type = {
+                    self.registry.get(spec["dimension"]).snapshot_type: spec["dimension"]
+                    for spec in provider_specs
+                }
+                historical = any(
+                    as_of != self._local_today(spec["exchange_timezone"])
+                    for spec in provider_specs
                 )
-                by_key[key] = dict(snapshot)
+                for snapshot in snapshots:
+                    if not isinstance(snapshot, Mapping):
+                        continue
+                    snapshot_type = str(snapshot.get("snapshot_type") or "")
+                    dimension = dimension_by_type.get(snapshot_type)
+                    prepared = dict(snapshot)
+                    if historical:
+                        if dimension is None:
+                            continue
+                        reconstructed = reconstruct_historical_snapshot(
+                            prepared,
+                            dimension=dimension,
+                            as_of_date=as_of,
+                        )
+                        if reconstructed is None:
+                            continue
+                        prepared = reconstructed
+                    key = (
+                        symbol_key(str(prepared.get("symbol") or "")),
+                        snapshot_type,
+                        as_of,
+                    )
+                    by_key[key] = prepared
 
             for spec in task_specs:
                 if cancellation.is_set():
@@ -667,7 +759,7 @@ class MarketDataCollectionCoordinator:
                     self._process_task(
                         spec,
                         by_key=by_key,
-                        provider_error=provider_error,
+                        provider_errors=provider_errors,
                     )
                 except Exception as exc:  # noqa: BLE001 - isolate one task from the batch
                     self._fail_task(spec["id"], exc, stage="task")
@@ -679,8 +771,8 @@ class MarketDataCollectionCoordinator:
         self,
         spec: dict[str, Any],
         *,
-        by_key: dict[tuple[str, str], dict[str, Any]],
-        provider_error: Exception | None,
+        by_key: dict[tuple[str, str, date], dict[str, Any]],
+        provider_errors: dict[date, Exception],
     ) -> None:
         with self.database.session() as session:
             task = session.get(MarketDataCollectionTask, spec["id"])
@@ -698,26 +790,98 @@ class MarketDataCollectionCoordinator:
             for as_of in date_range(task.start_date, task.end_date):
                 started_at = datetime.now(timezone.utc)
                 local_today = self._local_today(task.exchange_timezone)
-                if as_of != local_today:
+                historical = as_of != local_today
+                existing_coverage = resolver.coverage(
+                    symbol=task.symbol,
+                    market=task.market,
+                    as_of_date=as_of,
+                    exchange_timezone=task.exchange_timezone,
+                )
+                existing_item = next(
+                    row
+                    for row in existing_coverage.dimensions
+                    if row.dimension == task.dimension
+                )
+                job = session.get(MarketDataCollectionJob, task.job_id)
+                if (
+                    existing_item.snapshot_id is not None
+                    and (existing_item.eligible or existing_item.degraded)
+                    and job is not None
+                    and job.mode == "missing_or_stale"
+                ):
                     session.add(
                         MarketDataCollectionTaskResult(
                             task_id=task.id,
                             as_of_date=as_of,
                             attempt=attempt,
-                            status="data_gap",
-                            provider_status="pit_not_supported",
-                            error_code="native_as_of_unsupported",
-                            error_message="原生 UZI 采集器不能证明该历史日当时可见的数据",
+                            status="skipped",
+                            provider_status=(
+                                "existing_degraded_resolution"
+                                if existing_item.degraded
+                                else "existing_report_ready"
+                            ),
+                            snapshot_id=existing_item.snapshot_id,
+                            metrics_json={
+                                "reason": "existing_safe_resolution",
+                                "degraded": existing_item.degraded,
+                            },
                             retryable=False,
                             started_at=started_at,
                         )
                     )
-                    results.append("data_gap")
+                    results.append("skipped")
                     finished_dates.append(as_of.isoformat())
-                    last_error_code = "native_as_of_unsupported"
-                    last_error_message = "原生 UZI 采集器不能证明该历史日当时可见的数据"
                     continue
+                capability = capability_for_dimension(task.dimension)
+                if historical and not capability.can_reconstruct:
+                    ingest = self.adapter.disclosed_gap(
+                        symbol=task.symbol,
+                        market=task.market,
+                        exchange_timezone=task.exchange_timezone,
+                        dimension=task.dimension,
+                        as_of_date=as_of,
+                        reason_code="historical_source_current_only",
+                        message="该维度的数据源只提供当前状态，历史日已自动降级并从评分中排除",
+                        collection_task_id=task.id,
+                        provider_attempt_id=f"{task.id}:{attempt}",
+                    )
+                    persisted = ingestion.ingest(ingest)
+                    session.add(
+                        MarketDataCollectionTaskResult(
+                            task_id=task.id,
+                            as_of_date=as_of,
+                            attempt=attempt,
+                            status="degraded",
+                            provider_status="historical_unavailable",
+                            snapshot_id=persisted.id,
+                            metrics_json={
+                                "excluded_from_scoring": True,
+                                "historical_strategy": capability.strategy,
+                            },
+                            retryable=False,
+                            started_at=started_at,
+                        )
+                    )
+                    results.append("degraded")
+                    finished_dates.append(as_of.isoformat())
+                    continue
+                provider_error = provider_errors.get(as_of)
                 if provider_error is not None:
+                    gap = self.adapter.disclosed_gap(
+                        symbol=task.symbol,
+                        market=task.market,
+                        exchange_timezone=task.exchange_timezone,
+                        dimension=task.dimension,
+                        as_of_date=as_of,
+                        reason_code="provider_error",
+                        message=(
+                            "UZI 采集器本次调用失败；按原生结果契约记录为空维度，"
+                            "不再由 Cognitrade 扩展契约重复阻断"
+                        ),
+                        collection_task_id=task.id,
+                        provider_attempt_id=f"{task.id}:{attempt}",
+                    )
+                    persisted = ingestion.ingest(gap)
                     session.add(
                         MarketDataCollectionTaskResult(
                             task_id=task.id,
@@ -727,6 +891,7 @@ class MarketDataCollectionCoordinator:
                             provider_status="provider_error",
                             error_code=provider_error.__class__.__name__,
                             error_message="采集器调用失败；详细上游文本未持久化以避免泄露敏感信息",
+                            snapshot_id=persisted.id,
                             retryable=True,
                             started_at=started_at,
                         )
@@ -741,34 +906,42 @@ class MarketDataCollectionCoordinator:
                     )
                     continue
 
-                existing = resolver.resolve_snapshot(
-                    symbol=task.symbol,
-                    market=task.market,
-                    dimension=task.dimension,
-                    as_of_date=as_of,
-                    exchange_timezone=task.exchange_timezone,
-                )
-                job = session.get(MarketDataCollectionJob, task.job_id)
-                if existing is not None and job is not None and job.mode == "missing_or_stale":
-                    session.add(
-                        MarketDataCollectionTaskResult(
-                            task_id=task.id,
-                            as_of_date=as_of,
-                            attempt=attempt,
-                            status="skipped",
-                            provider_status="existing_report_ready",
-                            snapshot_id=existing.id,
-                            metrics_json={"reason": "existing_fresh_snapshot"},
-                            retryable=False,
-                            started_at=started_at,
-                        )
-                    )
-                    results.append("skipped")
-                    finished_dates.append(as_of.isoformat())
-                    continue
                 snapshot_type = self.registry.get(task.dimension).snapshot_type
-                native = by_key.get((symbol_key(task.symbol), snapshot_type))
+                native = by_key.get((symbol_key(task.symbol), snapshot_type, as_of))
                 if native is None:
+                    if historical:
+                        ingest = self.adapter.disclosed_gap(
+                            symbol=task.symbol,
+                            market=task.market,
+                            exchange_timezone=task.exchange_timezone,
+                            dimension=task.dimension,
+                            as_of_date=as_of,
+                            reason_code="historical_reconstruction_no_proof",
+                            message="历史来源已自动查询，但没有返回可验证的目标日记录；已从评分中排除",
+                            collection_task_id=task.id,
+                            provider_attempt_id=f"{task.id}:{attempt}",
+                            attempted_reconstruction=True,
+                        )
+                        persisted = ingestion.ingest(ingest)
+                        session.add(
+                            MarketDataCollectionTaskResult(
+                                task_id=task.id,
+                                as_of_date=as_of,
+                                attempt=attempt,
+                                status="degraded",
+                                provider_status="historical_unavailable",
+                                snapshot_id=persisted.id,
+                                metrics_json={
+                                    "excluded_from_scoring": True,
+                                    "attempted_reconstruction": True,
+                                },
+                                retryable=False,
+                                started_at=started_at,
+                            )
+                        )
+                        results.append("degraded")
+                        finished_dates.append(as_of.isoformat())
+                        continue
                     session.add(
                         MarketDataCollectionTaskResult(
                             task_id=task.id,
@@ -780,6 +953,19 @@ class MarketDataCollectionCoordinator:
                             error_message=f"采集结果缺少 {task.dimension}",
                             retryable=True,
                             started_at=started_at,
+                            snapshot_id=ingestion.ingest(
+                                self.adapter.disclosed_gap(
+                                    symbol=task.symbol,
+                                    market=task.market,
+                                    exchange_timezone=task.exchange_timezone,
+                                    dimension=task.dimension,
+                                    as_of_date=as_of,
+                                    reason_code="collector_result_missing",
+                                    message=f"UZI 采集结果缺少 {task.dimension}",
+                                    collection_task_id=task.id,
+                                    provider_attempt_id=f"{task.id}:{attempt}",
+                                )
+                            ).id,
                         )
                     )
                     results.append("failed")
@@ -810,11 +996,21 @@ class MarketDataCollectionCoordinator:
                             SnapshotStatus.VERIFIED_EMPTY.value,
                         }
                         result_status = "succeeded" if complete else "data_gap"
+                        safe_degradation = is_safe_degradation_manifest(
+                            persisted.query_manifest_json
+                        )
+                        if safe_degradation:
+                            result_status = "degraded"
                         semantic_errors = list(
                             (persisted.validation_json or {}).get("errors") or []
                         )
+                        audit_errors = list(
+                            (persisted.validation_json or {}).get("audit_errors") or []
+                        )
                         native_quality = str(native.get("quality_status") or "")
-                        can_retry = not complete and native_quality in {
+                        raw_payload = ingest.payload.get("raw")
+                        raw_data_present = bool(raw_payload)
+                        can_retry = not complete and not safe_degradation and native_quality in {
                             "provider_unavailable",
                             "rate_limited",
                             "parse_failed",
@@ -832,14 +1028,26 @@ class MarketDataCollectionCoordinator:
                                 metrics_json={
                                     "content_hash": persisted.content_hash,
                                     "evidence_grade": persisted.evidence_grade,
+                                    "raw_data_present": raw_data_present,
+                                    "native_available": bool(
+                                        ingest.validation.get("native_available")
+                                    ),
                                     "validation_passed": bool(
                                         (persisted.validation_json or {}).get("passed")
                                     ),
+                                    "audit_passed": not audit_errors,
+                                    "audit_errors": audit_errors[:50],
+                                    "degraded": safe_degradation,
+                                    "excluded_from_scoring": safe_degradation,
                                 },
-                                error_code=None if complete else "strict_contract_gap",
+                                error_code=(
+                                    None
+                                    if complete or safe_degradation
+                                    else "provider_data_gap"
+                                ),
                                 error_message=(
                                     None
-                                    if complete
+                                    if complete or safe_degradation
                                     else "; ".join(semantic_errors)[:4000]
                                 ),
                                 retryable=can_retry,
@@ -872,11 +1080,14 @@ class MarketDataCollectionCoordinator:
                 results.append(result_status)
                 finished_dates.append(as_of.isoformat())
                 retryable = retryable or can_retry
-                if not complete:
-                    last_error_code = "strict_contract_gap"
+                if not complete and not safe_degradation:
+                    last_error_code = "provider_data_gap"
                     last_error_message = "; ".join(semantic_errors)[:4000]
             task.retryable = retryable
-            if results and all(result in {"succeeded", "skipped"} for result in results):
+            if results and all(
+                result in {"succeeded", "skipped", "degraded"}
+                for result in results
+            ):
                 task.status = CollectionStatus.SUCCEEDED.value
             elif any(result in {"succeeded", "skipped"} for result in results):
                 task.status = CollectionStatus.PARTIAL.value
@@ -890,7 +1101,7 @@ class MarketDataCollectionCoordinator:
             task.last_error_message = (
                 None
                 if task.status == CollectionStatus.SUCCEEDED.value
-                else last_error_message or "一个或多个日期未满足严格 PIT 合同"
+                else last_error_message or "一个或多个日期的 UZI 原生数据源未返回可用结果"
             )
             task.next_retry_at = (
                 datetime.now(timezone.utc) + timedelta(seconds=min(60, 2 ** attempt))
@@ -906,23 +1117,28 @@ class MarketDataCollectionCoordinator:
             task.updated_at = datetime.now(timezone.utc)
             task.completed_at = datetime.now(timezone.utc)
 
-    def _needs_provider(self, spec: dict[str, Any], *, mode: str) -> bool:
+    def _needs_provider(
+        self, spec: dict[str, Any], *, mode: str, as_of_date: date
+    ) -> bool:
         """Return false before the provider wave when a fresh slot already exists."""
 
         if mode == "force_all":
             return True
-        as_of = self._local_today(spec["exchange_timezone"])
         with self.database.session() as session:
-            existing = SnapshotResolver(
+            coverage = SnapshotResolver(
                 MarketDataRepository(session), registry=self.registry
-            ).resolve_snapshot(
+            ).coverage(
                 symbol=spec["symbol"],
                 market=spec["market"],
-                dimension=spec["dimension"],
-                as_of_date=as_of,
+                as_of_date=as_of_date,
                 exchange_timezone=spec["exchange_timezone"],
             )
-            return existing is None
+            existing = next(
+                item
+                for item in coverage.dimensions
+                if item.dimension == spec["dimension"]
+            )
+            return not (existing.eligible or existing.degraded)
 
     def _finish_job(self, job_id: str, *, cancelled: bool = False) -> None:
         publish_scopes: set[tuple[str, str, str, date]] = set()
@@ -1008,6 +1224,7 @@ class MarketDataCollectionCoordinator:
                     exchange_timezone=exchange_timezone,
                     published_by=published_by,
                     now=now,
+                    allow_degraded=as_of_date != local_today,
                 )
                 return bundle.id
         except IncompleteBundleError:
@@ -1229,6 +1446,99 @@ class MarketDataCollectionCoordinator:
             if include_tasks
             else []
         )
+        result_rows = (
+            list(
+                session.scalars(
+                    select(MarketDataCollectionTaskResult)
+                    .where(
+                        MarketDataCollectionTaskResult.task_id.in_(
+                            [task.id for task in tasks]
+                        )
+                    )
+                    .order_by(
+                        MarketDataCollectionTaskResult.task_id,
+                        MarketDataCollectionTaskResult.as_of_date,
+                        MarketDataCollectionTaskResult.attempt.desc(),
+                    )
+                )
+            )
+            if tasks
+            else []
+        )
+        latest_results: dict[tuple[str, date], MarketDataCollectionTaskResult] = {}
+        for result in result_rows:
+            latest_results.setdefault((result.task_id, result.as_of_date), result)
+        snapshot_ids = {
+            result.snapshot_id
+            for result in latest_results.values()
+            if result.snapshot_id
+        }
+        snapshots_by_id = {
+            snapshot.id: snapshot
+            for snapshot in (
+                list(
+                    session.scalars(
+                        select(MarketDataSnapshot).where(
+                            MarketDataSnapshot.id.in_(snapshot_ids)
+                        )
+                    )
+                )
+                if snapshot_ids
+                else []
+            )
+        }
+        results_by_task: dict[str, list[MarketDataCollectionTaskResult]] = defaultdict(list)
+        latest_result_by_task: dict[str, MarketDataCollectionTaskResult] = {}
+        resolution_counts: dict[str, int] = defaultdict(int)
+        for result in latest_results.values():
+            results_by_task[result.task_id].append(result)
+            resolution_counts[result.status] += 1
+            current = latest_result_by_task.get(result.task_id)
+            if current is None or (result.as_of_date, result.attempt) > (
+                current.as_of_date,
+                current.attempt,
+            ):
+                latest_result_by_task[result.task_id] = result
+
+        def task_failure(task: MarketDataCollectionTask) -> dict[str, Any]:
+            if not task.last_error_code and not task.last_error_message:
+                return {
+                    "failure_kind": None,
+                    "failure_stage": None,
+                    "failure_label": None,
+                    "raw_data_present": False,
+                }
+            result = latest_result_by_task.get(task.id)
+            metrics = dict(result.metrics_json or {}) if result is not None else {}
+            diagnostic_message = task.last_error_message
+            snapshot = (
+                snapshots_by_id.get(result.snapshot_id)
+                if result is not None and result.snapshot_id
+                else None
+            )
+            if snapshot is not None:
+                raw_payload = dict(snapshot.payload_json or {}).get("raw")
+                metrics["raw_data_present"] = bool(raw_payload)
+                validation = dict(snapshot.validation_json or {})
+                detailed_errors = list(validation.get("semantic_errors") or [])
+                if (
+                    detailed_errors
+                    and diagnostic_message in {None, "", "collector reported data_gap"}
+                ):
+                    diagnostic_message = "; ".join(
+                        str(item) for item in detailed_errors if str(item).strip()
+                    )[:4000]
+            return {
+                "error_message": diagnostic_message,
+                **classify_collection_failure(
+                    error_code=task.last_error_code,
+                    error_message=diagnostic_message,
+                    provider_status=(
+                        result.provider_status if result is not None else None
+                    ),
+                    metrics=metrics,
+                ),
+            }
         return {
             "id": job.id,
             "job_id": job.id,
@@ -1254,6 +1564,15 @@ class MarketDataCollectionCoordinator:
             "created_at": iso(job.created_at),
             "started_at": iso(job.started_at),
             "completed_at": iso(job.completed_at),
+            "resolution_summary": {
+                "total": sum(resolution_counts.values()),
+                "strict": resolution_counts.get("succeeded", 0),
+                "degraded": resolution_counts.get("degraded", 0),
+                "skipped": resolution_counts.get("skipped", 0),
+                "failed": resolution_counts.get("failed", 0)
+                + resolution_counts.get("data_gap", 0),
+                "by_status": dict(resolution_counts),
+            },
             "tasks": [
                 {
                     "id": task.id,
@@ -1269,6 +1588,35 @@ class MarketDataCollectionCoordinator:
                     "next_retry_at": iso(task.next_retry_at),
                     "error_code": task.last_error_code,
                     "error_message": task.last_error_message,
+                    **task_failure(task),
+                    "resolution_status": (
+                        "audit_only"
+                        if task.last_error_code == "strict_contract_gap"
+                        else "degraded"
+                        if any(
+                            result.status == "degraded"
+                            for result in results_by_task.get(task.id, [])
+                        )
+                        else "strict"
+                        if results_by_task.get(task.id)
+                        and all(
+                            result.status in {"succeeded", "skipped"}
+                            for result in results_by_task[task.id]
+                        )
+                        else task.status
+                    ),
+                    "degraded_count": sum(
+                        result.status == "degraded"
+                        for result in results_by_task.get(task.id, [])
+                    ),
+                    "snapshot_id": next(
+                        (
+                            result.snapshot_id
+                            for result in reversed(results_by_task.get(task.id, []))
+                            if result.snapshot_id
+                        ),
+                        None,
+                    ),
                 }
                 for task in tasks
             ],

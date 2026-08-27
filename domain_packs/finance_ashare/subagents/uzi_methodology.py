@@ -21,7 +21,7 @@ from research_system.adapters.vendors.market_router import MarketRouter
 
 
 UZI_METHOD_VERSION = "3.9.4-adapted"
-UZI_SOURCE_COMMIT = "b004d7a988ca53a4805bf36784af091fa1209f22"
+UZI_SOURCE_COMMIT = "1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4"
 
 _PROFILES: dict[str, dict[str, Any]] = {
     "lite": {

@@ -304,6 +304,7 @@ export type StrategyBacktest = {
   start_date: string
   end_date: string
   initial_cash: number
+  input_snapshot_hash?: string | null
   status: string
   metrics: Record<string, number>
   result?: StrategyBacktestResult
@@ -345,24 +346,6 @@ export type PaperStrategyBinding = {
   promoted_at: string
 }
 
-export type StrategyPaperOrder = {
-  id: string
-  binding_id: string
-  strategy_version_id: string
-  signal_id: string
-  source_report_set_id: string
-  client_order_id: string
-  paper_order_id?: string | null
-  symbol: string
-  side: 'buy' | 'sell'
-  quantity: number
-  technical_reason: string
-  status: string
-  paper_order: Record<string, unknown>
-  created_at: string
-  idempotent_replay: boolean
-}
-
 export type StrategyWorkspaceContext = {
   strategyId?: string
   tab?: 'rules' | 'signals' | 'versions' | 'assignments' | 'backtests' | 'governance'
@@ -373,6 +356,6 @@ export type StrategyWorkspaceContext = {
   reportSetId?: string
   strategyVersionId?: string
   assignmentId?: string
-  mode: BacktestMode
+  mode?: BacktestMode
   holdingSymbol?: string
 }

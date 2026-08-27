@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-import json
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
@@ -585,55 +584,16 @@ class ApiV2FinanceTests(unittest.TestCase):
             places=2,
         )
 
-    def test_hikyuu_backtest_endpoint_validates_available_history(self) -> None:
+    def test_legacy_free_parameter_backtest_api_is_not_exposed(self) -> None:
         engine = self.client.get("/api/v2/finance/backtests/engine", headers=auth_headers())
-        response = self.client.post(
+        run = self.client.post(
             "/api/v2/finance/backtests",
             headers=auth_headers(),
-            json={
-                "symbol": "600519",
-                "strategy": "ma_cross",
-                "strategy_parameters": {"fast_period": 2, "slow_period": 3},
-                "initial_cash": 1_000_000,
-                "trade_size": 100,
-            },
+            json={"symbol": "600519", "strategy": "ma_cross"},
         )
 
-        self.assertEqual(engine.status_code, 200, engine.text)
-        self.assertEqual(engine.json()["engine"], "hikyuu")
-        self.assertTrue(engine.json()["available"])
-        self.assertEqual(response.status_code, 409, response.text)
-        self.assertEqual(response.json()["error"]["code"], "published_bundle_missing")
-
-    def test_backtest_history_is_paginated_without_hiding_total_count(self) -> None:
-        result_root = self.settings.workspace_root / "backtests"
-        result_root.mkdir(parents=True, exist_ok=True)
-        for index in range(3):
-            backtest_id = f"01J0000000000000000000000{index}"
-            (result_root / f"{backtest_id}.json").write_text(
-                json.dumps({
-                    "backtest_id": backtest_id,
-                    "created_at": f"2026-08-0{index + 1}T00:00:00Z",
-                    "symbol": "600519",
-                    "name": "贵州茅台",
-                    "strategy": {"id": "ma_cross", "name": "双均线交叉"},
-                    "parameters": {"fast_period": 5, "slow_period": 20},
-                    "period": {"start": "2020-01-01", "end": "2026-08-01", "bar_count": 1000, "frequency": "DAY"},
-                    "metrics": {"total_return_pct": index},
-                }, ensure_ascii=False),
-                encoding="utf-8",
-            )
-
-        response = self.client.get(
-            "/api/v2/finance/backtests?limit=1&offset=1",
-            headers=auth_headers(),
-        )
-        self.assertEqual(response.status_code, 200, response.text)
-        payload = response.json()
-        self.assertEqual(payload["total_count"], 3)
-        self.assertEqual(payload["limit"], 1)
-        self.assertEqual(payload["offset"], 1)
-        self.assertEqual(len(payload["results"]), 1)
+        self.assertEqual(engine.status_code, 404, engine.text)
+        self.assertEqual(run.status_code, 404, run.text)
 
     def test_openapi_and_cors_publish_the_complete_strategy_contract(self) -> None:
         schema = self.client.get("/openapi.json").json()
@@ -654,6 +614,8 @@ class ApiV2FinanceTests(unittest.TestCase):
             "/api/v2/finance/strategy-paper-orders",
         }
         self.assertFalse(expected - paths, expected - paths)
+        self.assertNotIn("/api/v2/finance/backtests", paths)
+        self.assertNotIn("/api/v2/finance/backtests/engine", paths)
 
         preflight = self.client.options(
             "/api/v2/finance/strategies/example",

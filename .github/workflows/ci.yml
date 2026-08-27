@@ -87,7 +87,7 @@ jobs:
           tests.test_fund_research
           tests.test_api_v1_fund_holding_reports
           tests.test_api_v2_finance
-          tests.test_backtest_strategies
+          tests.test_hikyuu_signal_engine
           tests.test_uzi_392_vendor_runtime
           tests.test_uzi_snapshot_runtime_parity
           tests.test_uzi_source_parity

@@ -24,7 +24,7 @@ import requests
 from research_system.adapters.vendors.market_router import MarketRouter
 
 
-UZI_GLOBAL_PEER_SOURCE_COMMIT = "b004d7a988ca53a4805bf36784af091fa1209f22"
+UZI_GLOBAL_PEER_SOURCE_COMMIT = "1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4"
 
 _YAHOO_FACTS = {
     "annualTotalRevenue": "revenue",

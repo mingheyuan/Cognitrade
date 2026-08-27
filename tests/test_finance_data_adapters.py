@@ -105,7 +105,14 @@ class FinanceDataAdapterTests(unittest.TestCase):
             stock=SimpleNamespace(get_history_bill=lambda symbol: history)
         )
 
-        with patch.object(efinance_flow_module, "import_module", return_value=fake_efinance):
+        with (
+            patch.object(
+                efinance_flow_module.EFinanceCapitalFlowAdapter,
+                "_bounded_history_rows",
+                side_effect=ConnectionError("bounded endpoint unavailable"),
+            ),
+            patch.object(efinance_flow_module, "import_module", return_value=fake_efinance),
+        ):
             result = efinance_flow_module.EFinanceCapitalFlowAdapter().get_capital_flow_snapshot(
                 symbol="600519.SH"
             )
@@ -118,6 +125,23 @@ class FinanceDataAdapterTests(unittest.TestCase):
             ["2026-08-20", "2026-08-21"],
         )
         self.assertEqual(result["main_20d"], "+5000.0万")
+
+    def test_efinance_capital_flow_uses_bounded_target_history(self) -> None:
+        rows = [
+            {"日期": f"2026-08-{day:02d}", "股票代码": "688012", "主力净流入": day}
+            for day in range(1, 22)
+        ]
+        with patch.object(
+            efinance_flow_module.EFinanceCapitalFlowAdapter,
+            "_bounded_history_rows",
+            return_value=rows,
+        ):
+            result = efinance_flow_module.EFinanceCapitalFlowAdapter().get_capital_flow_snapshot(
+                symbol="688012.SH"
+            )
+
+        self.assertEqual(len(result["main_fund_flow_20d"]), 20)
+        self.assertEqual(result["latest_flow"]["date"], "2026-08-21")
 
     def test_capital_flow_keeps_individual_flow_when_main_rank_fails(self) -> None:
         individual_flow = pd.DataFrame([{"date": "2026-07-15", "net_flow": 123.4}])

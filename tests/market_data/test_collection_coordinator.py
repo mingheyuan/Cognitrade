@@ -16,6 +16,7 @@ from research_system.market_data.models import (
     MarketDataCollectionJob,
     MarketDataCollectionTask,
     MarketDataCollectionTaskResult,
+    MarketDataSnapshot,
     MarketDataSubscription,
 )
 from research_system.strategies.database import StrategyDatabase
@@ -55,6 +56,45 @@ class _Collector:
                     }
                 )
         return rows
+
+
+class _HistoricalResearchCollector:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def __call__(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        target = str(kwargs["query"]).rsplit(" ", 1)[-1]
+        retrieved_at = datetime.now(timezone.utc).isoformat()
+        return [
+            {
+                "snapshot_type": "research",
+                "symbol": symbol,
+                "retrieved_at": retrieved_at,
+                "snapshot_date": datetime.now(timezone.utc).date().isoformat(),
+                "quality_status": "available",
+                "facts": {
+                    "availability": "available",
+                    "_uzi_raw_result": {
+                        "data": {
+                            "recent_reports": [
+                                {
+                                    "title": "历史研报",
+                                    "报告日期": target,
+                                    "url": "https://example.test/research/history",
+                                }
+                            ],
+                            "report_count": 1,
+                        }
+                    },
+                },
+                "source": {
+                    "provider_id": "test.research_archive",
+                    "chain_position": 0,
+                },
+            }
+            for symbol in kwargs["symbols"]
+        ]
 
 
 class CollectionCoordinatorTests(unittest.TestCase):
@@ -147,10 +187,52 @@ class CollectionCoordinatorTests(unittest.TestCase):
         self.assertEqual(completed["tasks"][0]["status"], "succeeded")
         self.assertEqual(len(self.collector.calls), 1)
         self.assertEqual(self.collector.calls[0]["max_workers"], 5)
+        self.assertFalse(self.collector.calls[0]["uzi_root_route"])
+        self.assertFalse(self.collector.calls[0]["no_resume"])
         with self.database.session() as session:
             result = session.scalar(select(MarketDataCollectionTaskResult))
             self.assertIsNotNone(result.snapshot_id)
             self.assertEqual(result.status, "succeeded")
+
+    def test_complete_dimension_run_keeps_native_uzi_root_workflow(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        job = self.coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions="all",
+            publish_when_complete=False,
+            submit=False,
+        )
+
+        self.coordinator.run_job_now(job["id"])
+
+        self.assertEqual(len(self.collector.calls), 1)
+        self.assertTrue(self.collector.calls[0]["uzi_root_route"])
+        self.assertTrue(self.collector.calls[0]["no_resume"])
+
+    def test_scoped_event_retry_does_not_collect_basic_or_use_root_workflow(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        job = self.coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions=["15_events"],
+            publish_when_complete=False,
+            submit=False,
+        )
+
+        self.coordinator.run_job_now(job["id"])
+
+        self.assertEqual(self.collector.calls[0]["snapshot_types"], ["events"])
+        self.assertFalse(self.collector.calls[0]["uzi_root_route"])
+        self.assertFalse(self.collector.calls[0]["no_resume"])
 
     def test_adapter_validation_failure_is_isolated_and_batch_continues(self) -> None:
         today = datetime.now(timezone.utc).date()
@@ -382,7 +464,7 @@ class CollectionCoordinatorTests(unittest.TestCase):
         self.assertEqual(self.collector.calls, [])
         self.assertTrue(all(task["status"] == "cancelled" for task in completed["tasks"]))
 
-    def test_historical_gap_never_calls_current_only_uzi_provider(self) -> None:
+    def test_historical_current_only_source_is_disclosed_without_calling_provider(self) -> None:
         historical = datetime.now(timezone.utc).date() - timedelta(days=30)
         job = self.coordinator.create_job(
             tenant_id="tenant",
@@ -401,9 +483,62 @@ class CollectionCoordinatorTests(unittest.TestCase):
         with self.database.session() as session:
             task = session.scalar(select(MarketDataCollectionTask))
             result = session.scalar(select(MarketDataCollectionTaskResult))
-            self.assertEqual(task.status, "failed")
-            self.assertEqual(result.provider_status, "pit_not_supported")
+            self.assertEqual(task.status, "succeeded")
+            self.assertEqual(result.status, "degraded")
+            self.assertEqual(result.provider_status, "historical_unavailable")
             self.assertFalse(result.retryable)
+            self.assertIsNotNone(result.snapshot_id)
+        coverage = self.coordinator.get_job(
+            job["id"], tenant_id="tenant", user_id="user"
+        )
+        self.assertEqual(coverage["status"], "succeeded")
+
+    def test_historical_dated_source_is_reconstructed_as_grade_b(self) -> None:
+        historical = datetime.now(timezone.utc).date() - timedelta(days=30)
+        collector = _HistoricalResearchCollector()
+        coordinator = MarketDataCollectionCoordinator(
+            self.database,
+            collector=collector,
+        )
+        self.addCleanup(coordinator.close)
+        job = coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=historical,
+            end_date=historical,
+            dimensions=["6_research"],
+            publish_when_complete=False,
+            submit=False,
+        )
+
+        coordinator.run_job_now(job["id"])
+
+        completed = coordinator.get_job(
+            job["id"], tenant_id="tenant", user_id="user"
+        )
+        self.assertEqual(completed["status"], "succeeded")
+        self.assertEqual(completed["tasks"][0]["status"], "succeeded")
+        self.assertEqual(len(collector.calls), 1)
+        with self.database.session() as session:
+            snapshot = session.scalar(
+                select(MarketDataSnapshot).where(
+                    MarketDataSnapshot.dimension == "6_research"
+                )
+            )
+            result = session.scalar(
+                select(MarketDataCollectionTaskResult).where(
+                    MarketDataCollectionTaskResult.snapshot_id == snapshot.id
+                )
+            )
+            self.assertEqual(snapshot.status, "available")
+            self.assertEqual(snapshot.evidence_grade, "B")
+            self.assertEqual(
+                snapshot.query_manifest_json["pit_mode"],
+                "historical_reconstruction",
+            )
+            self.assertEqual(result.status, "succeeded")
 
     def test_missing_or_stale_skips_fresh_slot_before_provider_wave(self) -> None:
         today = datetime.now(timezone.utc).date()

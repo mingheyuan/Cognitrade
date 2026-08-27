@@ -12,6 +12,8 @@ from sqlalchemy import func, select
 
 from research_system.market_data.models import (
     MarketDataBundle,
+    MarketDataCollectionJob,
+    MarketDataCollectionTask,
     MarketDataConflict,
     MarketDataSnapshot,
 )
@@ -292,6 +294,115 @@ class MarketDataServiceBoundaryTests(unittest.TestCase):
         self.assertEqual(bundle["status"], "invalidated")
         self.assertEqual(providers["items"][0]["provider_id"], "fixture-provider")
         self.assertEqual(self.collection.create_calls, [])
+
+    def test_collection_job_list_is_scoped_and_returns_compact_diagnostics(self) -> None:
+        now = datetime.now(timezone.utc)
+        holdings = [
+            {
+                "rank": index + 1,
+                "symbol": f"60000{index}.SH",
+                "name": f"持仓 {index + 1}",
+                "missing_dimensions": ["12_capital_flow"] if index == 0 else [],
+            }
+            for index in range(10)
+        ]
+        with self.database.session() as session:
+            parent = MarketDataCollectionJob(
+                tenant_id="tenant",
+                user_id="user",
+                idempotency_key="fund-parent",
+                job_type="fund_holding_expansion",
+                mode="missing_or_stale",
+                status="partial",
+                symbols_json=["020464"],
+                dimensions_json=["fund_top_holdings"],
+                start_date=self.as_of_date,
+                end_date=self.as_of_date,
+                max_concurrency=5,
+                publish_when_complete=True,
+                requested_by="actor",
+                progress_json={"completed": 1, "total": 1, "child_complete": 9, "child_total": 10},
+                checkpoint_json={},
+                created_at=now,
+            )
+            session.add(parent)
+            session.flush()
+            child = MarketDataCollectionJob(
+                tenant_id="tenant",
+                user_id="user",
+                idempotency_key="fund-child",
+                parent_job_id=parent.id,
+                job_type="historical_backfill",
+                mode="missing_or_stale",
+                status="failed",
+                symbols_json=["600000.SH"],
+                dimensions_json=["12_capital_flow"],
+                start_date=self.as_of_date,
+                end_date=self.as_of_date,
+                max_concurrency=5,
+                publish_when_complete=True,
+                requested_by="actor",
+                progress_json={"completed": 0, "failed": 1, "total": 1},
+                checkpoint_json={},
+                created_at=now,
+            )
+            session.add(child)
+            session.flush()
+            parent.checkpoint_json = {
+                "holdings": holdings,
+                "child_total_count": 10,
+                "child_complete_count": 9,
+                "child_missing_by_symbol": {"600000.SH": ["12_capital_flow"]},
+                "child_job_ids": [child.id],
+                "last_child_runs": [{"job_id": child.id, "attempt": 1}],
+            }
+            session.add_all(
+                [
+                    MarketDataCollectionTask(
+                        job_id=parent.id,
+                        symbol="020464",
+                        market="CN_FUND",
+                        exchange_timezone="Asia/Shanghai",
+                        dimension="fund_top_holdings",
+                        start_date=self.as_of_date,
+                        end_date=self.as_of_date,
+                        status="partial",
+                        retryable=True,
+                        attempt_count=1,
+                    ),
+                    MarketDataCollectionTask(
+                        job_id=child.id,
+                        symbol="600000.SH",
+                        market="CN_EQUITY",
+                        exchange_timezone="Asia/Shanghai",
+                        dimension="12_capital_flow",
+                        start_date=self.as_of_date,
+                        end_date=self.as_of_date,
+                        status="failed",
+                        retryable=True,
+                        attempt_count=1,
+                        last_error_code="provider_degraded",
+                    ),
+                ]
+            )
+
+        page = self.service.list_collection_jobs(
+            tenant_id="tenant",
+            user_id="user",
+            symbol="020464.OF",
+            asset_family="fund",
+            as_of_date=self.as_of_date,
+            limit=20,
+            offset=0,
+        )
+
+        self.assertEqual(page["total_count"], 1)
+        self.assertEqual(len(page["items"]), 2)
+        parent_payload = page["items"][0]
+        self.assertEqual(parent_payload["tasks"], [])
+        self.assertEqual(parent_payload["task_summary"]["retryable_failed"], 1)
+        self.assertEqual(parent_payload["portfolio_summary"]["ready_slots"], 219)
+        self.assertEqual(parent_payload["portfolio_summary"]["retryable_slots"], 1)
 
     def test_fund_is_one_holding_slot_then_top_ten_equity_workflow(self) -> None:
         contract = self.service.get_contract(market="CN_FUND")
@@ -628,7 +739,8 @@ class MarketDataServiceBoundaryTests(unittest.TestCase):
             row for row in blocked["dimensions"] if row["dimension_id"] == "0_basic"
         )
         self.assertTrue(basic["conflict"])
-        self.assertFalse(basic["eligible"])
+        self.assertTrue(basic["eligible"])
+        self.assertFalse(basic["audit_eligible"])
 
         with self.assertRaises(MarketDataServiceError) as invalid_candidate:
             self.service.resolve_conflict(

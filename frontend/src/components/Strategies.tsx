@@ -72,7 +72,7 @@ const tabs: Array<{ id: StrategyTab; label: string; icon: LucideIcon }> = [
   { id: 'signals', label: '信号预览', icon: GitBranch },
   { id: 'versions', label: '版本历史', icon: History },
   { id: 'assignments', label: '基金绑定', icon: Link2 },
-  { id: 'backtests', label: '策略回测', icon: FlaskConical },
+  { id: 'backtests', label: '基金回测', icon: FlaskConical },
   { id: 'governance', label: '方法论治理', icon: ShieldCheck },
 ]
 
@@ -138,7 +138,7 @@ export function Strategies({ initialContext = null }: { initialContext?: Strateg
       const [jobs, reports, runs, verificationRows, eventRows, bindingRows, signalRows] = await Promise.all([
         client.listReportJobs(),
         client.listDailyReportSets(),
-        client.listStrategyBacktests(),
+        client.listStrategyBacktests({ strategyId: row.id, limit: 200 }),
         row.latest_version ? client.listStrategyVerifications(row.latest_version.id) : Promise.resolve({ verifications: [] }),
         row.is_system_template ? Promise.resolve({ events: [] }) : client.listStrategyEvents(row.id),
         client.listPaperStrategyBindings(),
@@ -149,7 +149,7 @@ export function Strategies({ initialContext = null }: { initialContext?: Strateg
       setReportJobs(jobs.jobs.filter((job) => row.assignments?.some((assignment) => assignment.id === String(job.request.assignment_id))))
       setReportSets(reports.report_sets.filter((report) => fundCodes.has(report.fund_code)))
       setSignals(signalRows.flatMap((payload) => payload.signals).filter((signal) => assignmentIds.has(signal.assignment_id)))
-      setBacktests(runs.backtests.filter((run) => run.strategy_id === row.id))
+      setBacktests(runs.backtests)
       setVerifications(verificationRows.verifications)
       setEvents(eventRows.events)
       setBindings(bindingRows.bindings.filter((binding) => row.versions?.some((version) => version.id === binding.strategy_version_id)))
@@ -627,17 +627,37 @@ function VersionsPanel({ client, detail }: { client: CognitradeApiClient; detail
 function AssignmentsPanel({ client, detail, context, reload, perform }: { client: CognitradeApiClient; detail: StrategyRecord; context: StrategyWorkspaceContext | null; reload: () => Promise<void>; perform: (key: string, action: () => Promise<void>) => Promise<void> }) {
   const [fundCode, setFundCode] = useState(context?.fundCode || new URLSearchParams(window.location.search).get('fund_code') || '')
   const [fundName, setFundName] = useState(context?.fundName || '')
-  const [mode, setMode] = useState<BacktestMode>(context?.mode || (new URLSearchParams(window.location.search).get('mode') as BacktestMode) || 'holdings_portfolio')
+  const [mode, setMode] = useState<BacktestMode>(context?.mode || (new URLSearchParams(window.location.search).get('mode') as BacktestMode) || 'fund_only')
   const create = (event: FormEvent) => { event.preventDefault(); void perform('assignment', async () => { await client.createStrategyAssignment({ strategy_id: detail.id, fund_code: fundCode, fund_name: fundName, mode }); setFundCode(''); setFundName(''); await reload() }) }
   if (!detail.latest_version || detail.is_system_template) return <EmptyPanel icon={BadgeCheck} title="发布后才能绑定基金" text={detail.is_system_template ? '请先复制系统模板并发布个人版本。' : 'Assignment 固定到已发布版本，草稿不能直接运行日报。'} />
-  return <div className="strategy-panel-stack"><section className="strategy-subpanel"><PanelTitle kicker="ASSIGNMENT" title="创建基金绑定" description="绑定只允许覆盖调度时间，不允许覆盖权重、阈值、MA 或费率。" /><form className="strategy-inline-form" onSubmit={create}><Field label="基金代码"><input value={fundCode} onChange={(event) => setFundCode(event.target.value)} required /></Field><Field label="基金名称"><input value={fundName} onChange={(event) => setFundName(event.target.value)} /></Field><Field label="回测模式"><AppSelect value={mode} onChange={(event) => setMode(event.target.value as BacktestMode)}><option value="fund_only">基金本体</option><option value="holdings_portfolio">持仓组合</option></AppSelect></Field><button className="primary-button"><Plus size={13} />创建绑定</button></form></section><section className="strategy-subpanel"><PanelTitle kicker="ACTIVE TARGETS" title="已绑定基金" description="暂停不会删除历史日报和信号；已有信号的绑定删除时只会禁用。" /><div className="strategy-record-list">{detail.assignments?.map((row) => { const inactive = row.paused || !row.enabled; return <article key={row.id}><span className={`record-state ${inactive ? 'is-paused' : 'is-completed'}`}>{row.paused ? 'paused' : row.enabled ? 'active' : 'disabled'}</span><div><strong>{row.fund_name || row.fund_code}</strong><small>{row.fund_code} · {modeLabel(row.mode)} · {row.active_version_id}</small><p>下次生效 {row.effective_from}{row.pending_version_id ? ` · 待切换 ${row.pending_version_id}` : ''}</p></div><div className="record-actions"><button onClick={() => void perform(`toggle-${row.id}`, async () => { if (inactive) await client.updateStrategyAssignment(row.id, { enabled: true, paused: false }); else await client.setStrategyAssignmentPaused(row.id, true); await reload() })}>{inactive ? <Play size={12} /> : <Pause size={12} />}{inactive ? '恢复' : '暂停'}</button><button onClick={() => { if (window.confirm('确认删除或禁用该绑定？')) void perform(`delete-${row.id}`, async () => { await client.deleteStrategyAssignment(row.id); await reload() }) }}><Trash2 size={12} />删除</button></div></article> })}{!detail.assignments?.length && <p className="strategy-inline-empty">尚未绑定基金。</p>}</div></section></div>
+  return <div className="strategy-panel-stack"><section className="strategy-subpanel"><PanelTitle kicker="ASSIGNMENT" title="创建基金绑定" description="默认绑定基金本体；披露持仓组合只用于高级穿透研究。绑定不允许覆盖权重、阈值、MA 或费率。" /><form className="strategy-inline-form" onSubmit={create}><Field label="基金代码"><input value={fundCode} onChange={(event) => setFundCode(event.target.value)} required /></Field><Field label="基金名称"><input value={fundName} onChange={(event) => setFundName(event.target.value)} /></Field><Field label="回测模式"><AppSelect value={mode} onChange={(event) => setMode(event.target.value as BacktestMode)}><option value="fund_only">基金本体（推荐）</option><option value="holdings_portfolio">披露持仓组合（高级）</option></AppSelect></Field><button className="primary-button"><Plus size={13} />创建绑定</button></form></section><section className="strategy-subpanel"><PanelTitle kicker="ACTIVE TARGETS" title="已绑定基金" description="暂停不会删除历史日报和信号；已有信号的绑定删除时只会禁用。" /><div className="strategy-record-list">{detail.assignments?.map((row) => { const inactive = row.paused || !row.enabled; return <article key={row.id}><span className={`record-state ${inactive ? 'is-paused' : 'is-completed'}`}>{row.paused ? 'paused' : row.enabled ? 'active' : 'disabled'}</span><div><strong>{row.fund_name || row.fund_code}</strong><small>{row.fund_code} · {modeLabel(row.mode)} · {row.active_version_id}</small><p>下次生效 {row.effective_from}{row.pending_version_id ? ` · 待切换 ${row.pending_version_id}` : ''}</p></div><div className="record-actions"><button onClick={() => void perform(`toggle-${row.id}`, async () => { if (inactive) await client.updateStrategyAssignment(row.id, { enabled: true, paused: false }); else await client.setStrategyAssignmentPaused(row.id, true); await reload() })}>{inactive ? <Play size={12} /> : <Pause size={12} />}{inactive ? '恢复' : '暂停'}</button><button onClick={() => { if (window.confirm('确认删除或禁用该绑定？')) void perform(`delete-${row.id}`, async () => { await client.deleteStrategyAssignment(row.id); await reload() }) }}><Trash2 size={12} />删除</button></div></article> })}{!detail.assignments?.length && <p className="strategy-inline-empty">尚未绑定基金。</p>}</div></section></div>
+}
+
+function compactBacktestRuns(runs: StrategyBacktest[]): Array<{ run: StrategyBacktest; count: number }> {
+  const groups = new Map<string, { run: StrategyBacktest; count: number }>()
+  const ordered = [...runs].sort((left, right) => right.created_at.localeCompare(left.created_at))
+  for (const run of ordered) {
+    const key = run.input_snapshot_hash || [
+      run.strategy_version_id,
+      run.fund_code,
+      run.mode,
+      run.start_date,
+      run.end_date,
+      run.initial_cash,
+    ].join('|')
+    const current = groups.get(key)
+    if (current) current.count += 1
+    else groups.set(key, { run, count: 1 })
+  }
+  return [...groups.values()]
 }
 
 function BacktestsPanel({ client, detail, context, reportJobs, backtests, reload, perform }: { client: CognitradeApiClient; detail: StrategyRecord; context: StrategyWorkspaceContext | null; reportJobs: ReportJob[]; backtests: StrategyBacktest[]; reload: () => Promise<void>; perform: (key: string, action: () => Promise<void>) => Promise<void> }) {
   const query = new URLSearchParams(window.location.search)
+  const preferredAssignment = detail.assignments?.find((row) => row.mode === 'fund_only') || detail.assignments?.[0]
   const [versionId, setVersionId] = useState(context?.strategyVersionId || query.get('strategy_version_id') || detail.latest_version?.id || '')
-  const [fundCode, setFundCode] = useState(context?.fundCode || query.get('fund_code') || detail.assignments?.[0]?.fund_code || '')
-  const [mode, setMode] = useState<BacktestMode>(context?.mode || (query.get('mode') as BacktestMode) || detail.assignments?.[0]?.mode || 'holdings_portfolio')
+  const [fundCode, setFundCode] = useState(context?.fundCode || query.get('fund_code') || preferredAssignment?.fund_code || '')
+  const [mode, setMode] = useState<BacktestMode>(context?.mode || (query.get('mode') as BacktestMode) || preferredAssignment?.mode || 'fund_only')
   const [startDate, setStartDate] = useState(today(-365))
   const [endDate, setEndDate] = useState(today())
   const [initialCash, setInitialCash] = useState(1_000_000)
@@ -649,7 +669,9 @@ function BacktestsPanel({ client, detail, context, reportJobs, backtests, reload
   const [selectedBacktest, setSelectedBacktest] = useState<StrategyBacktest | null>(null)
   const [resultLoadingId, setResultLoadingId] = useState('')
   const [resultError, setResultError] = useState('')
+  const [showAllRuns, setShowAllRuns] = useState(false)
   const request = { strategy_version_id: versionId, fund_code: fundCode, mode, start_date: startDate, end_date: endDate }
+  const assignmentOptions = detail.assignments?.filter((row) => row.mode === mode) || []
   const selectedVersion = detail.versions?.find((row) => row.id === versionId) || null
   const latestVersion = detail.latest_version || detail.versions?.[0] || null
   const assignment = detail.assignments?.find((row) => row.fund_code === fundCode && row.mode === mode)
@@ -662,6 +684,12 @@ function BacktestsPanel({ client, detail, context, reportJobs, backtests, reload
   )) || null
   const backfillJob = persistedBackfill || submittedBackfill
   const backfillPending = Boolean(backfillJob && ['queued', 'running', 'paused'].includes(backfillJob.status))
+  const scopedBacktests = backtests.filter((run) => (!fundCode || run.fund_code === fundCode) && run.mode === mode)
+  const compactedBacktests = compactBacktestRuns(scopedBacktests)
+  const compactVisibleBacktests = compactedBacktests.slice(0, 12).map((group) => group.run)
+  const visibleBacktests = showAllRuns ? scopedBacktests : compactVisibleBacktests
+  const duplicateCountById = new Map(compactedBacktests.map((group) => [group.run.id, group.count]))
+  const hiddenRunCount = Math.max(0, scopedBacktests.length - compactVisibleBacktests.length)
   const versionSignalsMissing = Boolean(
     preflight
     && preflight.available_report_count > 0
@@ -697,11 +725,11 @@ function BacktestsPanel({ client, detail, context, reportJobs, backtests, reload
   if (!detail.versions?.length) return <EmptyPanel icon={FlaskConical} title="没有可回测的发布版本" text="回测只接受不可变 strategy_version_id，不提供临时权重、阈值、MA 或费率参数。" />
   return <div className="strategy-panel-stack">
     <section className="strategy-subpanel">
-      <PanelTitle kicker="STRICT BACKTEST CONTRACT" title="回测预检" description="先检查日报与信号覆盖；输入只允许版本、基金、模式、日期、资金、基准和报告策略。" />
+      <PanelTitle kicker="STRICT BACKTEST CONTRACT" title="基金回测预检" description="默认回测基金本体净值；披露持仓组合仅作为高级研究模拟。先检查日报与信号覆盖。" />
       <div className="strategy-form-grid is-four">
         <Field label="策略版本"><AppSelect value={versionId} onChange={(event) => { setVersionId(event.target.value); resetPreflight() }}>{detail.versions.map((row) => <option key={row.id} value={row.id}>v{row.version_number}{row.id === latestVersion?.id ? ' · 最新' : ''} · {row.content_hash.slice(0, 8)}</option>)}</AppSelect></Field>
-        <Field label="目标基金"><AppSelect value={fundCode} onChange={(event) => { setFundCode(event.target.value); resetPreflight() }}><option value="">请选择绑定基金</option>{detail.assignments?.map((row) => <option key={row.id} value={row.fund_code}>{row.fund_name || row.fund_code}</option>)}</AppSelect></Field>
-        <Field label="模式"><AppSelect value={mode} onChange={(event) => { setMode(event.target.value as BacktestMode); resetPreflight() }}><option value="fund_only">基金本体</option><option value="holdings_portfolio">持仓组合</option></AppSelect></Field>
+        <Field label="目标基金"><AppSelect value={fundCode} onChange={(event) => { setFundCode(event.target.value); resetPreflight(); setShowAllRuns(false) }}><option value="">请选择绑定基金</option>{assignmentOptions.map((row) => <option key={row.id} value={row.fund_code}>{row.fund_name || row.fund_code}</option>)}</AppSelect></Field>
+        <Field label="模式"><AppSelect value={mode} onChange={(event) => { const nextMode = event.target.value as BacktestMode; const matching = detail.assignments?.find((row) => row.mode === nextMode && row.fund_code === fundCode) || detail.assignments?.find((row) => row.mode === nextMode); setMode(nextMode); setFundCode(matching?.fund_code || ''); resetPreflight(); setShowAllRuns(false) }}><option value="fund_only">基金本体（推荐）</option><option value="holdings_portfolio">披露持仓组合（高级）</option></AppSelect></Field>
         <NumberField label="初始资金" value={initialCash} min={10000} max={1_000_000_000} onChange={setInitialCash} />
         <Field label="开始日期"><input type="date" value={startDate} onChange={(event) => { setStartDate(event.target.value); resetPreflight() }} /></Field>
         <Field label="结束日期"><input type="date" value={endDate} onChange={(event) => { setEndDate(event.target.value); resetPreflight() }} /></Field>
@@ -717,18 +745,19 @@ function BacktestsPanel({ client, detail, context, reportJobs, backtests, reload
       {backfillJob && <BackfillProgress job={backfillJob} onPreflight={runPreflight} />}
     </section>
     <section className="strategy-subpanel">
-      <PanelTitle kicker="TRACEABLE RESULTS" title="策略回测记录" description="点击已完成记录查看净值曲线、基准、交易和数据质量。" />
+      <PanelTitle kicker="TRACEABLE RESULTS" title="基金回测记录" description={`仅显示当前基金与模式；默认合并相同输入并保留最近 12 组。共 ${scopedBacktests.length} 次原始运行。`} />
+      {hiddenRunCount > 0 && <div className="strategy-action-row"><button className="secondary-button" onClick={() => setShowAllRuns((value) => !value)}>{showAllRuns ? '收起重复与较早运行' : `展开全部运行（另 ${hiddenRunCount} 次）`}</button></div>}
       <div className="strategy-record-list">
-        {backtests.map((run) => <article key={run.id} className={selectedBacktest?.id === run.id ? 'is-selected' : ''}>
+        {visibleBacktests.map((run) => <article key={run.id} className={selectedBacktest?.id === run.id ? 'is-selected' : ''}>
           <span className={`record-state is-${run.status}`}>{run.status}</span>
-          <div><strong>{run.fund_name || run.fund_code} · {modeLabel(run.mode)}</strong><small>{run.start_date} — {run.end_date} · {run.strategy_content_hash.slice(0, 12)}</small><p>{metricSummary(run.metrics)}{run.error_summary ? ` · ${run.error_summary}` : ''}</p></div>
+          <div><strong>{run.fund_name || run.fund_code} · {modeLabel(run.mode)}</strong><small>{run.start_date} — {run.end_date} · {run.strategy_content_hash.slice(0, 12)}{Number(duplicateCountById.get(run.id) || 1) > 1 ? ` · ${duplicateCountById.get(run.id)} 次相同输入` : ''}</small><p>{metricSummary(run.metrics)}{run.error_summary ? ` · ${run.error_summary}` : ''}</p></div>
           <div className="record-actions">
             {run.status === 'completed' && <button aria-expanded={selectedBacktest?.id === run.id} aria-controls="backtest-result-panel" disabled={resultLoadingId === run.id} onClick={() => void openResult(run)}>{resultLoadingId === run.id ? <LoaderCircle className="is-spinning" size={12} /> : <BarChart3 size={12} />}{selectedBacktest?.id === run.id ? '收起图表' : '查看图表'}</button>}
             {['failed', 'cancelled'].includes(run.status) && <button onClick={() => void perform(`retry-bt-${run.id}`, async () => { await client.retryStrategyBacktest(run.id); await reload() })}><RefreshCw size={12} />重试</button>}
             {['queued', 'running'].includes(run.status) && <button onClick={() => void perform(`cancel-bt-${run.id}`, async () => { await client.cancelStrategyBacktest(run.id); await reload() })}><Pause size={12} />取消</button>}
           </div>
         </article>)}
-        {!backtests.length && <p className="strategy-inline-empty">暂无策略版本回测。</p>}
+        {!visibleBacktests.length && <p className="strategy-inline-empty">当前基金与模式暂无回测。</p>}
       </div>
       {resultError && <p className="strategy-inline-error">{resultError}</p>}
       {selectedBacktest?.result && <BacktestResultPanel run={selectedBacktest} onClose={() => setSelectedBacktest(null)} />}
@@ -939,7 +968,7 @@ function readWorkspaceContext(): StrategyWorkspaceContext {
     reportSetId: query.get('report_set_id') || undefined,
     strategyVersionId: query.get('strategy_version_id') || undefined,
     assignmentId: query.get('assignment_id') || undefined,
-    mode: modeValue === 'fund_only' ? 'fund_only' : 'holdings_portfolio',
+    mode: modeValue === 'fund_only' || modeValue === 'holdings_portfolio' ? modeValue : undefined,
     holdingSymbol: query.get('holding_symbol') || undefined,
   }
 }

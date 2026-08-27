@@ -96,71 +96,6 @@ def _field_paths(schema: dict[str, Any], prefix: str = "", *, root: dict[str, An
     return paths
 
 
-def _typescript_literal(value: Any) -> str:
-    if value is None:
-        return "null"
-    if value is True:
-        return "true"
-    if value is False:
-        return "false"
-    if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
-    if isinstance(value, (int, float)):
-        return str(value)
-    return "unknown"
-
-
-def _typescript_type(schema: dict[str, Any], *, indent: int = 0, root: dict[str, Any] | None = None) -> str:
-    root = root or schema
-    schema = _resolve_local_ref(schema, root)
-    if "const" in schema:
-        return _typescript_literal(schema["const"])
-    enum = schema.get("enum")
-    if isinstance(enum, list) and enum:
-        return " | ".join(_typescript_literal(item) for item in enum)
-
-    raw_type = schema.get("type")
-    if isinstance(raw_type, list):
-        variants = [
-            _typescript_type({**schema, "type": item}, indent=indent, root=root)
-            for item in raw_type
-        ]
-        return " | ".join(dict.fromkeys(variants))
-    if raw_type == "string":
-        return "string"
-    if raw_type in {"number", "integer"}:
-        return "number"
-    if raw_type == "boolean":
-        return "boolean"
-    if raw_type == "null":
-        return "null"
-    if raw_type == "array" or "items" in schema:
-        item = schema.get("items")
-        item_type = _typescript_type(item, indent=indent, root=root) if isinstance(item, dict) else "unknown"
-        return f"Array<{item_type}>"
-    if raw_type == "object" or isinstance(schema.get("properties"), dict):
-        properties = schema.get("properties")
-        if not isinstance(properties, dict) or not properties:
-            return "Record<string, unknown>"
-        required = set(schema.get("required") or [])
-        padding = " " * indent
-        child_padding = " " * (indent + 2)
-        rows = []
-        for name, raw_child in properties.items():
-            child = raw_child if isinstance(raw_child, dict) else {}
-            optional = "" if name in required else "?"
-            rows.append(
-                f"{child_padding}{json.dumps(name, ensure_ascii=False)}{optional}: "
-                f"{_typescript_type(child, indent=indent + 2, root=root)}"
-            )
-        return "{\n" + ";\n".join(rows) + f";\n{padding}}}"
-    return "unknown"
-
-
-def _type_name(artifact_type: str) -> str:
-    return "".join(part.capitalize() for part in artifact_type.split("_")) + "Content"
-
-
 def generate() -> str:
     artifact_types = _declared_artifact_types()
     schemas = {artifact_type: _load_schema(artifact_type) for artifact_type in artifact_types}
@@ -182,25 +117,7 @@ def generate() -> str:
         "export type FinanceArtifactType = typeof FINANCE_ARTIFACT_TYPES[number]",
         "",
     ]
-    for artifact_type in artifact_types:
-        lines.extend(
-            [
-                f"export type {_type_name(artifact_type)} = {_typescript_type(schemas[artifact_type], root=schemas[artifact_type])}",
-                "",
-            ]
-        )
-    lines.extend(
-        [
-            "export type FinanceArtifactContentMap = {",
-            *[
-                f"  {json.dumps(artifact_type)}: {_type_name(artifact_type)}"
-                for artifact_type in artifact_types
-            ],
-            "}",
-            "",
-            "export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {",
-        ]
-    )
+    lines.append("export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {")
     for artifact_type in artifact_types:
         lines.append(f"  {json.dumps(artifact_type)}: [")
         lines.extend(

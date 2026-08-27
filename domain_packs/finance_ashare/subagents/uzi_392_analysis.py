@@ -9,6 +9,12 @@ frozen snapshot payload before it is admitted to ``agent_analysis``.
 
 from __future__ import annotations
 
+import importlib
+import json
+import logging
+import math
+import os
+import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
@@ -16,13 +22,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from difflib import get_close_matches
 from hashlib import sha256
-import importlib
-import json
-import logging
-import math
-import os
 from pathlib import Path
-import re
 from threading import Event, get_ident
 from time import monotonic
 from typing import Any, Literal
@@ -33,11 +33,11 @@ from domain_packs.finance_ashare.subagents.uzi_392_native_methods import build_u
 from domain_packs.finance_ashare.subagents.uzi_agent_roleplay import (
     build_native_panel_overrides,
 )
+from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_structured
+from domain_packs.finance_ashare.subagents.uzi_panel_registry import panel_for_profile
 from domain_packs.finance_ashare.subagents.uzi_qualitative_deep_dive import (
     apply_qualitative_deep_dive,
 )
-from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_structured
-from domain_packs.finance_ashare.subagents.uzi_panel_registry import panel_for_profile
 from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import (
     UZI_ENVIRONMENT_LOCK,
     UZI_SOURCE_COMMIT,
@@ -47,7 +47,6 @@ from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import (
 from research_system.adapters.vendors.uzi_request_timeout import (
     uzi_request_timeout_scope,
 )
-
 
 _DIMENSION_KEYS = tuple(f"{index}_{name}" for index, name in enumerate((
     "basic",
@@ -162,32 +161,77 @@ def _workflow_dimension_keys(
     return _profile_dimension_keys(profile)
 
 
-def _research_workflow_compatible_features(
-    features: dict[str, Any],
-) -> dict[str, Any]:
-    """Bridge b004d7a's nullable moat value into its older idea-screen reader.
+def _scoring_excluded_dimensions(raw: dict[str, Any]) -> set[str]:
+    return {
+        str(key)
+        for key, value in dict(raw.get("dimensions") or {}).items()
+        if isinstance(value, dict) and value.get("_excluded_from_scoring") is True
+    }
 
-    The latest upstream extractor truthfully emits ``moat_total=None`` when no
-    scored moat evidence exists. Its idea-screen function still performs one
-    direct numeric comparison. Normalize only that internal compatibility copy;
-    the canonical feature map and raw evidence remain nullable and continue to
-    drive data-gap disclosure.
+
+def _apply_scoring_exclusions(
+    scored: dict[str, Any],
+    raw: dict[str, Any],
+) -> dict[str, Any]:
+    """Zero only the weights of audit-backed terminal data gaps.
+
+    UZI's upstream scorer intentionally supplies neutral defaults for absent
+    inputs.  A persisted historical-unavailable disclosure must not inherit
+    those defaults, otherwise a missing source silently changes the score.
     """
 
-    compatible = dict(features)
-    if not compatible.get("moat_known") and compatible.get("moat_total") is None:
-        compatible["moat_total"] = 0
-    return compatible
+    excluded = _scoring_excluded_dimensions(raw)
+    dimension_scores = scored.get("dimensions")
+    if not isinstance(dimension_scores, dict):
+        return scored
+    raw_dimensions = dict(raw.get("dimensions") or {})
+    for dimension in sorted(excluded):
+        score_row = dimension_scores.get(dimension)
+        if not isinstance(score_row, dict):
+            continue
+        native_dimension = raw_dimensions.get(dimension) or {}
+        degradation = (
+            dict(native_dimension.get("_degradation") or {})
+            if isinstance(native_dimension, dict)
+            else {}
+        )
+        score_row["nominal_weight"] = score_row.get("weight", 0)
+        score_row["weight"] = 0
+        score_row["scoring_status"] = "excluded"
+        score_row["exclusion_reason"] = degradation.get("reason_code") or str(
+            native_dimension.get("error") or "historical_unavailable"
+        )
+        score_row["label"] = "历史数据不可恢复 · 已排除评分"
+    active_rows = [
+        row
+        for row in dimension_scores.values()
+        if isinstance(row, dict) and float(row.get("weight") or 0) > 0
+    ]
+    total_weight = sum(float(row.get("weight") or 0) for row in active_rows)
+    total_weighted = sum(
+        float(row.get("score") or 0) * float(row.get("weight") or 0)
+        for row in active_rows
+    )
+    scored["fundamental_score"] = round(
+        total_weighted / total_weight * 10 if total_weight else 0,
+        1,
+    )
+    scored["scoring_coverage"] = {
+        "excluded_dimensions": sorted(excluded),
+        "excluded_count": len(excluded),
+        "active_dimension_count": len(active_rows),
+        "policy": "missing_historical_sources_are_not_neutral_scores",
+    }
+    return scored
 
 
 def _deep_methods_compatible_raw(raw: dict[str, Any]) -> dict[str, Any]:
-    """Bridge nullable optional mappings into UZI's deep-method readers.
+    """Recover a nullable optional mapping for UZI's deep-method reader.
 
-    The pinned moat fetcher can truthfully emit ``scores=None`` when no scored
-    moat evidence is available, while ``build_competitive_analysis`` still
-    treats the field as a mapping.  Normalize only the computation copy so the
-    canonical raw evidence remains nullable and continues to disclose the data
-    gap in the report.
+    Upstream commit 1b5cdcb sanitizes nullable feature values at each modeling
+    boundary, but ``build_competitive_analysis`` can still call ``.get`` on a
+    present ``14_moat.data.scores=None`` value. Normalize only the computation
+    copy so the canonical raw evidence and native gate result remain unchanged.
     """
 
     compatible = deepcopy(raw)
@@ -294,7 +338,7 @@ class AgentAnalysisPayload(BaseModel):
     data_gap_acknowledged: dict[str, str]
 
     @model_validator(mode="after")
-    def reject_unknown_dimensions(self) -> "AgentAnalysisPayload":
+    def reject_unknown_dimensions(self) -> AgentAnalysisPayload:
         actual = set(self.dim_commentary)
         unknown = actual - set(_DIMENSION_KEYS)
         if unknown:
@@ -328,7 +372,7 @@ class AgentDimensionPayload(BaseModel):
     data_gaps: list[AgentDataGapAcknowledgement]
 
     @model_validator(mode="after")
-    def reject_duplicate_dimensions(self) -> "AgentDimensionPayload":
+    def reject_duplicate_dimensions(self) -> AgentDimensionPayload:
         dimension_ids = [row.dimension_id for row in self.dimensions]
         if len(dimension_ids) != len(set(dimension_ids)):
             raise ValueError("dimensions contains duplicate dimension_id values")
@@ -705,7 +749,9 @@ def execute_native_analysis(
     successful_count = sum(row.get("report_allowed") is True for row in results)
     quality_status = (
         "available"
-        if results and successful_count == len(results)
+        if results
+        and successful_count == len(results)
+        and all(row.get("quality_status") == "available" for row in results)
         else "degraded"
         if successful_count
         else "quality_gate_blocked"
@@ -829,7 +875,7 @@ def _execute_symbol(
         dim20 = deep_methods.compute_dim_20(features, raw)
         raw["dimensions"]["20_valuation_models"] = dim20
         dim21 = deep_methods.compute_dim_21(
-            _research_workflow_compatible_features(features),
+            features,
             raw,
             dim20.get("data"),
         )
@@ -852,7 +898,7 @@ def _execute_symbol(
         dim22["data"] = dim22_data
         raw["dimensions"]["22_deep_methods"] = dim22
         score_fns = importlib.import_module("lib.pipeline.score_fns")
-        dimensions = score_fns.score_dimensions(raw)
+        dimensions = _apply_scoring_exclusions(score_fns.score_dimensions(raw), raw)
         with _uzi_native_environment(profile=profile, school=school):
             native_panel = score_fns.generate_panel(dimensions, raw)
         panel = _profile_native_panel(native_panel, profile)
@@ -1049,6 +1095,7 @@ def _execute_symbol(
                 recovery_tasks,
                 agent_analysis,
                 integrity,
+                raw,
             )
 
         review = run_native_self_review(
@@ -1148,7 +1195,13 @@ def _execute_symbol(
         "agent_validation_issues": agent_issues,
         "self_review": review,
         "report_allowed": review["critical_count"] == 0,
-        "quality_status": "available" if review["critical_count"] == 0 else "quality_gate_blocked",
+        "quality_status": (
+            "degraded"
+            if review["critical_count"] == 0 and _scoring_excluded_dimensions(raw)
+            else "available"
+            if review["critical_count"] == 0
+            else "quality_gate_blocked"
+        ),
         "agent_workflow_mode": "full" if full_agent_workflow else "profile",
     }
 
@@ -2508,11 +2561,14 @@ def _profile_integrity_coverage(
 
     data_integrity = importlib.import_module("lib.data_integrity")
     raw_dimensions = dict(raw.get("dimensions") or {})
+    excluded_dimensions = _scoring_excluded_dimensions(raw)
     total = 0
     passed = 0
     missing: list[dict[str, Any]] = []
     for dimension_key, path, label, critical in data_integrity.CRITICAL_CHECKS:
         if dimension_key not in enabled_dimension_keys:
+            continue
+        if dimension_key in excluded_dimensions:
             continue
         total += 1
         dimension = raw_dimensions.get(dimension_key) or {}
@@ -2542,17 +2598,21 @@ def _profile_integrity_report(
     """Scope UZI's integrity/recovery worklist to fetchers the user selected."""
 
     scoped = deepcopy(report)
+    excluded_dimensions = _scoring_excluded_dimensions(raw)
     for key in ("missing_critical", "missing_optional", "missing_enrichment", "fallback_dims"):
         scoped[key] = [
             dict(row)
             for row in list(report.get(key) or [])
-            if isinstance(row, dict) and str(row.get("dim") or "") in enabled_dimension_keys
+            if isinstance(row, dict)
+            and str(row.get("dim") or "") in enabled_dimension_keys
+            and str(row.get("dim") or "") not in excluded_dimensions
         ]
     data_integrity = importlib.import_module("lib.data_integrity")
     total_checks = sum(
         1
         for dimension_key, _path, _label, _critical in data_integrity.CRITICAL_CHECKS
         if dimension_key in enabled_dimension_keys
+        and dimension_key not in excluded_dimensions
     )
     missing_checks = len(scoped["missing_critical"]) + len(scoped["missing_optional"])
     passed_checks = max(total_checks - missing_checks, 0)
@@ -2566,6 +2626,9 @@ def _profile_integrity_report(
         not scoped["critical_missing"] and len(scoped["missing_enrichment"]) < 7
     )
     scoped["profile_enabled_dimensions"] = sorted(enabled_dimension_keys)
+    scoped["excluded_from_scoring"] = sorted(excluded_dimensions)
+    scoped["degraded_dimension_count"] = len(excluded_dimensions)
+    scoped["quality_status"] = "degraded" if excluded_dimensions else "available"
     return scoped
 
 
@@ -2602,9 +2665,19 @@ def _profile_empty_dimension_issues(
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     dimensions = dict(raw.get("dimensions") or {})
-    for key in sorted(enabled_dimension_keys):
-        dimension = dimensions.get(key)
+    enabled_numbers = {
+        int(key.split("_", 1)[0])
+        for key in enabled_dimension_keys
+        if key.split("_", 1)[0].isdigit()
+    }
+    # Match native check_empty_dims: inspect every present dimension whose
+    # numeric prefix is enabled. This intentionally includes 6_fund_holders
+    # whenever numbered dimension 6 is active.
+    for key, dimension in sorted(dimensions.items()):
         if not isinstance(dimension, dict):
+            continue
+        prefix = key.split("_", 1)[0]
+        if prefix.isdigit() and int(prefix) not in enabled_numbers:
             continue
         data = dimension.get("data")
         if data not in (None, {}, []):
@@ -2695,6 +2768,7 @@ def run_native_self_review(
     enabled_dimension_numbers = {
         int(key.split("_", 1)[0]) for key in enabled_dimension_keys
     }
+    excluded_dimensions = _scoring_excluded_dimensions(raw)
     review_raw = _self_review_compatible_raw(raw)
     ctx = {
         "ticker": symbol,
@@ -2742,6 +2816,17 @@ def run_native_self_review(
                         for row in rows
                         if not str(row.get("issue") or "").startswith("agent 仅覆盖")
                     ]
+                for row in rows:
+                    dimension = str(row.get("dim") or "")
+                    if (
+                        row.get("severity") == "critical"
+                        and dimension in excluded_dimensions
+                    ):
+                        row["severity"] = "warning"
+                        row["issue"] = (
+                            f"{row.get('issue') or dimension}（历史不可恢复，已排除评分）"
+                        )
+                        row["suggested_fix"] = "该缺口已终态披露；如取得历史证据，可重新采集并替换"
                 issues.extend(rows)
             except Exception as exc:
                 issues.append({
@@ -2851,6 +2936,7 @@ def _data_gap_document(
     tasks: list[dict[str, Any]],
     agent_analysis: dict[str, Any] | None,
     integrity: dict[str, Any],
+    raw: dict[str, Any],
 ) -> dict[str, Any]:
     acks = dict((agent_analysis or {}).get("data_gap_acknowledged") or {})
     rendered = []
@@ -2861,10 +2947,41 @@ def _data_gap_document(
             row["status"] = "acknowledged"
             row["agent_note"] = acks.get(key, acks.get(row.get("dim"), ""))
         rendered.append(row)
+    existing_dimensions = {str(row.get("dim") or "") for row in rendered}
+    raw_dimensions = dict(raw.get("dimensions") or {})
+    for dimension in sorted(_scoring_excluded_dimensions(raw)):
+        if dimension in existing_dimensions:
+            continue
+        native = raw_dimensions.get(dimension) or {}
+        degradation = (
+            dict(native.get("_degradation") or {})
+            if isinstance(native, dict)
+            else {}
+        )
+        rendered.append(
+            {
+                "dim": dimension,
+                "field": "historical_source",
+                "label": degradation.get("message")
+                or "目标日历史数据不可恢复，未使用当前值替代",
+                "severity": "warning",
+                "suggested_actions": [
+                    "如取得目标日可审计证据，重新采集该维度并生成新 Bundle"
+                ],
+                "status": "excluded_from_scoring",
+                "reason_code": degradation.get("reason_code")
+                or native.get("error")
+                or "historical_unavailable",
+                "excluded_from_scoring": True,
+            }
+        )
     return {
         "coverage_pct": integrity.get("coverage_pct", 0),
         "total_gaps": len(rendered),
         "unresolved": sum(row.get("status") == "pending" for row in rendered),
+        "excluded_from_scoring": sum(
+            row.get("status") == "excluded_from_scoring" for row in rendered
+        ),
         "tasks": rendered,
     }
 

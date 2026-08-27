@@ -1,7 +1,7 @@
 """UZI 3.9.4 investor decision profiles vendored into the Finance Pack.
 
 The content is adapted from ``lib/investor_profile.py`` at UZI source commit
-``b004d7a988ca53a4805bf36784af091fa1209f22``.  Keeping it in the Pack makes
+``1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4``.  Keeping it in the Pack makes
 the methodology self-contained and preserves UZI's per-seat output contract.
 """
 

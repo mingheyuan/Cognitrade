@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from lib.stock_features import sanitize_features
+
 
 def _num(v, default=0.0) -> float:
     try:
@@ -29,6 +31,7 @@ def build_ic_memo(
     thesis_pillars: list | None = None,
 ) -> dict:
     """Structured IC memo for formal investment decision."""
+    features = sanitize_features(features)
     dims = raw_data.get("dimensions", {}) or {}
     basic = (dims.get("0_basic") or {}).get("data") or {}
     fin = (dims.get("1_financials") or {}).get("data") or {}
@@ -130,7 +133,7 @@ def _ic_recommendation(features: dict, dcf: dict | None) -> tuple[str, str]:
 
     val_score = 0
     if dcf:
-        sm = dcf.get("safety_margin_pct", 0)
+        sm = _num(dcf.get("safety_margin_pct"))
         if sm > 20:
             val_score = 2
         elif sm > 0:
@@ -195,7 +198,9 @@ def _ic_risks(features: dict, moat: dict) -> list[dict]:
 def _ic_scenarios(price: float, dcf: dict | None) -> list[dict]:
     if not dcf or price <= 0:
         return []
-    intrinsic = dcf.get("intrinsic_per_share", price)
+    intrinsic = _num(dcf.get("intrinsic_per_share"))
+    if intrinsic <= 0:
+        return []
     return [
         {
             "scenario": "Bull (乐观)",

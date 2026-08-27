@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import importlib
 import json
-from pathlib import Path
 import unittest
+from pathlib import Path
 
-from jsonschema import Draft202012Validator
 import yaml
+from jsonschema import Draft202012Validator
 
 from domain_packs.finance_ashare.subagents.uzi_392_native_methods import (
     UZI_NATIVE_METHOD_IDS,
@@ -17,7 +17,6 @@ from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import (
     UZI_SOURCE_COMMIT,
     Uzi392FetcherRuntime,
 )
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = json.loads(
@@ -213,6 +212,35 @@ def _stock_inputs() -> dict:
 
 
 class Uzi392NativeMethodTests(unittest.TestCase):
+    def test_raw_builder_preserves_terminal_historical_scoring_exclusion(self) -> None:
+        row = {
+            "snapshot_type": "capital_flow",
+            "symbol": "600000",
+            "quality_status": "data_gap",
+            "facts": {
+                "availability": "historically_unavailable",
+                "reason_code": "historical_reconstruction_no_proof",
+            },
+            "query_manifest": {
+                "degradation": {
+                    "safe_for_report": True,
+                    "excluded_from_scoring": True,
+                    "reason_code": "historical_reconstruction_no_proof",
+                    "message": "目标日没有可验证记录",
+                }
+            },
+        }
+
+        raw = build_uzi_raw([row], "600000")
+
+        dimension = raw["dimensions"]["12_capital_flow"]
+        self.assertTrue(dimension["_excluded_from_scoring"])
+        self.assertEqual(dimension["data"], {})
+        self.assertEqual(
+            dimension["_degradation"]["reason_code"],
+            "historical_reconstruction_no_proof",
+        )
+
     @classmethod
     def setUpClass(cls) -> None:
         Uzi392FetcherRuntime(workspace_root=ROOT / "workspace")
@@ -350,15 +378,14 @@ class Uzi392NativeMethodTests(unittest.TestCase):
         self.assertIn("error", native_error["results"][0]["result"])
         self.assertIn("native_error", native_error["results"][0]["data_gap"])
 
-        native_exception = execute_native_method(
+        recovered_initiation = execute_native_method(
             "initiation_report", rows, ["600000"], {}
         )
-        self.assertEqual(native_exception["quality_status"], "data_gap")
-        self.assertIsNone(native_exception["results"][0]["result"])
-        self.assertIn(
-            "native_exception:TypeError",
-            native_exception["results"][0]["data_gap"],
-        )
+        self.assertEqual(recovered_initiation["quality_status"], "degraded")
+        result = recovered_initiation["results"][0]["result"]
+        self.assertEqual(result["headline"]["rating"], "未评级 (Not Rated)")
+        self.assertEqual(result["headline"]["target_price"], 0)
+        self.assertIn("native_warning:nested_dcf_unavailable", recovered_initiation["results"][0]["data_gap"])
 
     def test_accretion_adapter_maps_the_pinned_acquirer_field_names(self) -> None:
         rows = _complete_method_snapshots()

@@ -213,6 +213,32 @@ def _payload(dimension: str) -> dict:
             {"symbol": f"peer-{index}", "price": 10, "pe": 20, "market_cap": 100}
             for index in range(4)
         ]
+    native_raw = {"content": dimension}
+    if dimension == "0_basic":
+        native_raw.update(
+            name="贵州茅台",
+            price=100.0,
+            industry="白酒",
+            market_cap=1_000_000.0,
+            pe_ttm=20.0,
+            pb=5.0,
+        )
+    elif dimension == "1_financials":
+        native_raw.update(
+            roe_history=[20, 21, 22],
+            revenue_history=[100, 110, 120],
+            net_profit_history=[20, 22, 24],
+            financial_health={"status": "healthy"},
+        )
+    elif dimension == "2_kline":
+        native_raw.update(stage="Stage 2", ma_align="bull", macd="positive")
+    elif dimension == "10_valuation":
+        native_raw.update(pe=20.0, pe_quantile=50, pb_quantile=60)
+    elif dimension == "7_industry":
+        native_raw["growth"] = "positive"
+    elif dimension == "14_moat":
+        native_raw["scores"] = {"total": 80}
+    payload["raw"] = native_raw
     payload["fixture_dimension"] = dimension
     return payload
 
@@ -667,7 +693,7 @@ def test_resolver_never_reuses_a_snapshot_across_logical_days(session: Session) 
         item for item in missing_next_day.dimensions if item.dimension == "0_basic"
     )
     assert basic.snapshot_id is None
-    assert basic.reason == "no A/B snapshot was published by the cutoff"
+    assert basic.reason == "UZI 维度结果缺失"
 
     next_day = ingestion.ingest(
         _input("0_basic").model_copy(
@@ -730,8 +756,10 @@ def test_future_or_grade_c_inputs_are_persisted_as_data_gaps(session: Session) -
         "600519.SH", "CN_EQUITY", AS_OF, now=NOW
     )
     basic = next(item for item in coverage.dimensions if item.dimension == "0_basic")
-    assert basic.snapshot_id is None
-    assert basic.reason and basic.reason.startswith("data_gap")
+    assert basic.snapshot_id == future_row.id
+    assert basic.eligible is True
+    assert basic.audit_eligible is False
+    assert basic.audit_reason and "cutoff" in basic.audit_reason
 
 
 def test_grade_b_reconstruction_is_eligible_only_with_immutable_proof(
@@ -910,7 +938,8 @@ def test_coverage_publish_and_materialize_freeze_all_22_slots(session: Session) 
         now=datetime(2026, 8, 20, 15, 30, tzinfo=timezone.utc),
     )
     assert stale.structurally_complete is True
-    assert stale.report_ready is False
+    assert stale.report_ready is True
+    assert stale.audit_ready is False
     assert stale.stale_count > 0
 
     publisher = BundlePublisher(repository, resolver=resolver)
@@ -945,7 +974,7 @@ def test_coverage_publish_and_materialize_freeze_all_22_slots(session: Session) 
     assert materialized.manifest_hash == bundle.manifest_hash
 
 
-def test_missing_conflict_and_revocation_each_block_formal_bundle(
+def test_missing_blocks_while_conflict_is_audit_only_and_revocation_invalidates_bundle(
     session: Session,
 ) -> None:
     repository = MarketDataRepository(session)
@@ -973,12 +1002,14 @@ def test_missing_conflict_and_revocation_each_block_formal_bundle(
             candidate_evidence_json=[],
         )
     )
-    with pytest.raises(IncompleteBundleError) as blocked:
-        publisher.publish(
-            symbol="600519.SH", market="CN_EQUITY", as_of_date=AS_OF, now=NOW
-        )
-    assert blocked.value.blocked_dimensions == ["0_basic"]
-    assert blocked.value.coverage.structurally_complete is False
+    conflicted_coverage = SnapshotResolver(repository).coverage(
+        "600519.SH", "CN_EQUITY", AS_OF, now=NOW
+    )
+    conflicted_basic = conflicted_coverage.dimensions[0]
+    assert conflicted_basic.eligible is True
+    assert conflicted_basic.audit_eligible is False
+    assert conflicted_basic.conflict is True
+    assert conflicted_coverage.report_ready is True
 
     repository.resolve_conflict(
         conflict.id,
@@ -998,7 +1029,7 @@ def test_missing_conflict_and_revocation_each_block_formal_bundle(
         BundleMaterializer(repository).materialize(bundle.id)
 
 
-def test_direct_database_snapshot_cannot_bypass_contract_validation_on_publish(
+def test_extended_contract_validation_is_audit_only_for_uzi_bundle_publish(
     session: Session,
 ) -> None:
     repository = MarketDataRepository(session)
@@ -1069,16 +1100,22 @@ def test_direct_database_snapshot_cannot_bypass_contract_validation_on_publish(
     )
     repository.add_snapshot_evidence(snapshot_id=snapshot.id, evidence_id=proof.id)
 
-    with pytest.raises(IncompleteBundleError) as blocked:
-        BundlePublisher(repository).publish(
-            symbol="600519.SH", market="CN_EQUITY", as_of_date=AS_OF, now=NOW
-        )
-    basic = blocked.value.coverage.dimensions[0]
+    publisher = BundlePublisher(repository)
+    coverage = publisher.resolver.coverage(
+        "600519.SH", "CN_EQUITY", AS_OF, now=NOW
+    )
+    basic = coverage.dimensions[0]
     assert basic.snapshot_id == snapshot.id
-    assert basic.reason and "field price must be" in basic.reason
+    assert basic.eligible is True
+    assert basic.audit_eligible is False
+    assert basic.audit_reason and "field price must be" in basic.audit_reason
+    bundle = publisher.publish(
+        symbol="600519.SH", market="CN_EQUITY", as_of_date=AS_OF, now=NOW
+    )
+    assert bundle.status == "published"
 
 
-def test_materializer_revalidates_hash_correct_but_semantically_invalid_snapshot(
+def test_materializer_uses_uzi_native_payload_when_extended_shape_is_invalid(
     session: Session,
 ) -> None:
     repository, _ = _ingest_complete_set(session)
@@ -1150,8 +1187,11 @@ def test_materializer_revalidates_hash_correct_but_semantically_invalid_snapshot
     session.flush()
     session.expire_all()
 
-    with pytest.raises(BundleIntegrityError, match="failed contract validation"):
-        BundleMaterializer(repository).materialize(bundle.id)
+    materialized = BundleMaterializer(repository).materialize(bundle.id)
+    basic_row = next(
+        row for row in materialized.snapshots if row["dimension_id"] == "0_basic"
+    )
+    assert basic_row["facts"]["price"] == 100.0
 
 
 def test_series_points_are_content_addressed_and_reused(session: Session) -> None:

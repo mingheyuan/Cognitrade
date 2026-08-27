@@ -222,12 +222,28 @@ class StrategyBacktestService:
         self._submit(row.id)
         return payload
 
-    def list(self, scope: OwnerScope) -> dict[str, Any]:
+    def list(
+        self,
+        scope: OwnerScope,
+        *,
+        strategy_id: str | None = None,
+        strategy_version_id: str | None = None,
+        fund_code: str | None = None,
+        mode: BacktestMode | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
         with self.database.session() as session:
             rows = self.repository.list_backtests(
                 session,
                 tenant_id=scope.tenant_id,
                 user_id=scope.user_id,
+                strategy_id=strategy_id,
+                strategy_version_id=strategy_version_id,
+                fund_code=fund_code,
+                mode=mode.value if mode else None,
+                status=status,
+                limit=limit,
             )
             return {"backtests": [self._payload(row) for row in rows]}
 

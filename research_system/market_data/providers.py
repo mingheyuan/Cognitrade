@@ -8,6 +8,8 @@ from research_system.adapters.vendors.provider_registry import (
     ProviderSpec,
     VendorProviderRegistry,
 )
+from research_system.market_data.dimension_contracts import DEFAULT_DIMENSION_REGISTRY
+from research_system.market_data.historical import capability_for_dimension
 from research_system.runtime.platform.settings import Settings
 
 
@@ -79,12 +81,25 @@ class MarketDataProviderCatalog:
             and credential_configured
             and policy_enabled
         )
+        dimension_by_type = {
+            contract.snapshot_type: contract.dimension
+            for contract in DEFAULT_DIMENSION_REGISTRY
+        }
+        historical_capabilities = {
+            dim: capability_for_dimension(dimension_by_type.get(dim, dim)).strategy
+            for dim in provider.dims
+        }
         return {
             **raw,
             "dependency_installed": dependency_installed,
             "credential_configured": credential_configured,
             "policy_enabled": policy_enabled,
             "configured": configured,
+            "supports_historical_reconstruction": any(
+                strategy != "current_only"
+                for strategy in historical_capabilities.values()
+            ),
+            "historical_capabilities": historical_capabilities,
         }
 
     def _credential_configured(self, provider: ProviderSpec) -> bool:

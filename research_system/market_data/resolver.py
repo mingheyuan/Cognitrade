@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 from research_system.market_data.contracts import (
+    CONTRACT_VERSION,
     CoverageResult,
     DimensionCoverage,
     EvidenceGrade,
@@ -16,9 +17,15 @@ from research_system.market_data.dimension_contracts import (
     DimensionContract,
     DimensionRegistry,
 )
+from research_system.market_data.historical import is_safe_degradation_manifest
 from research_system.market_data.ingestion import validate_persisted_snapshot_contract
 from research_system.market_data.models import MarketDataSnapshot
 from research_system.market_data.repository import MarketDataRepository
+from research_system.market_data.uzi_gate import (
+    evaluate_uzi_collection_gate,
+    native_quality,
+    native_snapshot_usable,
+)
 
 
 def _database_utc(value: datetime) -> datetime:
@@ -74,34 +81,62 @@ class SnapshotResolver:
             for contract in self.registry
         ]
 
-        def structurally_usable(item: DimensionCoverage) -> bool:
-            return bool(
-                item.snapshot_id is not None
-                and not item.conflict
-                and (
-                    item.eligible
-                    or (
-                        item.stale
-                        and str(item.reason or "").startswith("snapshot is stale")
-                    )
+        selected_snapshots = {
+            item.dimension: self.repository.get_snapshot(item.snapshot_id)
+            for item in dimensions
+            if item.snapshot_id is not None
+        }
+        selected_snapshots = {
+            dimension: snapshot
+            for dimension, snapshot in selected_snapshots.items()
+            if snapshot is not None
+        }
+        uses_uzi_gate = self.registry.contract_version == CONTRACT_VERSION
+        uzi_integrity_by_profile = (
+            {
+                profile: evaluate_uzi_collection_gate(
+                    selected_snapshots,
+                    profile=profile,
+                    market=market,
                 )
-            )
+                for profile in ("lite", "medium", "deep")
+            }
+            if uses_uzi_gate
+            else {}
+        )
+        uzi_integrity = dict(uzi_integrity_by_profile.get("medium") or {})
 
-        structural_count = sum(structurally_usable(item) for item in dimensions)
+        structural_count = sum(item.snapshot_id is not None for item in dimensions)
         ready_count = sum(item.eligible for item in dimensions)
+        degraded_count = sum(item.degraded for item in dimensions)
         available_count = sum(
-            structurally_usable(item) and item.status == SnapshotStatus.AVAILABLE
+            item.snapshot_id is not None and item.status == SnapshotStatus.AVAILABLE
             for item in dimensions
         )
         empty_count = sum(
-            structurally_usable(item) and item.status == SnapshotStatus.VERIFIED_EMPTY
+            item.snapshot_id is not None and item.status == SnapshotStatus.VERIFIED_EMPTY
             for item in dimensions
         )
         stale_count = sum(item.stale for item in dimensions)
         conflict_count = sum(item.conflict for item in dimensions)
-        gap_count = sum(item.snapshot_id is None for item in dimensions)
+        gap_count = sum(
+            item.snapshot_id is None or not item.eligible
+            for item in dimensions
+        )
         structurally_complete = structural_count == len(self.registry)
-        report_ready = structurally_complete and ready_count == len(self.registry)
+        audit_ready_count = sum(item.audit_eligible for item in dimensions)
+        audit_ready = structurally_complete and audit_ready_count == len(self.registry)
+        report_ready = (
+            structurally_complete and bool(uzi_integrity.get("gate_passed"))
+            if uses_uzi_gate
+            else audit_ready
+        )
+        # A Bundle is the immutable input to UZI's recovery/Agent workflow.
+        # Upstream does not reject raw_data at data_integrity time: unresolved
+        # gaps are repaired and the complete native self-review is the final
+        # HTML gate.  Therefore a structurally complete 22-slot Bundle remains
+        # generatable even when this precheck still has critical data issues.
+        report_generatable = structurally_complete if uses_uzi_gate else report_ready
         return CoverageResult(
             symbol=symbol,
             market=market,
@@ -119,6 +154,25 @@ class SnapshotResolver:
             structurally_complete=structurally_complete,
             report_ready=report_ready,
             dimensions=dimensions,
+            resolved_dimension_count=structural_count,
+            degraded_dimension_count=degraded_count,
+            report_generatable=report_generatable,
+            quality=(
+                "strict"
+                if report_ready and ready_count == len(self.registry)
+                else "degraded"
+                if report_generatable
+                else "blocked"
+            ),
+            gate_policy=(
+                str(uzi_integrity.get("gate_policy") or "uzi-3.9.4-medium")
+                if uses_uzi_gate
+                else self.registry.contract_version
+            ),
+            uzi_integrity=uzi_integrity,
+            uzi_integrity_by_profile=uzi_integrity_by_profile,
+            audit_ready_dimension_count=audit_ready_count,
+            audit_ready=audit_ready,
         )
 
     def resolve_snapshot(
@@ -156,17 +210,30 @@ class SnapshotResolver:
         current_day: bool,
         contract: DimensionContract,
     ) -> DimensionCoverage:
-        candidates = self.repository.list_candidate_snapshots(
+        candidates = self.repository.list_snapshots(
             symbol=symbol,
             market=market,
             dimension=contract.dimension,
             as_of_date=as_of_date,
-            contract_version=self.registry.contract_version,
-            cutoff_at=cutoff_at,
+            include_revoked=True,
+            limit=200,
         )
-        fallback: DimensionCoverage | None = None
-        for snapshot in candidates:
-            evidence_error = self._evidence_error(snapshot, contract, cutoff_at)
+        candidates = [
+            row
+            for row in candidates
+            if row.contract_version == self.registry.contract_version
+            and row.revoked_at is None
+        ]
+        candidates.sort(
+            key=lambda row: (
+                0 if native_snapshot_usable(row) else 1,
+                int(row.source_priority),
+                -_database_utc(row.published_at).timestamp(),
+            )
+        )
+        if candidates:
+            snapshot = candidates[0]
+            audit_error = self._evidence_error(snapshot, contract, cutoff_at)
             conflicts = self.repository.list_open_conflicts(
                 symbol=symbol,
                 market=market,
@@ -179,13 +246,44 @@ class SnapshotResolver:
                 current_day
                 and (now - observed_at).total_seconds() > contract.freshness_seconds
             )
-            reason = evidence_error
+            validation = dict(snapshot.validation_json or {})
+            persisted_audit_errors = [
+                str(item).strip()
+                for item in list(
+                    validation.get("audit_errors")
+                    or validation.get("errors")
+                    or []
+                )
+                if str(item).strip()
+            ]
+            audit_reasons = list(
+                dict.fromkeys(
+                    [item for item in (audit_error, *persisted_audit_errors) if item]
+                )
+            )
             if conflicts:
-                reason = "unresolved field-level conflict"
-            elif stale:
-                reason = f"snapshot is stale: age exceeds {contract.freshness_seconds} seconds"
-            eligible = not evidence_error and not conflicts and not stale
-            item = DimensionCoverage(
+                audit_reasons.append("unresolved field-level conflict")
+            if stale:
+                audit_reasons.append(
+                    f"snapshot is stale: age exceeds {contract.freshness_seconds} seconds"
+                )
+            quality = native_quality(snapshot)
+            usable = native_snapshot_usable(snapshot)
+            degradation = dict(
+                (snapshot.query_manifest_json or {}).get("degradation") or {}
+            )
+            safe_degradation = bool(
+                snapshot.status == SnapshotStatus.DATA_GAP.value
+                and is_safe_degradation_manifest(snapshot.query_manifest_json)
+            )
+            native_reason = None
+            if not usable:
+                native_reason = str(
+                    degradation.get("message")
+                    or degradation.get("reason_code")
+                    or f"UZI 原生质量状态：{quality}"
+                )
+            return DimensionCoverage(
                 dimension=contract.dimension,
                 ordinal=contract.ordinal,
                 label=contract.label,
@@ -195,43 +293,25 @@ class SnapshotResolver:
                 evidence_grade=EvidenceGrade(snapshot.evidence_grade),
                 stale=stale,
                 conflict=bool(conflicts),
-                eligible=eligible,
-                reason=reason,
+                eligible=usable,
+                reason=native_reason,
                 published_at=_database_utc(snapshot.published_at),
                 observed_at=observed_at,
+                degraded=quality in {"degraded", "partial"} or not usable,
+                excluded_from_scoring=safe_degradation,
+                native_quality=quality,
+                audit_eligible=not audit_reasons,
+                audit_reason="; ".join(audit_reasons) or None,
+                audit_errors=audit_reasons,
             )
-            if eligible:
-                return item
-            if fallback is None:
-                fallback = item
-        if fallback is not None:
-            return fallback
-
-        latest = self.repository.list_snapshots(
-            symbol=symbol,
-            market=market,
-            dimension=contract.dimension,
-            as_of_date=as_of_date,
-            include_revoked=True,
-            limit=1,
-        )
-        reason = "no A/B snapshot was published by the cutoff"
-        if latest:
-            row = latest[0]
-            if row.revoked_at is not None:
-                reason = "latest snapshot was revoked"
-            elif row.status == SnapshotStatus.DATA_GAP.value:
-                errors = list((row.validation_json or {}).get("errors") or [])
-                reason = f"data_gap: {'; '.join(errors)}" if errors else "data_gap"
-            elif row.evidence_grade == EvidenceGrade.C.value:
-                reason = "latest snapshot only has grade C evidence"
-            elif _database_utc(row.published_at) > cutoff_at:
-                reason = "latest snapshot was published after the cutoff"
         return DimensionCoverage(
             dimension=contract.dimension,
             ordinal=contract.ordinal,
             label=contract.label,
-            reason=reason,
+            reason="UZI 维度结果缺失",
+            native_quality="missing",
+            audit_reason="snapshot missing",
+            audit_errors=["snapshot missing"],
         )
 
     def _evidence_error(

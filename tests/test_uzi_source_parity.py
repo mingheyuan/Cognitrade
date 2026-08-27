@@ -146,10 +146,10 @@ class UziSourceParityTests(unittest.TestCase):
         with (
             patch.object(Uzi392FetcherRuntime, "collect", return_value=upstream),
             patch(
-                "domain_packs.finance_ashare.tools.snapshot_collector.CapitalFlowSnapshotSkill.run",
-                return_value=fallback,
-            ),
+                "domain_packs.finance_ashare.tools.snapshot_collector.CapitalFlowSnapshotSkill"
+            ) as recovery_skill,
         ):
+            recovery_skill.return_value.run.return_value = fallback
             snapshot = snapshot_collector._run_uzi_fetcher_snapshot(
                 query="分析寒武纪",
                 symbol="688256",
@@ -163,6 +163,15 @@ class UziSourceParityTests(unittest.TestCase):
         self.assertEqual(snapshot["source"]["provider_id"], "uzi_3_9_2.12_capital_flow")
         self.assertTrue(snapshot["fallback_applied"])
         self.assertFalse(snapshot["degraded"])
+        recovery_registry = recovery_skill.call_args.kwargs["provider_registry"]
+        recovery_chain = [
+            provider.provider_id
+            for provider in recovery_registry.get_provider_chain(
+                "capital_flow", "cn_equity"
+            )
+        ]
+        self.assertEqual(recovery_chain[0], "efinance_capital_flow")
+        self.assertNotIn("akshare_capital_flow", recovery_chain)
 
     def test_uzi_resource_sensitive_fetchers_share_one_serial_execution_lane(self) -> None:
         state_lock = Lock()
@@ -262,7 +271,7 @@ class UziSourceParityTests(unittest.TestCase):
         self.assertEqual(config["catalog"]["source_count"], 73)
         self.assertEqual(
             config["catalog"]["commit"],
-            "b004d7a988ca53a4805bf36784af091fa1209f22",
+            "1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4",
         )
         self.assertEqual(config["catalog"]["version"], "3.9.4")
         self.assertEqual(set(config["sources"]), EXPECTED_UZI_SOURCE_IDS)

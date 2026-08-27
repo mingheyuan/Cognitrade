@@ -273,10 +273,12 @@ def build_deployment_report(
         # Hikyuu initializes its Hub during import. Seed the same local-only Hub
         # database used by the production runner so a deployment check never
         # downloads strategies or depends on external network availability.
-        from research_system.api.hikyuu_backtest_service import HikyuuBacktestService
+        from research_system.strategies.backtesting.hikyuu_signal_engine import (
+            prepare_hikyuu_home,
+        )
 
         isolated_home = Path(temporary)
-        HikyuuBacktestService._prepare_hikyuu_home(isolated_home)
+        prepare_hikyuu_home(isolated_home)
         isolated_environment = os.environ.copy()
         isolated_environment["HOME"] = temporary
         isolated_environment["MPLCONFIGDIR"] = str(isolated_home / ".cache" / "matplotlib")

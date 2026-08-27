@@ -7,8 +7,10 @@
 
 Cognitrade 2.0 的核心升级，是把研究报告、策略信号、历史回测、机器验证、人工确认和
 模拟交易连接成可审计的策略治理闭环。同时，内置 UZI 股票研究能力以 UZI-Skill
-`main` 分支提交 `b004d7a988ca53a4805bf36784af091fa1209f22` 为唯一基准完成严格
+`main` 分支提交 `1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4` 为唯一基准完成严格
 对齐，上游版本号仍为 `3.9.4`。
+该最新提交的核心变化是亏损股分析恢复：统一清理建模边界的空特征，
+避免负值/缺失财务特征令研究流程异常，且在估值不可用时不再伪造目标价和评级。
 
 这次发布不是仅更换报告样式。它既新增了 2.0 的策略回测主线，也同步并验收了 UZI 的
 生产 Python 运行时、数据采集器、方法论、commands、skills、报告模板、渲染辅助器和
@@ -51,7 +53,7 @@ Cognitrade 宿主边界。完整的 `v1.0` 差异见
 
 - UZI 的 20 个编号 fetcher（`0_basic`–`19_contests`）与 2 个 bonus fetcher
   （`6_fund_holders`、`similar_stocks`），在数据中心统一作为 22 个原始
-  collector 进入完整性门禁。
+  collector 结果槽冻结；可用性和报告门保持 UZI 原生语义。
 - `20_valuation_models`、`21_research_workflow`、`22_deep_methods` 是冻结数据上的
   3 个报告派生结果，不是 collector，不计入 22/22 分母。
 - 73 个上游数据源定义及字段契约。
@@ -74,8 +76,9 @@ Cognitrade 宿主边界。完整的 `v1.0` 差异见
 - 新增 Alembic `20260820_0004_fund_holding_inputs.py`，为基金展开子 Job
   增加 `parent_job_id`，并为 report manifest 增加不可变父 Bundle/快照依赖表。
 - `effective_at / published_at / observed_at / ingested_at` 与市场时区共同构成 PIT
-  因果边界。正式 Bundle 只接受 A/B 级 `available` 或证据化 `verified_empty`；
-  C 级、超时、未配置、无权限、解析失败、撤销或未解决冲突均阻断发布。
+  审计边界。对股票，A/B 证据、required fields、过期和冲突单独记入
+  `audit_ready/audit_reason`，不再重写 UZI 的原生可用状态；撤销、身份/日期/契约和
+  内容哈希仍是不可绕过的 Bundle 结构约束。基金父契约仍严格验收。
 - 数据中心通过后端动态契约返回 collector 数量、顺序、required fields、freshness
   和合法空值规则；前端、报告门禁和测试不再自行硬编码 20/22/23。
 - 打开页面、访问 GET、查询 coverage 和创建报告都不会触发采集。采集只能
@@ -198,7 +201,7 @@ Cognitrade 宿主边界。完整的 `v1.0` 差异见
 
 ## 来源、完整性和 CI
 
-- 所有 UZI source commit pin 统一为 `b004d7a988ca53a4805bf36784af091fa1209f22`。
+- 所有 UZI source commit pin 统一为 `1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4`。
 - CI 使用该提交的 pristine checkout 做逐字节对比，并将 vendored 实现覆盖到上游测试树中运行。
 - 源码树、command 树、分析资产、独立 skill 和报告渲染器均有 SHA-256 完整性锁。
 - 完整后端 CI 按测试文件使用独立 Python 解释器，隔离 UZI/provider 原生依赖的进程级状态，

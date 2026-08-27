@@ -209,13 +209,57 @@ describe('Strategies', () => {
     window.history.replaceState({}, '', '/strategies?tab=backtests&strategy_id=s1&fund_code=110011&strategy_version_id=v1&mode=holdings_portfolio')
     render(<Strategies />)
 
-    expect(await screen.findByText('回测预检')).toBeInTheDocument()
+    expect(await screen.findByText('基金回测预检')).toBeInTheDocument()
     expect(screen.getByLabelText('策略版本')).toHaveValue('v1')
     expect(screen.getByLabelText('目标基金')).toHaveValue('110011')
     expect(screen.getByLabelText('模式')).toHaveValue('holdings_portfolio')
     expect(screen.queryByLabelText('快均线')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('买入阈值')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('股票佣金率')).not.toBeInTheDocument()
+  })
+
+  it('defaults new bindings to the fund itself', async () => {
+    window.history.replaceState({}, '', '/strategies?tab=assignments&strategy_id=s1')
+    render(<Strategies />)
+
+    expect(await screen.findByText('创建基金绑定')).toBeInTheDocument()
+    expect(screen.getByLabelText('回测模式')).toHaveValue('fund_only')
+    expect(screen.getByLabelText('回测模式')).toHaveTextContent('基金本体（推荐）')
+  })
+
+  it('scopes history to the strategy and compacts identical fund runs', async () => {
+    current = strategyFixture({ assignments: [{ ...assignment, mode: 'fund_only' }] })
+    strategyBacktests = [
+      {
+        id: 'bt-new', strategy_id: 's1', strategy_version_id: 'v1', strategy_content_hash: 'a'.repeat(64),
+        input_snapshot_hash: 'same-input', fund_code: '110011', fund_name: '测试权益基金', mode: 'fund_only',
+        start_date: '2026-08-07', end_date: '2026-08-14', initial_cash: 1_000_000, status: 'completed',
+        metrics: {}, error_summary: 'latest-run', created_at: '2026-08-16T00:00:00Z',
+      },
+      {
+        id: 'bt-old', strategy_id: 's1', strategy_version_id: 'v1', strategy_content_hash: 'a'.repeat(64),
+        input_snapshot_hash: 'same-input', fund_code: '110011', fund_name: '测试权益基金', mode: 'fund_only',
+        start_date: '2026-08-07', end_date: '2026-08-14', initial_cash: 1_000_000, status: 'failed',
+        metrics: {}, error_summary: 'older-run', created_at: '2026-08-15T00:00:00Z',
+      },
+      {
+        id: 'bt-holdings', strategy_id: 's1', strategy_version_id: 'v1', strategy_content_hash: 'a'.repeat(64),
+        input_snapshot_hash: 'holdings-input', fund_code: '110011', fund_name: '测试权益基金', mode: 'holdings_portfolio',
+        start_date: '2026-08-07', end_date: '2026-08-14', initial_cash: 1_000_000, status: 'completed',
+        metrics: {}, error_summary: 'advanced-run', created_at: '2026-08-16T00:00:00Z',
+      },
+    ]
+    window.history.replaceState({}, '', '/strategies?tab=backtests&strategy_id=s1&fund_code=110011&strategy_version_id=v1&mode=fund_only')
+    render(<Strategies />)
+
+    expect(await screen.findByText(/2 次相同输入/)).toBeInTheDocument()
+    expect(screen.getByText(/latest-run/)).toBeInTheDocument()
+    expect(screen.queryByText(/older-run/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/advanced-run/)).not.toBeInTheDocument()
+    const listCall = vi.mocked(fetch).mock.calls.find(([input]) => String(input).includes('/finance/strategy-backtests?'))
+    const listUrl = new URL(String(listCall?.[0]))
+    expect(listUrl.searchParams.get('strategy_id')).toBe('s1')
+    expect(listUrl.searchParams.get('limit')).toBe('200')
   })
 
   it('shows persisted progress on a running report task card', async () => {

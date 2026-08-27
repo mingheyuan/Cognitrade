@@ -2,7 +2,7 @@
 
 状态：已实施（核心链路落地；真实 provider 全量数据与性能验收为持续项）
 方案日期：2026-08-20
-适用基线：Cognitrade `codex/benchmark-uzi-concurrency-fixes`；UZI Skill `3.9.4` / `b004d7a988ca53a4805bf36784af091fa1209f22`
+适用基线：Cognitrade `codex/benchmark-uzi-concurrency-fixes`；UZI Skill `3.9.4` / `1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4`
 
 ### 实施结果摘要
 
@@ -32,9 +32,11 @@
 
 落地边界与原方案的保守差异：
 
-- 原生 UZI 当前快照 adapter 没有通用历史 `as_of` 语义。非当前日期记录
-  `pit_not_supported` / `data_gap`，不调用当前 provider 回填；历史正式 Bundle
-  需人工 B 级不可变证据或后续 PIT-aware adapter。
+- 原生 UZI 当前快照 adapter 没有统一历史 `as_of` 参数，因此历史 Job 改为逐维度
+  判断来源能力。带独立日期记录的来源自动查询并裁剪到 cutoff；通过严格契约时落为
+  B 级历史重建，无法取得目标日证明或仅提供当前状态时落为
+  `safe_for_report + excluded_from_scoring` 的终态披露。系统不再因一个瞬时来源对
+  整个历史日期做全局硬阻断，也绝不拿当前值回填历史。
 - 采集任务在数据库中仍是“标的 × 维度”逻辑 Task；当前 UZI adapter 物理上可合并为
   一次 full-batch wave，然后再按维度验收和落库。这是 provider 调度优化，不改变
   逐维重试和完整度语义。
@@ -54,12 +56,18 @@
 
 本次改造把“采集数据”和“生成报告”拆成两个边界清晰、可独立运行的系统：
 
-1. 行情数据中心负责显式采集、校验、Point-in-Time（PIT）防穿越、版本化落库和发布不可变 Bundle。
+1. 行情数据中心负责显式采集、版本化落库、冻结不可变 Bundle，并独立计算 Point-in-Time（PIT）与证据审计。
 2. Lite / Medium / Deep、基金十大持仓和历史回测只读取任务开始时冻结的 Bundle；报告阶段不得调用外部数据源。基金不使用股票 22 槽契约，而是用一个父持仓槽确定需要分析的十只股票。
 
 数据库是唯一事实来源。旧文件缓存不迁移、不回退；新系统可保留内容寻址缓存作为性能加速，但任何缓存命中都必须回到数据库中的快照、证据和 Bundle 引用才能用于正式报告。
 
-正式报告的硬门槛是 22 个原始采集槽全部达到 `available` 或有证据的 `verified_empty`，证据等级至少为 B，且满足报告时点的 freshness 规则。超时、未配置、限流、解析失败、开放搜索无结果均属于 `data_gap`，不能冒充空数据。
+股票报告的判定口径固定与 UZI 一致：`report_generatable` 表示 22 个原始
+采集结果槽（含显式 `data_gap`）已落库，可进入 Agent 恢复；`report_ready`
+是 Medium 档原生数据 self-review 的前置投影，不是最终发布结论。完整 Agent
+流程运行后再执行 UZI 全量 self-review，只有 critical 阻断 HTML/PDF，warning
+允许发布并必须披露。A/B 证据、required fields、PIT、freshness 和冲突单独形成
+`audit_ready/audit_reason`，不改写 UZI 原生可用状态。超时、未配置、限流、解析失败和
+搜索无结果仍必须如实落为缺口，不得冒充中性数据。
 
 ## 2. 口径冻结：22 个采集槽，不是 22 个最终分析维度
 
@@ -98,7 +106,9 @@ similar_stocks
 - 采集并发默认 5，按“标的 × 维度”形成逻辑任务；支持 provider 批量接口时可物理合并日期区间，但结果仍逐日验收和落库。
 - 已有且满足时点、版本和 freshness 的数据默认跳过；“强制刷新”才重新查询。
 - 只重试失败维度；保留任务、attempt 和 checkpoint。完整重跑作为显式高级操作。
-- 某一标的某一自然日 22 槽全部通过后自动发布 Bundle；发布动作不再访问外部数据源。
+- 某一标的某一自然日 22 槽全部严格通过后发布 `quality=strict` Bundle；历史日的
+  22 槽全部被“严格数据或安全降级”解决后可发布 `quality=degraded` Bundle。
+  发布动作不再访问外部数据源。
 - 基金父任务只有一个 `fund_top_holdings` 槽。当日用户显式 Job，或由双
   opt-in 订阅授权的 Job，可以采集它；
   历史日只查询已落库、符合 PIT 的快照/Bundle，缺失时不 live 回填。
@@ -107,7 +117,8 @@ similar_stocks
 
 ### 3.2 报告生成
 
-- Lite / Medium / Deep 使用同一份完整 22 槽 Bundle，只在推理深度、方法数量、角色讨论和输出篇幅上不同。
+- Lite / Medium / Deep 使用同一份 22 槽 Bundle；严格值参与评分，安全降级值只披露、
+  不参与评分。三个档位只在推理深度、方法数量、角色讨论和输出篇幅上不同。
 - 基金只作为持仓股票分析入口：父契约固定给出精确 10 只 A 股，
   不支持 Top 5/20/100 或 Deep superset；每只持仓股都必须冻结完整 22 槽 Bundle。
 - 该固定 10 口径属于新数据中心基金采集和 Bundle/report-manifest 入口。
@@ -117,15 +128,19 @@ similar_stocks
   10 个 `symbol -> bundle_id` 和父基金 Bundle/快照 ID/hash，所有依赖共同进入
   report manifest hash。
 - 持仓报告子任务并发默认 2，可调至 5；LLM 并发独立配置，默认 2。
-- 报告阶段外部数据调用数必须为 0。缺 Bundle、Bundle 不完整、过期或有未解决冲突时，正式报告拒绝启动。
-- 可查看不完整草稿和缺口，但它不进入正式报告、有效历史回测或策略信号。
+- 报告阶段外部数据调用数必须为 0。缺 Bundle、缺结构槽、撤销或内容哈希失配时
+  报告拒绝启动；PIT/证据/过期/冲突作为独立审计结果显示。
+- `report_generatable` 的降级 Bundle 可进入 UZI Agent 恢复与正式报告，但所有降级维度必须
+  从 UZI 维度权重中剔除并在报告中逐项披露；策略信号可继续读取报告质量状态决定
+  是否采用，不能把缺失值当中性值加权。
 - 报告支持节点级 checkpoint、失败节点重试和依赖失效；用户也可显式强制全量重跑。
 
 ### 3.3 历史回测
 
 - 目标语义是“某只股票，或某只基金当日可见披露所确定的前十大持仓股，
   在某一天当时能够看到的完整报告”。
-- 任意历史自然日可以请求回补；无法证明当时可见的维度必须拒绝正式发布，而不是用当前值填充。
+- 任意历史自然日可以请求回补；能从带日期的结构化记录证明 cutoff 的维度自动重建。
+  无法证明当时可见的维度写入终态降级披露，而不是用当前值填充，也不再阻断其他维度。
 - 历史回补只准备数据，不自动生成报告。报告回测由用户另行选择日期区间和频率。
 - 回测任务启动时固定当前工作流版本，并记录代码提交、UZI 版本、模型、提示词/契约 hash；不维护历史运行环境。
 - 信号最早在对应市场的下一可交易时点生效。
@@ -138,7 +153,7 @@ flowchart LR
     API --> IDENTITY["统一证券身份"]
     IDENTITY --> JOB["持久化采集 Job / Task / Attempt"]
     JOB --> ADAPTER["UZI Provider Adapters"]
-    ADAPTER --> VALIDATE["股票 22 槽严格校验\nPIT / 冲突检测"]
+    ADAPTER --> VALIDATE["股票 UZI 原生结果\nPIT / 证据独立审计"]
     ADAPTER --> FUND["基金单槽 fund_top_holdings\n精确 10 只 A 股"]
     FUND --> EXPAND["按缺口创建股票 child Job"]
     EXPAND --> JOB
@@ -197,7 +212,10 @@ Bundle 的 `as_of_date` 是交易所本地自然日。历史日或显式 EOD 的
 - B：cutoff 后补录，但不可变证据能够证明该内容在 cutoff 前已经公开。
 - C：当前网页值、搜索片段、推断或无法证明历史可见性的二手内容。
 
-正式 Bundle 只接受 A/B。人工数据最高只能为 B，必须填写来源、时间、原因、操作人和证据；不得以人工确认跳过缺口。
+审计合格的事实槽只接受 A/B。C 级仅可证明“当前确认无法历史恢复”这一可用性状态，且必须
+同时标记安全降级、排除评分，不能承载价格、财务或舆情事实。这些等级影响
+`audit_ready`，不代替 UZI 原生 report gate。人工数据最高只能为 B，
+必须填写来源、时间、原因、操作人和证据；不得以人工确认跳过缺口。
 
 ### 5.3 快照状态
 
@@ -218,7 +236,7 @@ revoked         原数据错误或证据失效，仅供审计，永不进入新 
 - 内容变化创建新快照；禁止 UPDATE payload。
 - 错误数据通过 `revoked_at / revoke_reason / superseded_by_id` 撤销或替代，不物理删除。
 - 已发布 Bundle 永不修改。旧报告继续可查看并展示撤销警告，但从有效回测集合中排除。
-- 字段级保存来源、证据、公式和输入；多源值按确定性优先级选择，无法自动解决的冲突阻断该维度。
+- 字段级保存来源、证据、公式和输入；多源值按确定性优先级选择，无法自动解决的冲突进入审计并保留原生结果。
 
 ## 6. 22 槽 v1 最低合同
 
@@ -310,7 +328,7 @@ POST   /api/v2/finance/market-data/providers/{provider}/test
 POST   /api/v2/finance/market-data/report-manifests
 ```
 
-`GET coverage` 返回：`expected_dimension_count`、有序 dimensions、available/verified_empty/gap/conflict/stale 计数、`structurally_complete`、`report_ready`、最新可发布/已发布 Bundle 和逐维原因。现有 `/api/v2/finance/market-data/{symbol}` 改为数据库只读兼容投影，不再在 GET 中采集。
+`GET coverage` 返回：`expected_dimension_count`、有序 dimensions、available/verified_empty/gap/conflict/stale 计数、`structurally_complete`、`report_ready`、`report_generatable`、`uzi_integrity_by_profile`、`audit_ready`、最新已发布 Bundle 和逐维的原生/审计原因。现有 `/api/v2/finance/market-data/{symbol}` 改为数据库只读兼容投影，不再在 GET 中采集。
 
 创建采集 Job 的模式：
 
@@ -333,12 +351,13 @@ POST   /api/v2/finance/market-data/report-manifests
 
 ## 9. Provider 适配与失败语义
 
-- 现有 20 个编号 UZI fetcher 和 2 个 bonus fetcher 作为 provider adapter 起点，
-  但不能把原生宽松 `Quality` 直接视为 v1 通过。
+- 现有 20 个编号 UZI fetcher 和 2 个 bonus fetcher 作为 provider adapter 起点；
+  原生 `Quality/DimResult` 是股票可用性的唯一判定，扩展契约只作审计。
 - adapter 输入统一包含 `symbol / market / range / cutoff_at / contract_version`；输出统一包含
   payload、四时间、字段来源、query manifest、raw evidence 和可重试错误。
-- 原生 fetcher 无 `as_of` 的维度，当前 adapter 只允许当前时点数据进入严格验收；
-  历史请求直接记录 `pit_not_supported` / `data_gap`，不会将 C 级当前值落为历史快照。
+- 原生 fetcher 没有统一 `as_of`，adapter 因此按维度暴露
+  `current_only / dated_series / published_archive` 能力。后两类自动查询并仅保留
+  cutoff 前带日期记录；前者直接生成终态降级披露，不调用当前值冒充历史。
 - K 线改用未复权原始 OHLCV，公司行动/复权因子独立保存；禁止用当前 qfq 序列重建旧报告。
 - 财务数据按首次披露和更正版本选择；资本流不得硬编码当前年份。
 - 基金不采集所谓 Deep superset。父 `fund_top_holdings` 槽固定、精确选择
@@ -351,10 +370,14 @@ POST   /api/v2/finance/market-data/report-manifests
 ### 10.1 Bundle 发布算法
 
 1. 根据市场本地日期计算 UTC cutoff。
-2. 股票对 22 个槽分别选择 `published_at <= cutoff`、A/B、未撤销、无冲突的最高优先级快照；基金父 Bundle 只选择唯一 `fund_top_holdings` 槽。
-3. 校验 required fields、来源集合、历史窗口和 current-day freshness。
-4. 股票缺一槽即保留 draft coverage，22/22 才发布；基金父槽必须包含
-   精确 10 只 A 股、披露 lineage 和 PIT 可见性，1/1 才发布。
+2. 股票对 22 个槽选择同 symbol/market/date/contract、未撤销的最高优先级
+   UZI 原生结果；优先可用 payload，否则保留明确 `data_gap`。PIT、A/B 证据和冲突另算
+   `audit_ready`。基金父 Bundle 只选择唯一 `fund_top_holdings` 严格槽。
+3. required fields、来源集合、历史窗口和 current-day freshness 进入审计元数据，
+   不作为 UZI 原生门。
+4. 股票缺少任一结构槽时保留 draft coverage；22 个槽全部落库后可发布 Bundle，
+   UZI Medium 数据预检通过时标记 strict，否则标记 degraded 并交给 Agent 恢复。基金父槽仍必须包含精确
+   10 只 A 股、披露 lineage 和 PIT 可见性，1/1 才发布。
 5. 同一 symbol/date/cutoff/contract/manifest hash 幂等；不同 hash 产生修订 Bundle，不覆盖旧版。
 
 ### 10.2 报告预检
@@ -364,7 +387,8 @@ POST   /api/v2/finance/market-data/report-manifests
 - 解析并冻结 Bundle 或组合 manifest；基金报告必须另外冻结父基金 Bundle/快照 ID/hash。
 - 验证 `evaluation_at` 不早于所有股票 Bundle 和父依赖 Bundle cutoff、
   不晚于当前时间，并将合法值纳入 manifest hash。
-- 再校验 22 个 item 的 content hash、证据等级和撤销状态。
+- 再校验 22 个 item 的身份、契约、content hash 和撤销状态；证据等级与
+  PIT 结果随 manifest 冻结为独立审计信息。
 - 向 Agent OS 注入 `slots.snapshots`、`slots.market_data_bundle`、`slots.source_refs`。
 - 设置 `constraints.data_source_mode=bundle_only`。
 - canonical UZI cache key 增加 `manifest_hash`，避免同日数据修订错误复用旧分析。
@@ -481,12 +505,14 @@ POST   /api/v2/finance/market-data/report-manifests
 
 ### 14.1 正确性
 
-- `CN_EQUITY` 后端契约唯一返回 22 个原始槽，bonus 槽进入完整性门禁；
+- `CN_EQUITY` 后端契约唯一返回 22 个原始槽，bonus 槽进入结构冻结和 UZI 原生检查；
   三个派生结果不计入采集分母。`CN_FUND` 后端契约则只返回 1 个父槽。
 - 统一身份解析将 `020464` 归类为 `otc_fund / CN_FUND`，不进入股票 22 槽。
 - 基金契约唯一返回 `fund_top_holdings`，且必须是精确 10 只 A 股；
   这 10 只股票的 Bundle 各自必须 22/22。
-- 任何 `data_gap`、C 级证据、未来发布日期、撤销快照或未解决冲突都阻止正式报告。
+- `data_gap` 进入 Agent 恢复并必须逐项披露，不能冒充中性数据；撤销快照、
+  身份/契约/内容哈希不一致仍阻止正式报告。C 级证据、未来发布日期与冲突在
+  审计区显示，不重写 UZI 原生门。
 - after-close 公告只进入正确 cutoff 后的 Bundle；更正财报不反向污染旧 Bundle。
 - K 线历史不依赖未来复权因子；周末事件按自然日 cutoff 进入下一可交易信号。
 - `verified_empty` 与 timeout/provider-unavailable 在 UI、API、DB 和门禁中严格区分。
@@ -528,10 +554,10 @@ POST   /api/v2/finance/market-data/report-manifests
 
 | 风险 | 控制 |
 | --- | --- |
-| 原生 UZI 宽松质量提示被误当 22/22 | 独立 v1 required/verified_empty 契约，bonus 槽纳入硬门 |
-| provider 不支持历史 cutoff | 标记 `pit_not_supported` / `data_gap`，正式历史 Bundle 拒绝发布 |
+| 扩展契约误把 UZI 可用数据判成失败 | 原生 Quality/self-review 为唯一报告门；扩展检查独立审计 |
+| provider 不支持历史 cutoff | 按来源能力自动重建或终态降级；降级槽排除评分并进入报告缺口区 |
 | 当前 qfq 和当前财务值造成未来泄漏 | 原始 OHLCV + 公司行动；按 published/version 选择财报 |
-| 多源冲突被静默覆盖 | 字段来源、优先级和 conflict 表；未解决即阻断 |
+| 多源冲突被静默覆盖 | 字段来源、优先级和 conflict 表显式留痕，并与 UZI 原生状态分开展示 |
 | 日 Bundle 复制导致存储膨胀 | 增量 series + 内容 hash 去重 + 轻量 manifest |
 | 报告重试重新联网导致输入漂移 | 冻结 report manifest；bundle-only 强校验 |
 | 并发调整混淆采集/持仓/LLM | 三个独立设置和独立指标 |

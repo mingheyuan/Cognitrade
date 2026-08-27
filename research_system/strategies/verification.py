@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import math
-from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from research_system.strategies.backtesting.result_store import ContentAddressedResultStore
 from research_system.strategies.contracts import GovernanceState

@@ -15,7 +15,6 @@ from research_system.strategies.models import (
     StrategyAssignment,
     StrategyDraft,
     StrategyEvent,
-    StrategyVerification,
     StrategyVersion,
     TradeSignal,
 )
@@ -291,24 +290,32 @@ class StrategyRepository:
         *,
         tenant_id: str,
         user_id: str,
+        strategy_id: str | None = None,
+        strategy_version_id: str | None = None,
+        fund_code: str | None = None,
+        mode: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
     ) -> list[BacktestRun]:
+        query = select(BacktestRun).where(
+            self.owner_filter(BacktestRun, tenant_id=tenant_id, user_id=user_id)
+        )
+        if strategy_id:
+            query = query.where(BacktestRun.strategy_id == strategy_id)
+        if strategy_version_id:
+            query = query.where(BacktestRun.strategy_version_id == strategy_version_id)
+        if fund_code:
+            query = query.where(BacktestRun.fund_code == fund_code)
+        if mode:
+            query = query.where(BacktestRun.mode == mode)
+        if status:
+            query = query.where(BacktestRun.status == status)
         return list(
             session.scalars(
-                select(BacktestRun)
-                .where(self.owner_filter(BacktestRun, tenant_id=tenant_id, user_id=user_id))
+                query
                 .order_by(BacktestRun.created_at.desc())
+                .limit(min(max(int(limit), 1), 200))
             )
         )
-
-    @staticmethod
-    def list_verifications(session: Session, version_id: str) -> list[StrategyVerification]:
-        return list(
-            session.scalars(
-                select(StrategyVerification)
-                .where(StrategyVerification.strategy_version_id == version_id)
-                .order_by(StrategyVerification.created_at.desc())
-            )
-        )
-
 
 __all__ = ["StrategyRepository"]

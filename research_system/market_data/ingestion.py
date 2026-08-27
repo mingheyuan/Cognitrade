@@ -806,8 +806,15 @@ class SnapshotIngestionService:
             )
 
         validation_errors = self._validation_errors(ingest, contract)
+        native_uzi_gate = str(ingest.validation.get("adapter") or "").startswith(
+            "cognitrade_uzi_native_gate_"
+        )
+        # UZI snapshots are admitted according to their upstream native
+        # quality.  The richer PIT/evidence/shape checks remain visible for
+        # audit and backtest diagnostics, but are not report publication gates.
+        hard_validation_errors = [] if native_uzi_gate else validation_errors
         final_status = (
-            ingest.status if not validation_errors else SnapshotStatus.DATA_GAP
+            ingest.status if not hard_validation_errors else SnapshotStatus.DATA_GAP
         )
         evidence_grade = _minimum_grade(ingest.evidence)
         validation = {
@@ -816,8 +823,10 @@ class SnapshotIngestionService:
             "contract_dimension": contract.dimension,
             "requested_status": ingest.status.value,
             "final_status": final_status.value,
-            "passed": not validation_errors,
-            "errors": validation_errors,
+            "passed": not hard_validation_errors,
+            "errors": hard_validation_errors,
+            "audit_passed": not validation_errors,
+            "audit_errors": validation_errors,
         }
 
         series_hashes = [
@@ -1028,7 +1037,40 @@ class SnapshotIngestionService:
         self, ingest: SnapshotIngestInput, contract: DimensionContract
     ) -> list[str]:
         if ingest.status == SnapshotStatus.DATA_GAP:
-            return ["collector reported data_gap"]
+            # Keep the adapter's concrete diagnosis.  The old implementation
+            # replaced every source/normalization/evidence failure with the
+            # same generic sentence, which made a non-empty upstream payload
+            # indistinguishable from a real provider outage in the data
+            # centre and made scoped retries impossible to reason about.
+            errors = [
+                str(item).strip()
+                for item in list(ingest.validation.get("semantic_errors") or [])
+                if str(item).strip()
+            ]
+            native_quality = str(
+                ingest.query_manifest.get("native_quality_status") or ""
+            ).strip()
+            if native_quality:
+                errors.append(f"native quality status: {native_quality}")
+            errors.extend(
+                f"collector degradation: {str(item).strip()}"
+                for item in list(
+                    ingest.query_manifest.get("degrade_reasons") or []
+                )
+                if str(item).strip()
+            )
+            missing_fields = [
+                str(item).strip()
+                for item in list(
+                    ingest.query_manifest.get("missing_fields") or []
+                )
+                if str(item).strip()
+            ]
+            if missing_fields:
+                errors.append(
+                    "collector missing fields: " + ", ".join(missing_fields)
+                )
+            return list(dict.fromkeys(errors)) or ["collector reported data_gap"]
         errors: list[str] = []
         cutoff_at = ingest.cutoff_at
         if ingest.published_at > cutoff_at:

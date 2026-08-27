@@ -4,7 +4,7 @@
 
 - 目标状态：实现与本地回归完成；当前 PR 的 GitHub Actions 与真实 provider smoke 待远端验收，历史 CI 仅作为迁移基线
 - 上游仓库：`https://github.com/wbh604/UZI-Skill`
-- 唯一基准提交：`b004d7a988ca53a4805bf36784af091fa1209f22`
+- 唯一基准提交：`1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4`
 - 上游版本：`3.9.4`
 - 根采集基准：对已解析个股复现上游 route-specific 采集；单股默认执行 v3 pipeline，`UZI_LEGACY=1` 强制 legacy，preflight 或采集编排异常时整股回退 legacy；versus/portfolio 与上游专用 runner 一样始终逐股调用 v3，失败后读已有 cache 或跳过，不重试 legacy；单个 provider/fetcher 错误仍留在 v3 `DimResult`
 - 迁移边界：实现迁入 Finance DomainPack；生产环境不得依赖外部 UZI checkout、CLI、缓存目录或运行时
@@ -30,7 +30,7 @@
 | 资产 | 上游路径 | 固定证据 | 目标 |
 |---|---|---|---|
 | 许可证 | `LICENSE` | SHA-256 `78bebb5232741327c31b0da4f5bbd570dc59ab3c3230582a4d1b4650238a7d58` | 保留 MIT notice 与来源提交 |
-| 原生报告呈现层 | `skills/deep-analysis/assets/report-template.html` + 4 个 `lib/report` helper | v3.9.4 commit `b004d7a988ca53a4805bf36784af091fa1209f22`；模板 3615 行；SHA-256 `1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8` | 原样迁入并加逐文件哈希测试；分析方法仍固定在 3.9.4 |
+| 原生报告呈现层 | `skills/deep-analysis/assets/report-template.html` + 4 个 `lib/report` helper | v3.9.4 commit `1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4`；模板 3615 行；SHA-256 `1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8` | 原样迁入并加逐文件哈希测试；分析方法仍固定在 3.9.4 |
 | 来源注册表 | `skills/deep-analysis/scripts/lib/data_source_registry.py` | 73 个 source ID | 目标目录和运行注册表均为 73 项 |
 | 命令目录 | `commands/*.md` | 20 个命令 | 20 个独立 Agent OS/API/Web 能力 |
 | 独立技能方法论 | `skills/{investor-panel,lhb-analyzer,trap-detector}/**` | 17 个路径敏感资源；SHA-256 `8bc93074f001fa97154629dcd33cf5a6dfed653cf79d954fa883570be0a4f1ca` | 原样保留方法论作为静态契约；Agent OS 路由与 DomainPack 实现另行验收，不动态执行 Markdown |

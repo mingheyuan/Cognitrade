@@ -21,6 +21,15 @@ export function dimensionStatusMeta(status: string | null | undefined) {
   return DIMENSION_STATUS[(status || 'unknown') as DimensionStatus] || { label: status || '未知', tone: 'muted' as const }
 }
 
+export function nativeQualityMeta(quality: string | null | undefined, usable?: boolean) {
+  const normalized = String(quality || '').toLowerCase()
+  if (usable && ['partial', 'degraded'].includes(normalized)) return { label: 'UZI 部分可用', tone: 'warning' as const }
+  if (usable) return { label: 'UZI 可用', tone: 'good' as const }
+  if (['error', 'failed', 'parse_failed', 'provider_unavailable', 'rate_limited', 'timeout'].includes(normalized)) return { label: 'UZI 获取失败', tone: 'danger' as const }
+  if (['missing', 'missing_result', 'no_data', 'data_gap', 'assumption_only'].includes(normalized)) return { label: 'UZI 数据缺口', tone: 'warning' as const }
+  return { label: quality || 'UZI 未判定', tone: 'muted' as const }
+}
+
 export function freshnessStatusMeta(status: string | null | undefined) {
   return FRESHNESS_STATUS[(status || 'unknown') as FreshnessStatus] || { label: status || '未知', tone: 'muted' as const }
 }
@@ -28,7 +37,7 @@ export function freshnessStatusMeta(status: string | null | undefined) {
 export function evidenceGradeLabel(grade: EvidenceGrade | undefined) {
   if (grade === 'A') return 'A级 · 截止前观测'
   if (grade === 'B') return 'B级 · 可证明历史可见'
-  if (grade === 'C') return 'C级 · 不可用于正式报告'
+  if (grade === 'C') return 'C级 · 仅可作排除评分的降级披露'
   return '无合格证据'
 }
 
@@ -42,6 +51,12 @@ export function jobStatusMeta(status: string | null | undefined) {
   return { label: status || '未知', tone: 'muted' as const }
 }
 
+export function isActiveCollectionJob(status: string | null | undefined) {
+  return ['queued', 'pending', 'running', 'processing', 'leased'].includes(
+    String(status || '').toLowerCase(),
+  )
+}
+
 export function formatDateTime(value?: string | null) {
   if (!value) return '—'
   const parsed = new Date(value)
@@ -49,6 +64,28 @@ export function formatDateTime(value?: string | null) {
   return new Intl.DateTimeFormat('zh-CN', {
     year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
   }).format(parsed)
+}
+
+export function formatDuration(milliseconds: number) {
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return '—'
+  const totalSeconds = Math.round(milliseconds / 1000)
+  if (totalSeconds < 60) return `${totalSeconds} 秒`
+  const totalMinutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (totalMinutes < 60) return `${totalMinutes} 分${seconds ? ` ${seconds} 秒` : ''}`
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  return `${hours} 小时${minutes ? ` ${minutes} 分` : ''}`
+}
+
+export function collectionJobDurations(job: { created_at?: string | null; started_at?: string | null; completed_at?: string | null }) {
+  const createdAt = job.created_at ? new Date(job.created_at).getTime() : Number.NaN
+  const startedAt = job.started_at ? new Date(job.started_at).getTime() : Number.NaN
+  const completedAt = job.completed_at ? new Date(job.completed_at).getTime() : Date.now()
+  return {
+    queue: Number.isFinite(createdAt) && Number.isFinite(startedAt) ? formatDuration(startedAt - createdAt) : '—',
+    run: Number.isFinite(startedAt) ? formatDuration(completedAt - startedAt) : '—',
+  }
 }
 
 export function formatFreshness(seconds?: number | null) {

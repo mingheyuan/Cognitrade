@@ -2,6 +2,7 @@ import { CognitradeApiError, type ApiConnectionSettings } from '../../api-client
 import type {
   CollectionJob,
   CollectionJobInput,
+  CollectionRetryInput,
   CoverageQuery,
   ExpandedFundHolding,
   InstrumentIdentity,
@@ -149,9 +150,36 @@ export function normalizeMarketDataCoverage(payload: unknown): MarketDataCoverag
       published_at: stringValue(item.published_at) || null,
       observed_at: stringValue(item.observed_at) || null,
       conflict_id: stringValue(item.conflict_id) || null,
+      degraded: Boolean(item.degraded),
+      excluded_from_scoring: Boolean(item.excluded_from_scoring),
+      eligible: Boolean(item.eligible),
+      native_quality: stringValue(item.native_quality) || null,
+      audit_eligible: Boolean(item.audit_eligible),
+      audit_reason: stringValue(item.audit_reason) || null,
+      audit_errors: Array.isArray(item.audit_errors) ? item.audit_errors.map(String) : [],
     }
   })
   const latest = record(source.latest_bundle)
+  const normalizeUziPrecheck = (value: unknown) => {
+    const item = record(value)
+    return {
+      coverage_pct: numberValue(item.coverage_pct),
+      passed_checks: numberValue(item.passed_checks),
+      total_checks: numberValue(item.total_checks),
+      critical_count: numberValue(item.critical_count),
+      warning_count: numberValue(item.warning_count),
+      gate_passed: Boolean(item.gate_passed),
+      profile: stringValue(item.profile) || undefined,
+      gate_policy: stringValue(item.gate_policy) || undefined,
+      issues: records(item.issues).map((issue) => ({
+        severity: stringValue(issue.severity),
+        check: stringValue(issue.check),
+        dimension: stringValue(issue.dimension) || undefined,
+        message: stringValue(issue.message) || undefined,
+      })),
+    }
+  }
+  const byProfile = record(source.uzi_integrity_by_profile)
   return {
     symbol: stringValue(source.symbol),
     market: marketValue(source.market),
@@ -164,9 +192,19 @@ export function normalizeMarketDataCoverage(payload: unknown): MarketDataCoverag
       data_gap: numberValue(rawCounts.data_gap ?? source.gap_count),
       conflict: numberValue(rawCounts.conflict ?? source.conflict_count),
       stale: numberValue(rawCounts.stale ?? source.stale_count),
+      degraded: numberValue(rawCounts.degraded ?? source.degraded_dimension_count),
     },
     structurally_complete: Boolean(source.structurally_complete),
     report_ready: Boolean(source.report_ready),
+    report_generatable: Boolean(source.report_generatable ?? source.report_ready),
+    resolved_dimension_count: numberValue(
+      source.resolved_dimension_count,
+      dimensions.filter((item) => item.snapshot_id).length,
+    ),
+    degraded_dimension_count: numberValue(source.degraded_dimension_count),
+    quality: (['strict', 'degraded', 'blocked'].includes(stringValue(source.quality))
+      ? stringValue(source.quality)
+      : source.report_ready ? 'strict' : 'blocked') as MarketDataCoverage['quality'],
     dimensions,
     latest_bundle: Object.keys(latest).length ? {
       bundle_id: stringValue(latest.bundle_id ?? latest.id),
@@ -176,6 +214,17 @@ export function normalizeMarketDataCoverage(payload: unknown): MarketDataCoverag
       published_at: stringValue(latest.published_at) || null,
     } : null,
     contract_version: stringValue(source.contract_version) || undefined,
+    gate_policy: stringValue(source.gate_policy) || undefined,
+    uzi_integrity: Object.keys(record(source.uzi_integrity)).length
+      ? normalizeUziPrecheck(source.uzi_integrity)
+      : undefined,
+    uzi_integrity_by_profile: Object.keys(byProfile).length ? {
+      lite: normalizeUziPrecheck(byProfile.lite),
+      medium: normalizeUziPrecheck(byProfile.medium),
+      deep: normalizeUziPrecheck(byProfile.deep),
+    } : undefined,
+    audit_ready_dimension_count: numberValue(source.audit_ready_dimension_count),
+    audit_ready: Boolean(source.audit_ready),
   }
 }
 
@@ -256,6 +305,54 @@ function normalizeExpandedHolding(payload: unknown, index: number): ExpandedFund
   }
 }
 
+function normalizeDiagnosticBuckets(payload: unknown) {
+  return records(payload).map((item) => ({
+    key: stringValue(item.key),
+    count: numberValue(item.count),
+    retryable_count: numberValue(item.retryable_count),
+    blocked_count: numberValue(item.blocked_count),
+    active_count: numberValue(item.active_count),
+    sample_message: stringValue(item.sample_message) || null,
+  }))
+}
+
+function normalizeTaskSummary(payload: unknown) {
+  const source = record(payload)
+  if (!Object.keys(source).length) return undefined
+  const rawStatuses = record(source.by_status)
+  return {
+    total: numberValue(source.total),
+    by_status: Object.fromEntries(Object.entries(rawStatuses).map(([key, value]) => [key, numberValue(value)])),
+    active: numberValue(source.active),
+    succeeded: numberValue(source.succeeded),
+    skipped: numberValue(source.skipped),
+    retryable_failed: numberValue(source.retryable_failed),
+    blocked_failed: numberValue(source.blocked_failed),
+    by_error_code: normalizeDiagnosticBuckets(source.by_error_code),
+    by_dimension: normalizeDiagnosticBuckets(source.by_dimension),
+  }
+}
+
+function normalizePortfolioSummary(payload: unknown) {
+  const source = record(payload)
+  if (!Object.keys(source).length) return undefined
+  return {
+    total_holdings: numberValue(source.total_holdings, 10),
+    ready_holdings: numberValue(source.ready_holdings),
+    dimensions_per_holding: numberValue(source.dimensions_per_holding, 22),
+    total_slots: numberValue(source.total_slots, 220),
+    ready_slots: numberValue(source.ready_slots),
+    missing_slots: numberValue(source.missing_slots),
+    retryable_slots: numberValue(source.retryable_slots),
+    blocked_slots: numberValue(source.blocked_slots),
+    active_slots: numberValue(source.active_slots),
+    attempt: numberValue(source.attempt),
+    current_child_job_ids: Array.isArray(source.current_child_job_ids) ? source.current_child_job_ids.map(String) : [],
+    by_error_code: normalizeDiagnosticBuckets(source.by_error_code),
+    by_dimension: normalizeDiagnosticBuckets(source.by_dimension),
+  }
+}
+
 function normalizeJob(payload: unknown): CollectionJob {
   const source = record(payload)
   const rawProgress = record(source.progress)
@@ -264,6 +361,7 @@ function normalizeJob(payload: unknown): CollectionJob {
   const rawChildJobIds = source.child_collection_job_ids ?? checkpoint.child_job_ids
   const total = numberValue(rawProgress.total)
   const assetFamily = stringValue(source.asset_family).toLowerCase() === 'fund' ? 'fund' : 'equity'
+  const rawResolution = record(source.resolution_summary)
   return {
     job_id: stringValue(source.job_id ?? source.id),
     parent_job_id: stringValue(source.parent_job_id) || null,
@@ -278,6 +376,7 @@ function normalizeJob(payload: unknown): CollectionJob {
     end_date: stringValue(source.end_date),
     max_concurrency: numberValue(source.max_concurrency, 5),
     publish_when_complete: Boolean(source.publish_when_complete),
+    scoped_retry_supported: Boolean(source.scoped_retry_supported),
     progress: {
       total,
       queued: numberValue(rawProgress.queued ?? byStatus.queued),
@@ -285,6 +384,8 @@ function normalizeJob(payload: unknown): CollectionJob {
       completed: numberValue(rawProgress.succeeded ?? byStatus.succeeded ?? byStatus.completed ?? (Object.keys(byStatus).length ? 0 : rawProgress.completed)),
       failed: numberValue(rawProgress.failed ?? byStatus.failed),
       skipped: numberValue(rawProgress.skipped ?? byStatus.skipped ?? byStatus.cancelled),
+      child_complete: rawProgress.child_complete == null ? undefined : numberValue(rawProgress.child_complete),
+      child_total: rawProgress.child_total == null ? undefined : numberValue(rawProgress.child_total),
     },
     requested_by: stringValue(source.requested_by) || null,
     created_at: stringValue(source.created_at),
@@ -295,6 +396,18 @@ function normalizeJob(payload: unknown): CollectionJob {
     parent_bundle_hash: stringValue(checkpoint.parent_bundle_hash) || null,
     expanded_holdings: records(source.expanded_holdings ?? checkpoint.holdings).map(normalizeExpandedHolding),
     child_collection_job_ids: Array.isArray(rawChildJobIds) ? rawChildJobIds.map(String) : [],
+    task_summary: normalizeTaskSummary(source.task_summary),
+    resolution_summary: Object.keys(rawResolution).length ? {
+      total: numberValue(rawResolution.total),
+      strict: numberValue(rawResolution.strict),
+      degraded: numberValue(rawResolution.degraded),
+      skipped: numberValue(rawResolution.skipped),
+      failed: numberValue(rawResolution.failed),
+      by_status: Object.fromEntries(
+        Object.entries(record(rawResolution.by_status)).map(([key, value]) => [key, numberValue(value)]),
+      ),
+    } : undefined,
+    portfolio_summary: normalizePortfolioSummary(source.portfolio_summary),
     tasks: records(source.tasks).map((task) => ({
       task_id: stringValue(task.task_id ?? task.id),
       symbol: stringValue(task.symbol),
@@ -302,10 +415,17 @@ function normalizeJob(payload: unknown): CollectionJob {
       status: stringValue(task.status),
       attempt: numberValue(task.attempt ?? task.attempt_count),
       max_attempts: task.max_attempts == null ? undefined : numberValue(task.max_attempts),
+      retryable: Boolean(task.retryable),
       error_code: stringValue(task.error_code) || null,
       error_message: stringValue(task.error_message) || null,
+      failure_kind: stringValue(task.failure_kind) || null,
+      failure_stage: stringValue(task.failure_stage) || null,
+      failure_label: stringValue(task.failure_label) || null,
+      raw_data_present: Boolean(task.raw_data_present),
       retry_at: stringValue(task.retry_at ?? task.next_retry_at) || null,
       snapshot_id: stringValue(task.snapshot_id) || null,
+      resolution_status: stringValue(task.resolution_status) || undefined,
+      degraded_count: task.degraded_count == null ? undefined : numberValue(task.degraded_count),
     })),
   }
 }
@@ -341,6 +461,7 @@ function normalizeBundle(payload: unknown): MarketDataBundle {
 
 function normalizeProvider(payload: unknown): MarketDataProvider {
   const source = record(payload)
+  const rawHistorical = record(source.historical_capabilities)
   return {
     provider_id: stringValue(source.provider_id ?? source.id),
     label: stringValue(source.label ?? source.name ?? source.provider_id),
@@ -352,6 +473,12 @@ function normalizeProvider(payload: unknown): MarketDataProvider {
     missing_requirements: Array.isArray(source.missing_requirements) ? source.missing_requirements.map(String) : [],
     last_tested_at: stringValue(source.last_tested_at) || null,
     last_error: stringValue(source.last_error) || null,
+    supports_historical_reconstruction: Boolean(source.supports_historical_reconstruction),
+    historical_capabilities: Object.fromEntries(
+      Object.entries(rawHistorical)
+        .filter(([, value]) => ['current_only', 'dated_series', 'published_archive'].includes(stringValue(value)))
+        .map(([key, value]) => [key, stringValue(value)]),
+    ) as MarketDataProvider['historical_capabilities'],
   }
 }
 
@@ -422,8 +549,15 @@ export class MarketDataCenterApi {
     return normalizeSnapshot(await this.request<unknown>(`/snapshots/${encodeURIComponent(snapshotId)}`, { signal }))
   }
 
-  async listJobs(values: { symbol?: string; limit?: number; offset?: number } = {}, signal?: AbortSignal) {
-    const response = await this.request<PageResult<CollectionJob> | CollectionJob[] | Record<string, unknown>>(`/collection-jobs${queryString({ limit: values.limit, offset: values.offset })}`, { signal })
+  async listJobs(values: { symbol?: string; asset_family?: 'equity' | 'fund'; as_of_date?: string; status?: string; limit?: number; offset?: number } = {}, signal?: AbortSignal) {
+    const response = await this.request<PageResult<CollectionJob> | CollectionJob[] | Record<string, unknown>>(`/collection-jobs${queryString({
+      symbol: values.symbol,
+      asset_family: values.asset_family,
+      as_of_date: values.as_of_date,
+      status: values.status,
+      limit: values.limit,
+      offset: values.offset,
+    })}`, { signal })
     const page = normalizePage<unknown>(response as Record<string, unknown>, 'jobs')
     return { ...page, items: page.items.map(normalizeJob) }
   }
@@ -436,8 +570,12 @@ export class MarketDataCenterApi {
     return this.request<unknown>('/collection-jobs', { method: 'POST', body: JSON.stringify(payload) }).then(normalizeJob)
   }
 
-  retryFailed(jobId: string) {
-    return this.request<unknown>(`/collection-jobs/${encodeURIComponent(jobId)}/retry-failed`, { method: 'POST' }).then(normalizeJob)
+  retryFailed(jobId: string, scope?: CollectionRetryInput) {
+    const scoped = Boolean(scope?.symbols?.length || scope?.dimensions?.length)
+    return this.request<unknown>(`/collection-jobs/${encodeURIComponent(jobId)}/retry-failed`, {
+      method: 'POST',
+      body: scoped ? JSON.stringify(scope) : undefined,
+    }).then(normalizeJob)
   }
 
   cancelJob(jobId: string) {

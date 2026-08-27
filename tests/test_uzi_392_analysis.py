@@ -3,13 +3,13 @@ from __future__ import annotations
 import importlib
 import json
 import os
-from pathlib import Path
 import re
+import unittest
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Lock
 from time import sleep
 from types import SimpleNamespace
-import unittest
 from unittest.mock import patch
 
 from jsonschema import Draft202012Validator
@@ -19,20 +19,21 @@ from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
     AgentBuyZonePayload,
     AgentDimensionPayload,
     AgentNarrativeCorePayload,
+    _apply_scoring_exclusions,
     _canonical_evidence_path,
     _deep_methods_compatible_raw,
+    _initialize_native_imports,
     _normalize_evidence_paths,
     _normalize_payload_paths,
-    _research_workflow_compatible_features,
+    _profile_empty_dimension_issues,
     _safe_error_detail,
     _self_review_compatible_raw,
     _snapshot_rows_for_symbol,
     _workflow_dimension_keys,
     execute_native_analysis,
 )
-from tests.test_uzi_392_native_methods import _snapshots
 from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import Uzi392FetcherRuntime
-
+from tests.test_uzi_392_native_methods import _snapshots
 
 _LITE_DIMENSIONS = {
     "0_basic",
@@ -249,6 +250,81 @@ class _ConcurrencyProvider(_LiteAgentProvider):
 
 
 class Uzi392AnalysisGateTests(unittest.TestCase):
+    def test_terminal_historical_gap_has_zero_weight_and_remains_disclosed(self) -> None:
+        _initialize_native_imports()
+        raw = {
+            "ticker": "600000",
+            "dimensions": {
+                "1_financials": {
+                    "data": {
+                        "roe": 12,
+                        "roe_history": [10, 11, 12],
+                        "revenue_history": [100, 110],
+                    }
+                },
+                "12_capital_flow": {
+                    "data": {},
+                    "error": "historical_reconstruction_no_proof",
+                    "_excluded_from_scoring": True,
+                    "_degradation": {
+                        "reason_code": "historical_reconstruction_no_proof",
+                        "message": "目标日没有可验证记录",
+                    },
+                },
+            },
+        }
+        score_fns = importlib.import_module("lib.pipeline.score_fns")
+
+        scored = _apply_scoring_exclusions(score_fns.score_dimensions(raw), raw)
+
+        excluded = scored["dimensions"]["12_capital_flow"]
+        self.assertEqual(excluded["weight"], 0)
+        self.assertEqual(excluded["scoring_status"], "excluded")
+        self.assertEqual(
+            scored["scoring_coverage"]["excluded_dimensions"],
+            ["12_capital_flow"],
+        )
+
+    def test_terminal_historical_gap_degrades_but_does_not_block_report(self) -> None:
+        rows = [row for row in _lite_snapshots() if row["snapshot_type"] != "lhb"]
+        rows.append(
+            {
+                "snapshot_type": "lhb",
+                "symbol": "600000",
+                "quality_status": "data_gap",
+                "facts": {"availability": "historically_unavailable"},
+                "query_manifest": {
+                    "degradation": {
+                        "safe_for_report": True,
+                        "excluded_from_scoring": True,
+                        "reason_code": "historical_reconstruction_no_proof",
+                        "message": "目标日没有可验证龙虎榜记录",
+                    }
+                },
+            }
+        )
+
+        result = execute_native_analysis(
+            rows,
+            ["600000"],
+            profile="lite",
+            llm_provider=_LiteAgentProvider(),
+        )
+
+        self.assertTrue(result["report_allowed"])
+        self.assertEqual(result["quality_status"], "degraded")
+        stock = result["results"][0]
+        self.assertEqual(stock["quality_status"], "degraded")
+        self.assertEqual(stock["dimensions"]["dimensions"]["16_lhb"]["weight"], 0)
+        disclosures = stock["synthesis"]["data_gaps"]["tasks"]
+        self.assertTrue(
+            any(
+                row.get("dim") == "16_lhb"
+                and row.get("status") == "excluded_from_scoring"
+                for row in disclosures
+            )
+        )
+
     def test_independent_agent_stages_honor_configured_parallelism(self) -> None:
         provider = _ConcurrencyProvider()
 
@@ -280,15 +356,6 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         self.assertTrue(analysis["qualitative_execution"]["required"])
         self.assertEqual(len(analysis["self_review"]["enabled_dimensions"]), 20)
 
-    def test_nullable_moat_is_only_normalized_for_the_legacy_idea_screen(self) -> None:
-        features = {"moat_known": False, "moat_total": None, "fcf_positive": None}
-
-        compatible = _research_workflow_compatible_features(features)
-
-        self.assertIsNone(features["moat_total"])
-        self.assertEqual(compatible["moat_total"], 0)
-        self.assertIsNone(compatible["fcf_positive"])
-
     def test_nullable_moat_scores_are_normalized_only_for_deep_methods(self) -> None:
         raw = {"dimensions": {"14_moat": {"data": {"scores": None}}}}
 
@@ -299,6 +366,21 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
             compatible["dimensions"]["14_moat"]["data"]["scores"],
             {},
         )
+
+    def test_profile_empty_check_includes_native_number_six_bonus_dimension(self) -> None:
+        issues = _profile_empty_dimension_issues(
+            {
+                "dimensions": {
+                    "6_research": {"data": {"reports": ["ok"]}},
+                    "6_fund_holders": {"data": {}, "error": "provider failed"},
+                }
+            },
+            enabled_dimension_keys={"6_research"},
+        )
+
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0]["dim"], "6_fund_holders")
+        self.assertEqual(issues[0]["severity"], "warning")
 
     def test_lite_analysis_accepts_nullable_optional_moat_scores(self) -> None:
         rows = _lite_snapshots()
