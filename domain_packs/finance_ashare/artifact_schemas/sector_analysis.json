@@ -30,7 +30,7 @@
         "retrieved_at": {"type": ["string", "null"]},
         "created_at": {"type": ["string", "null"]},
         "quality_status": {"type": "string"},
-        "query_manifest": {"type": "object"},
+        "query_manifest": {"type": "object", "x-business-extensible": true},
         "scoring_policy": {
           "type": "object",
           "required": ["excluded", "reason_code", "reason"],

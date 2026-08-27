@@ -7,7 +7,7 @@
     "snapshot": {"title": "业务数据快照", "renderer": "SnapshotArtifactRenderer", "schema_field_digest": "c03d99e08b32f33e"},
     "evidence_set": {"title": "分析证据集", "renderer": "EvidenceSetArtifactRenderer", "schema_field_digest": "1b8b92e4ee2d59c4"},
     "screening_result": {"title": "股票筛选结果", "renderer": "ScreeningResultArtifactRenderer", "schema_field_digest": "55e8b8a6fa9f9bbc"},
-    "sector_analysis": {"title": "板块研究结果", "renderer": "SectorAnalysisArtifactRenderer", "schema_field_digest": "ac40854fe2e6ff81"},
+    "sector_analysis": {"title": "板块研究结果", "renderer": "SectorAnalysisArtifactRenderer", "schema_field_digest": "d5aef0c604f89bec"},
     "thesis_review": {"title": "投资逻辑复核", "renderer": "ThesisReviewArtifactRenderer", "schema_field_digest": "5e919345b5d4e488"},
     "source_record_set": {"title": "来源记录集", "renderer": "SourceRecordSetArtifactRenderer", "schema_field_digest": "cb671686f2c444dd"},
     "distillation_result": {"title": "投资逻辑蒸馏结果", "renderer": "DistillationResultArtifactRenderer", "schema_field_digest": "5aa0f74d87dbe0ad"},
