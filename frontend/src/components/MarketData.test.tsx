@@ -299,10 +299,10 @@ describe('MarketDataCenter', () => {
     const completedJob = {
       ...pollingJob,
       status: 'succeeded',
-      progress: { total: 3, completed: 3, by_status: { succeeded: 3 } },
+      progress: { total: 3, completed: 3, by_status: { running: 0, succeeded: 3 } },
       completed_at: '2026-08-20T08:03:00Z',
     }
-    const jobResponses = [[pollingJob]]
+    const jobResponses: unknown[][] = [[pollingJob]]
     const { requests } = installApi({ jobResponses })
     renderPage()
 
