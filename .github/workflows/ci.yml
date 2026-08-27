@@ -72,7 +72,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install -r requirements.txt pytest
       # Native finance/UZI dependencies keep process-wide state. Keep the
       # command/method/report contracts in a fresh interpreter so an earlier
       # provider test cannot strand their worker initialization.
