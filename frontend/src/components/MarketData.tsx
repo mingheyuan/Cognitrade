@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { type Dispatch, type SetStateAction, useCallback, useMemo, useState } from 'react'
 import { useCognitrade } from '../CognitradeContext'
+import type { ResearchIntent } from '../research-contracts'
 import { BundleHistoryPanel } from './market-data/BundleHistoryPanel'
 import { CollectionJobsPanel } from './market-data/CollectionJobsPanel'
 import { DimensionInspector } from './market-data/DimensionInspector'
@@ -24,7 +25,7 @@ import { MarketDataToolbar } from './market-data/MarketDataToolbar'
 import { ProviderSubscriptionPanel } from './market-data/ProviderSubscriptionPanel'
 import { ReadinessSummary } from './market-data/ReadinessSummary'
 import { EmptyState, InlineMessage, LoadingState } from './market-data/shared'
-import type { MarketDataConflict, MarketDataTab, SnapshotDetail } from './market-data/types'
+import type { MarketDataConflict, MarketDataTab, ReportManifestResult, SnapshotDetail } from './market-data/types'
 import { useMarketDataCenter } from './market-data/useMarketDataCenter'
 
 export interface MarketDataViewState {
@@ -37,6 +38,7 @@ export interface MarketDataViewState {
 interface MarketDataProps {
   state: MarketDataViewState
   setState: Dispatch<SetStateAction<MarketDataViewState>>
+  onResearch: (query: string, intent?: ResearchIntent, constraints?: Record<string, unknown>) => Promise<void>
 }
 
 const TABS: Array<{ id: MarketDataTab; label: string; detail: string; icon: typeof Layers3 }> = [
@@ -47,7 +49,7 @@ const TABS: Array<{ id: MarketDataTab; label: string; detail: string; icon: type
   { id: 'archive', label: '归档与数据源', detail: '显式订阅与能力', icon: Archive },
 ]
 
-export function MarketData({ state, setState }: MarketDataProps) {
+export function MarketData({ state, setState, onResearch }: MarketDataProps) {
   const { settings } = useCognitrade()
   const handleSymbolChange = useCallback(
     (symbol: string) => setState((current) => ({ ...current, query: symbol })),
@@ -259,6 +261,40 @@ export function MarketData({ state, setState }: MarketDataProps) {
           busy={controller.loading.action}
           onClose={() => setReportOpen(false)}
           onSubmit={controller.createReportManifest}
+          onLaunch={async (profile: 'lite' | 'medium' | 'deep', manifest: ReportManifestResult) => {
+            if (!manifest.manifest_hash) throw new Error('冻结结果缺少 Manifest hash，无法启动精确报告。')
+            const pinned = {
+              research_profile: profile,
+              analysis_as_of_date: controller.urlState.as_of_date,
+              report_manifest_id: manifest.manifest_id,
+              report_manifest_hash: manifest.manifest_hash,
+            }
+            if (controller.resolvedAssetFamily === 'fund') {
+              const fundName = controller.resolvedInstrument?.name || controller.resolvedInstrument?.code || controller.urlState.symbol
+              await onResearch(
+                `使用冻结数据分析 ${fundName} 的前十大持仓组合`,
+                'uzi_portfolio_batch',
+                {
+                  ...pinned,
+                  portfolio_name: `${fundName} 前十大持仓`,
+                  portfolio_holdings: (controller.latestFundJob?.expanded_holdings || []).map((holding) => ({
+                    ticker: holding.symbol,
+                    name: holding.name || holding.symbol,
+                    market: holding.market,
+                    ...(holding.fund_weight_pct == null ? {} : { weight: holding.fund_weight_pct }),
+                  })),
+                },
+              )
+            } else {
+              const symbol = controller.resolvedInstrument?.symbol || controller.urlState.symbol
+              await onResearch(
+                `使用冻结数据分析 ${symbol}`,
+                'stock_check',
+                { ...pinned, symbol },
+              )
+            }
+            setReportOpen(false)
+          }}
         />
       ) : null}
     </main>

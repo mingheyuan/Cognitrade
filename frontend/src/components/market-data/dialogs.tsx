@@ -1,6 +1,6 @@
 import { AlertTriangle, FileLock2, ShieldAlert, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import type { DimensionDefinition, ExpandedFundHolding, ManualSnapshotInput, MarketDataConflict, ResolvedAssetFamily, SnapshotDetail } from './types'
+import type { DimensionDefinition, ExpandedFundHolding, ManualSnapshotInput, MarketDataConflict, ReportManifestResult, ResolvedAssetFamily, SnapshotDetail } from './types'
 
 function DialogFrame({ title, description, children, onClose, danger = false }: {
   title: string
@@ -177,7 +177,7 @@ export function RevokeSnapshotDialog({ snapshot, busy, onClose, onSubmit }: {
   )
 }
 
-export function ReportLaunchDialog({ symbol, asOfDate, bundleId, assetFamily, holdings, busy, onClose, onSubmit }: {
+export function ReportLaunchDialog({ symbol, asOfDate, bundleId, assetFamily, holdings, busy, onClose, onSubmit, onLaunch }: {
   symbol: string
   asOfDate: string
   bundleId: string
@@ -185,9 +185,12 @@ export function ReportLaunchDialog({ symbol, asOfDate, bundleId, assetFamily, ho
   holdings: ExpandedFundHolding[]
   busy: boolean
   onClose: () => void
-  onSubmit: (profile: 'lite' | 'medium' | 'deep') => Promise<unknown>
+  onSubmit: (profile: 'lite' | 'medium' | 'deep') => Promise<ReportManifestResult>
+  onLaunch: (profile: 'lite' | 'medium' | 'deep', manifest: ReportManifestResult) => Promise<unknown>
 }) {
   const [profile, setProfile] = useState<'lite' | 'medium' | 'deep'>('lite')
+  const [frozen, setFrozen] = useState<ReportManifestResult | null>(null)
+  const [launching, setLaunching] = useState(false)
   const options = useMemo(() => [
     { id: 'lite' as const, label: 'Lite', detail: '完整数据合同，精简推理与输出' },
     { id: 'medium' as const, label: 'Medium', detail: '完整数据合同，中等深度工作流' },
@@ -195,12 +198,32 @@ export function ReportLaunchDialog({ symbol, asOfDate, bundleId, assetFamily, ho
   ], [])
   const isFund = assetFamily === 'fund'
   return (
-    <DialogFrame title={isFund ? '冻结前十大股票组合输入' : '冻结正式报告输入'} description={isFund ? '基金 Bundle 只负责证明前十大股票的选择与权重；提交后端将严格派生并冻结 10 只股票 Bundle，基金代码不会被当成股票分析。报告阶段外部数据调用数必须为 0。' : '三种强度读取同一完整数据输入。此处只冻结 Manifest；随后可从研究入口启动工作流，报告阶段外部数据调用数必须为 0。'} onClose={onClose}>
-      <form className="mdc-dialog-form" onSubmit={(event) => { event.preventDefault(); void onSubmit(profile).then(onClose).catch(() => undefined) }}>
+    <DialogFrame title={isFund ? '冻结前十大股票组合输入' : '冻结正式报告输入'} description={isFund ? '基金 Bundle 只负责证明前十大股票的选择与权重；基金代码不会被当成股票分析。后端将严格冻结 10 只股票 Bundle，再用同一 Manifest 启动组合报告。报告阶段外部数据调用数必须为 0。' : '先冻结不可变 Manifest，再用该 Manifest 的 ID 与 hash 精确启动报告；不会重新选择其他 Bundle，报告阶段外部数据调用数必须为 0。'} onClose={onClose}>
+      <form className="mdc-dialog-form" onSubmit={(event) => {
+        event.preventDefault()
+        if (frozen) return
+        void onSubmit(profile).then(setFrozen).catch(() => undefined)
+      }}>
         <div className="mdc-manifest-preview"><span>{symbol} · {asOfDate}{isFund ? ` · ${holdings.length} 只股票` : ''}</span><code>{bundleId}</code></div>
         {isFund ? <ol className="mdc-manifest-holdings" aria-label="将被冻结的前十大股票">{holdings.map((holding) => <li key={holding.symbol}><span>{holding.rank}. {holding.name || holding.symbol}</span><code>{holding.symbol}</code><strong>{holding.fund_weight_pct == null ? '—' : `${holding.fund_weight_pct.toFixed(2)}%`}</strong></li>)}</ol> : null}
-        <fieldset><legend>{isFund ? '组合内股票报告强度' : '报告强度'}</legend>{options.map((option) => <label className="mdc-candidate" key={option.id}><input type="radio" name="profile" value={option.id} checked={profile === option.id} onChange={() => setProfile(option.id)} /><span><strong>{option.label}</strong><small>{option.detail}</small></span></label>)}</fieldset>
-        <footer><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? '正在冻结输入…' : isFund ? `冻结十大持仓 · ${profile.toUpperCase()}` : `冻结 ${profile.toUpperCase()} 输入`}</button></footer>
+        {!frozen ? <fieldset><legend>{isFund ? '组合内股票报告强度' : '报告强度'}</legend>{options.map((option) => <label className="mdc-candidate" key={option.id}><input type="radio" name="profile" value={option.id} checked={profile === option.id} onChange={() => setProfile(option.id)} /><span><strong>{option.label}</strong><small>{option.detail}</small></span></label>)}</fieldset> : (
+          <div className="mdc-manifest-ready" role="status">
+            <FileLock2 size={20} aria-hidden="true" />
+            <span><strong>报告输入已冻结</strong><small>后续运行将校验此 Manifest 的数据库归属与 hash。</small></span>
+            <code>{frozen.manifest_id}</code>
+          </div>
+        )}
+        <footer>
+          <button className="secondary-button" type="button" onClick={onClose}>{frozen ? '稍后生成' : '取消'}</button>
+          {!frozen ? (
+            <button className="primary-button" type="submit" disabled={busy}>{busy ? '正在冻结输入…' : isFund ? `冻结十大持仓 · ${profile.toUpperCase()}` : `冻结 ${profile.toUpperCase()} 输入`}</button>
+          ) : (
+            <button className="primary-button" type="button" disabled={launching} onClick={() => {
+              setLaunching(true)
+              void onLaunch(profile, frozen).catch(() => setLaunching(false))
+            }}>{launching ? '正在启动报告…' : `使用此数据生成 ${profile.toUpperCase()} 报告`}</button>
+          )}
+        </footer>
       </form>
     </DialogFrame>
   )

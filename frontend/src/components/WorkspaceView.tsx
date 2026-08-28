@@ -52,7 +52,7 @@ export function WorkspaceView({
   if (activeView === 'overview') {
     return <Overview onSubmit={onResearch} onOpenWorkbench={() => navigate('workbench')} onOpenRuns={() => navigate('runs')} onOpenRun={onOpenRun} />
   }
-  if (activeView === 'market') return <MarketData state={marketDataState} setState={setMarketDataState} />
+  if (activeView === 'market') return <MarketData state={marketDataState} setState={setMarketDataState} onResearch={onResearch} />
   if (activeView === 'paper') return <PaperTrading onOpenMarketData={() => navigate('market')} />
   if (activeView === 'screening') return <Screening onSubmit={onResearch} onOpenRun={onOpenRun} />
   if (activeView === 'funds') return <Funds onOpenRun={onOpenRun} onOpenStrategy={onOpenStrategy} />

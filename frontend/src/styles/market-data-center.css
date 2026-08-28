@@ -1029,6 +1029,30 @@
 .mdc-manifest-preview span { color: var(--text-muted); font-size: 10px; }
 .mdc-manifest-preview code { overflow: hidden; color: var(--mint); font-size: 9px; text-overflow: ellipsis; }
 
+.mdc-manifest-ready {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--mint) 38%, var(--border));
+  border-radius: 10px;
+  background: var(--mint-soft);
+  color: var(--mint);
+}
+
+.mdc-manifest-ready span { display: grid; gap: 3px; min-width: 0; }
+.mdc-manifest-ready strong { color: var(--text); font-size: 10px; }
+.mdc-manifest-ready small { color: var(--text-faint); font-size: 8px; }
+.mdc-manifest-ready code {
+  grid-column: 2;
+  overflow: hidden;
+  color: var(--mint);
+  font-size: 8px;
+  text-overflow: ellipsis;
+}
+
 .mdc-manifest-holdings {
   display: grid;
   max-height: 230px;

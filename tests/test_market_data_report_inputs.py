@@ -499,6 +499,24 @@ class DatabaseReportInputGatewayTests(unittest.TestCase):
                 resumed.constraints["report_manifest_hash"],
                 first["manifest_hash"],
             )
+            pinned_request = RequestEnvelope(
+                intent="stock_check",
+                user_query="使用冻结输入分析 600519",
+                tenant_id="tenant-1",
+                user_id="user-1",
+                slots={"symbols": ["600519"]},
+                constraints={
+                    "research_profile": "lite",
+                    "report_manifest_id": first["manifest_id"],
+                    "report_manifest_hash": first["manifest_hash"],
+                },
+            )
+            pinned = service.freeze_request(pinned_request)
+            self.assertEqual(pinned.constraints["data_source_mode"], "bundle_only")
+            self.assertEqual(
+                pinned.slots["market_data_bundle"]["bundle_id"],
+                bundle.id,
+            )
             with database.session() as session:
                 self.assertEqual(session.query(ReportDataManifest).count(), 1)
                 self.assertEqual(session.query(ReportDataManifestItem).count(), 1)
@@ -629,6 +647,35 @@ class DatabaseReportInputGatewayTests(unittest.TestCase):
                 verified_child.constraints["market_data_bundle_manifest_hash"],
                 pinned["items"][0]["bundle"]["manifest_hash"],
             )
+            portfolio_request = RequestEnvelope(
+                intent="uzi_portfolio_batch",
+                user_query="使用冻结基金持仓输入生成组合报告",
+                user_id="user-1",
+                tenant_id="tenant-1",
+                slots={
+                    "portfolio_holdings": [
+                        {"ticker": item["symbol"], "weight": item["weight"]}
+                        for item in pinned["items"]
+                    ]
+                },
+                constraints={
+                    "research_profile": "deep",
+                    "report_manifest_id": pinned["manifest_id"],
+                    "report_manifest_hash": pinned["manifest_hash"],
+                },
+            )
+            verified_portfolio = ReportInputService(gateway).freeze_request(
+                portfolio_request
+            )
+            self.assertEqual(
+                verified_portfolio.constraints["data_source_mode"],
+                "bundle_only",
+            )
+            self.assertEqual(
+                len(verified_portfolio.slots["report_data_manifest"]["items"]),
+                10,
+            )
+            self.assertEqual(len(verified_portfolio.slots["snapshots"]), 220)
             with database.session() as session:
                 self.assertEqual(session.query(ReportDataManifestDependency).count(), 1)
                 MarketDataRepository(session).invalidate_bundle(

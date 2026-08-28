@@ -139,6 +139,10 @@ _COMMON_REQUEST_FIELDS = {
     # A formal PIT report may explicitly pin the logical trading day.  The
     # report preflight will resolve only a published Bundle for this date.
     "analysis_as_of_date",
+    # A data-center handoff may pin one already-frozen manifest.  The report
+    # preflight reloads it from the database and never trusts client snapshots.
+    "report_manifest_id",
+    "report_manifest_hash",
 }
 _STOCK_FIELDS = {
     "symbol",
@@ -372,6 +376,18 @@ def _validate_common_constraints(
             ).isoformat()
         except ValueError:
             _invalid_constraint("analysis_as_of_date", "must be an ISO date (YYYY-MM-DD)")
+    manifest_id = str(constraints.get("report_manifest_id") or "").strip()
+    manifest_hash = str(constraints.get("report_manifest_hash") or "").strip().lower()
+    if manifest_id or manifest_hash:
+        if not manifest_id:
+            _invalid_constraint("report_manifest_id", "is required with report_manifest_hash")
+        if not manifest_hash:
+            _invalid_constraint("report_manifest_hash", "is required with report_manifest_id")
+        safe_identifier(manifest_id, field_name="report_manifest_id")
+        if re.fullmatch(r"[0-9a-f]{64}", manifest_hash) is None:
+            _invalid_constraint("report_manifest_hash", "must be a 64-character lowercase hex digest")
+        constraints["report_manifest_id"] = manifest_id
+        constraints["report_manifest_hash"] = manifest_hash
 
     if "investment_cycle" in constraints:
         _require_enum(constraints["investment_cycle"], field_name="investment_cycle", allowed=_INVESTMENT_CYCLES)

@@ -765,6 +765,66 @@ class ReportInputService:
             # Keep intake clarification side-effect free.  The resolved request
             # is passed through this preflight again before graph construction.
             return request
+        constraints = dict(request.constraints or {})
+        pinned_manifest_id = str(constraints.get("report_manifest_id") or "").strip()
+        pinned_manifest_hash = str(constraints.get("report_manifest_hash") or "").strip()
+        if (
+            str(constraints.get("data_source_mode") or "") != "bundle_only"
+            and (pinned_manifest_id or pinned_manifest_hash)
+        ):
+            if not pinned_manifest_id or not pinned_manifest_hash:
+                raise ReportInputError(
+                    "report_manifest_pin_incomplete",
+                    "精确报告输入必须同时提供 manifest ID 和 hash",
+                )
+            loader = getattr(self.gateway, "load_frozen_report_manifest", None)
+            if not callable(loader):
+                raise ReportInputError(
+                    "report_manifest_loader_unavailable",
+                    "当前报告输入网关不能加载已冻结 Manifest",
+                )
+            requested_symbols = self.request_symbols(request)
+            trusted = normalize_manifest(
+                loader(
+                    manifest_id=pinned_manifest_id,
+                    manifest_hash=pinned_manifest_hash,
+                    tenant_id=request.tenant_id,
+                    user_id=request.user_id,
+                ),
+            )
+            trusted_slots = slots_for_manifest(trusted, symbols=requested_symbols)
+            trusted_projection = normalize_manifest(
+                trusted_slots["report_data_manifest"],
+                expected_symbols=requested_symbols,
+            )
+            validate_bundle_only_input(
+                snapshots=trusted_slots["snapshots"],
+                manifest=trusted_projection,
+                bundle=trusted_slots["market_data_bundle"],
+                symbols=requested_symbols,
+            )
+            slots = dict(request.slots or {})
+            slots.update(trusted_slots)
+            constraints.update(
+                {
+                    "data_source_mode": "bundle_only",
+                    "report_manifest_id": trusted["manifest_id"],
+                    "report_manifest_hash": trusted["manifest_hash"],
+                    "analysis_as_of_date": trusted["as_of_date"],
+                }
+            )
+            bundle_hashes = bundle_hashes_for_symbols(
+                trusted_projection,
+                requested_symbols,
+            )
+            if len(requested_symbols) == 1:
+                constraints["market_data_bundle_manifest_hash"] = bundle_hashes[
+                    requested_symbols[0]
+                ]
+            return request.model_copy(
+                update={"slots": slots, "constraints": constraints},
+                deep=True,
+            )
         if str((request.constraints or {}).get("data_source_mode") or "") == "bundle_only":
             supplied_manifest = (request.slots or {}).get("report_data_manifest")
             validate_bundle_only_input(

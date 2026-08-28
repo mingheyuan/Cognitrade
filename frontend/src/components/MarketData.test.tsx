@@ -111,7 +111,7 @@ function installApi(options: { ready?: boolean; jobResponses?: unknown[][] } = {
         verified_empty_count: 1, manifest_hash: '0123456789abcdef', revision: 1, items: [],
       }] : [], total_count: options.ready ? 1 : 0, limit: 1, offset: 0,
     })
-    if (url.endsWith('/market-data/report-manifests') && init?.method === 'POST') return json({ manifest_id: 'manifest-1', status: 'queued', report_run_id: 'run-1' })
+    if (url.endsWith('/market-data/report-manifests') && init?.method === 'POST') return json({ manifest_id: 'manifest-1', manifest_hash: 'a'.repeat(64), status: 'frozen' })
     return json({ items: [], total_count: 0, limit: 50, offset: 0 })
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -206,7 +206,7 @@ function installFundApi(options: { job?: typeof completedFundJob | typeof partia
     if (url.endsWith('/retry-failed') && init?.method === 'POST') return json({ ...responseJob, status: 'queued' })
     if (url.endsWith('/market-data/collection-jobs') && init?.method === 'POST') return json({ ...completedFundJob, status: 'queued', progress: { total: 1, completed: 0, by_status: { queued: 1 } } })
     if (url.includes('/market-data/collection-jobs')) return json({ items: [responseJob], total_count: 1, limit: 50, offset: 0 })
-    if (url.endsWith('/market-data/report-manifests') && init?.method === 'POST') return json({ manifest_id: 'fund-manifest-1', status: 'frozen' })
+    if (url.endsWith('/market-data/report-manifests') && init?.method === 'POST') return json({ manifest_id: 'fund-manifest-1', manifest_hash: 'b'.repeat(64), status: 'frozen' })
     if (url.includes('/market-data/bundles/fund-bundle-1')) return json({
       id: 'fund-bundle-1', symbol: '020464', market: 'CN_FUND', as_of_date: '2026-08-20', cutoff_at: '2026-08-20T15:59:59Z',
       status: 'published', contract_version: fundContract.contract_version, expected_dimension_count: 1, available_count: 1,
@@ -219,9 +219,15 @@ function installFundApi(options: { job?: typeof completedFundJob | typeof partia
   return { fetchMock, requests }
 }
 
-function renderPage() {
+function researchHandler() {
+  return vi.fn<(query: string, intent?: string, constraints?: Record<string, unknown>) => Promise<void>>(
+    () => Promise.resolve(),
+  )
+}
+
+function renderPage(onResearch = researchHandler()) {
   const state: MarketDataViewState = { query: '600519.SH', data: null, loading: false, error: '' }
-  return render(<MarketData state={state} setState={vi.fn()} />)
+  return render(<MarketData state={state} setState={vi.fn()} onResearch={onResearch} />)
 }
 
 describe('MarketDataCenter', () => {
@@ -326,7 +332,8 @@ describe('MarketDataCenter', () => {
 
   it('freezes a ready bundle and launches the selected report profile', async () => {
     const { requests } = installApi({ ready: true })
-    renderPage()
+    const onResearch = researchHandler()
+    renderPage(onResearch)
     await screen.findByRole('heading', { name: '采集槽完整度' })
 
     fireEvent.click(screen.getByRole('button', { name: '冻结报告输入' }))
@@ -346,6 +353,19 @@ describe('MarketDataCenter', () => {
       workflow_pins: { profile: 'deep' },
       weights: {},
     })
+    const launch = await screen.findByRole('button', { name: '使用此数据生成 DEEP 报告' })
+    fireEvent.click(launch)
+    await waitFor(() => expect(onResearch).toHaveBeenCalledWith(
+      '使用冻结数据分析 600519.SH',
+      'stock_check',
+      {
+        research_profile: 'deep',
+        analysis_as_of_date: '2026-08-20',
+        report_manifest_id: 'manifest-1',
+        report_manifest_hash: 'a'.repeat(64),
+        symbol: '600519.SH',
+      },
+    ))
   })
 
   it('builds a backend-valid B-grade manual evidence request and never offers manual grade A', async () => {
@@ -428,7 +448,8 @@ describe('MarketDataCenter', () => {
   it('freezes a fund report as the backend-derived ten-stock portfolio', async () => {
     window.history.replaceState({}, '', '/market-data?symbol=020464&asset_family=fund&as_of_date=2026-08-20&cutoff=eod&tab=coverage')
     const { requests } = installFundApi()
-    renderPage()
+    const onResearch = researchHandler()
+    renderPage(onResearch)
 
     const freeze = await screen.findByRole('button', { name: '冻结十大持仓组合' })
     await waitFor(() => expect(freeze).toBeEnabled())
@@ -444,6 +465,18 @@ describe('MarketDataCenter', () => {
       symbols: ['020464'], market_by_symbol: { '020464': 'CN_FUND' }, asset_family: 'fund',
       fund_bundle_id: 'fund-bundle-1', report_kind: 'fund_top_holdings', workflow_pins: { profile: 'deep' },
     })
+    fireEvent.click(await screen.findByRole('button', { name: '使用此数据生成 DEEP 报告' }))
+    await waitFor(() => expect(onResearch).toHaveBeenCalled())
+    const [, intent, constraints = {}] = onResearch.mock.calls[0]
+    expect(intent).toBe('uzi_portfolio_batch')
+    expect(constraints).toMatchObject({
+      research_profile: 'deep',
+      analysis_as_of_date: '2026-08-20',
+      report_manifest_id: 'fund-manifest-1',
+      report_manifest_hash: 'b'.repeat(64),
+      portfolio_name: '测试权益基金 前十大持仓',
+    })
+    expect(constraints.portfolio_holdings as unknown[]).toHaveLength(10)
   })
 
   it('blocks a mixed equity and fund batch before collection job creation', async () => {
