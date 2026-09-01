@@ -3,7 +3,6 @@ import {
   BadgeCheck,
   BarChart3,
   Check,
-  ChevronDown,
   ChevronRight,
   CircleAlert,
   Copy,
@@ -28,17 +27,15 @@ import {
   Trash2,
   type LucideIcon,
 } from 'lucide-react'
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart as RechartsLineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
+  type Dispatch,
+  type FormEvent,
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 import { CognitradeApiClient, CognitradeApiError } from '../api-client'
 import { useCognitrade } from '../CognitradeContext'
 import type {
@@ -49,7 +46,6 @@ import type {
   ResearchProfile,
   ReportJob,
   StrategyBacktest,
-  StrategyBacktestResult,
   StrategyDocument,
   StrategyEvent,
   StrategyRecord,
@@ -60,12 +56,28 @@ import type {
 } from '../strategy-contracts'
 import { asString, dashboardItems, dashboardValue } from '../live-data'
 import { AppSelect } from './AppSelect'
+import {
+  BackfillProgress,
+  BacktestResultPanel,
+  ReportJobProgressMeter,
+} from './StrategyBacktest'
+import {
+  backtestMetricSummary as metricSummary,
+  backtestModeLabel as modeLabel,
+  compactBacktestRuns,
+} from './strategy-backtest-utils'
 
 const LEGACY_POLICY_KEY = 'cognitrade.report-signal-policy.v1'
 const UNSAVED_FORM_KEY = 'cognitrade.strategy-draft.v1'
 
 type StrategyTab = 'rules' | 'signals' | 'versions' | 'assignments' | 'backtests' | 'governance'
 type StrategyFilter = 'all' | 'template' | 'draft' | 'published' | 'archived'
+type BacktestReportPolicy = 'existing_only' | 'require_complete'
+type BacktestBenchmarkChoice = 'default' | 'hs300' | 'none'
+
+const DEFAULT_BACKTEST_HISTORY_LIMIT = 3
+const ACTIVE_JOB_STATUSES = new Set(['queued', 'running'])
+const BACKFILL_PENDING_STATUSES = new Set(['queued', 'running', 'paused'])
 
 const tabs: Array<{ id: StrategyTab; label: string; icon: LucideIcon }> = [
   { id: 'rules', label: '规则编辑', icon: SlidersHorizontal },
@@ -75,6 +87,50 @@ const tabs: Array<{ id: StrategyTab; label: string; icon: LucideIcon }> = [
   { id: 'backtests', label: '基金回测', icon: FlaskConical },
   { id: 'governance', label: '方法论治理', icon: ShieldCheck },
 ]
+
+function useActiveRecordPolling<T extends { id: string; status: string }>(
+  records: T[],
+  setRecords: Dispatch<SetStateAction<T[]>>,
+  loadRecord: (id: string) => Promise<T>,
+  reloadDetail: () => Promise<void>,
+): void {
+  const activeIds = records
+    .filter((record) => ACTIVE_JOB_STATUSES.has(record.status))
+    .map((record) => record.id)
+    .sort()
+    .join(',')
+
+  useEffect(() => {
+    if (!activeIds) return undefined
+    const ids = activeIds.split(',')
+    let polling = false
+    let disposed = false
+
+    const poll = async () => {
+      if (polling || disposed) return
+      polling = true
+      try {
+        const refreshed = await Promise.all(ids.map(loadRecord))
+        if (disposed) return
+        const refreshedById = new Map(refreshed.map((record) => [record.id, record]))
+        setRecords((current) => current.map((record) => refreshedById.get(record.id) || record))
+        if (refreshed.some((record) => !ACTIVE_JOB_STATUSES.has(record.status))) {
+          await reloadDetail()
+        }
+      } catch {
+        // Keep the last persisted state during transient transport errors.
+      } finally {
+        polling = false
+      }
+    }
+
+    const timer = window.setInterval(() => { void poll() }, 2000)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+    }
+  }, [activeIds, loadRecord, reloadDetail, setRecords])
+}
 
 export function Strategies({ initialContext = null }: { initialContext?: StrategyWorkspaceContext | null }) {
   const { settings, methodologyDashboard } = useCognitrade()
@@ -144,15 +200,17 @@ export function Strategies({ initialContext = null }: { initialContext?: Strateg
         client.listPaperStrategyBindings(),
         Promise.all((row.assignments || []).map((assignment) => client.listTradeSignals({ assignmentId: assignment.id }))),
       ])
-      const assignmentIds = new Set((row.assignments || []).map((assignment) => assignment.id))
-      const fundCodes = new Set((row.assignments || []).map((assignment) => assignment.fund_code))
-      setReportJobs(jobs.jobs.filter((job) => row.assignments?.some((assignment) => assignment.id === String(job.request.assignment_id))))
+      const assignments = row.assignments || []
+      const assignmentIds = new Set(assignments.map((assignment) => assignment.id))
+      const fundCodes = new Set(assignments.map((assignment) => assignment.fund_code))
+      const versionIds = new Set((row.versions || []).map((version) => version.id))
+      setReportJobs(jobs.jobs.filter((job) => assignmentIds.has(String(job.request.assignment_id))))
       setReportSets(reports.report_sets.filter((report) => fundCodes.has(report.fund_code)))
       setSignals(signalRows.flatMap((payload) => payload.signals).filter((signal) => assignmentIds.has(signal.assignment_id)))
       setBacktests(runs.backtests)
       setVerifications(verificationRows.verifications)
       setEvents(eventRows.events)
-      setBindings(bindingRows.bindings.filter((binding) => row.versions?.some((version) => version.id === binding.strategy_version_id)))
+      setBindings(bindingRows.bindings.filter((binding) => versionIds.has(binding.strategy_version_id)))
     } catch (loadError) {
       setError(errorMessage(loadError))
     } finally {
@@ -185,69 +243,15 @@ export function Strategies({ initialContext = null }: { initialContext?: Strateg
     }))
   }, [detail, dirty, document, name])
 
-  const activeReportJobIds = reportJobs
-    .filter((job) => ['queued', 'running'].includes(job.status))
-    .map((job) => job.id)
-    .sort()
-    .join(',')
+  const detailId = detail?.id || ''
+  const reloadDetail = useCallback(async () => {
+    if (detailId) await loadDetail(detailId)
+  }, [detailId, loadDetail])
+  const loadReportJob = useCallback((id: string) => client.getReportJob(id), [client])
+  const loadBacktest = useCallback((id: string) => client.getStrategyBacktest(id), [client])
 
-  useEffect(() => {
-    if (!activeReportJobIds) return undefined
-    let polling = false
-    let disposed = false
-    const ids = activeReportJobIds.split(',')
-    const poll = async () => {
-      if (polling || disposed) return
-      polling = true
-      try {
-        const nextJobs = await Promise.all(ids.map((jobId) => client.getReportJob(jobId)))
-        if (disposed) return
-        const byId = new Map(nextJobs.map((job) => [job.id, job]))
-        setReportJobs((current) => current.map((job) => byId.get(job.id) || job))
-        if (nextJobs.some((job) => !['queued', 'running'].includes(job.status)) && detail?.id) {
-          await loadDetail(detail.id)
-        }
-      } catch {
-        // Keep the last persisted progress during transient transport errors.
-      } finally {
-        polling = false
-      }
-    }
-    const timer = window.setInterval(() => { void poll() }, 2000)
-    return () => { disposed = true; window.clearInterval(timer) }
-  }, [activeReportJobIds, client, detail?.id, loadDetail])
-
-  const activeBacktestIds = backtests
-    .filter((run) => ['queued', 'running'].includes(run.status))
-    .map((run) => run.id)
-    .sort()
-    .join(',')
-
-  useEffect(() => {
-    if (!activeBacktestIds) return undefined
-    let polling = false
-    let disposed = false
-    const ids = activeBacktestIds.split(',')
-    const poll = async () => {
-      if (polling || disposed) return
-      polling = true
-      try {
-        const nextRuns = await Promise.all(ids.map((backtestId) => client.getStrategyBacktest(backtestId)))
-        if (disposed) return
-        const byId = new Map(nextRuns.map((run) => [run.id, run]))
-        setBacktests((current) => current.map((run) => byId.get(run.id) || run))
-        if (nextRuns.some((run) => !['queued', 'running'].includes(run.status)) && detail?.id) {
-          await loadDetail(detail.id)
-        }
-      } catch {
-        // Keep the last persisted state during transient transport errors.
-      } finally {
-        polling = false
-      }
-    }
-    const timer = window.setInterval(() => { void poll() }, 2000)
-    return () => { disposed = true; window.clearInterval(timer) }
-  }, [activeBacktestIds, client, detail?.id, loadDetail])
+  useActiveRecordPolling(reportJobs, setReportJobs, loadReportJob, reloadDetail)
+  useActiveRecordPolling(backtests, setBacktests, loadBacktest, reloadDetail)
 
   const filteredStrategies = strategies.filter((row) => {
     if (filter === 'all') return true
@@ -263,8 +267,9 @@ export function Strategies({ initialContext = null }: { initialContext?: Strateg
     try {
       await action()
     } catch (actionError) {
-      if (actionError instanceof CognitradeApiError && actionError.code === 'draft_revision_conflict') setConflict(true)
-      if (actionError instanceof CognitradeApiError && actionError.code === 'draft_revision_conflict' && detail) {
+      const isDraftConflict = actionError instanceof CognitradeApiError && actionError.code === 'draft_revision_conflict'
+      if (isDraftConflict) setConflict(true)
+      if (isDraftConflict && detail) {
         try {
           setConflictLatest(await client.getStrategy(detail.id))
         } catch {
@@ -447,7 +452,7 @@ export function Strategies({ initialContext = null }: { initialContext?: Strateg
               {tab === 'signals' && <SignalsPanel key={detail.id} client={client} detail={detail} context={context} reportJobs={reportJobs} reportSets={reportSets} signals={signals} setSignals={setSignals} reload={() => loadDetail(detail.id)} perform={perform} />}
               {tab === 'versions' && <VersionsPanel key={detail.id} client={client} detail={detail} />}
               {tab === 'assignments' && <AssignmentsPanel key={detail.id} client={client} detail={detail} context={context} reload={() => loadDetail(detail.id)} perform={perform} />}
-              {tab === 'backtests' && <BacktestsPanel key={detail.id} client={client} detail={detail} context={context} reportJobs={reportJobs} backtests={backtests} reload={() => loadDetail(detail.id)} perform={perform} />}
+              {tab === 'backtests' && <BacktestsPanel key={detail.id} client={client} detail={detail} context={context} reportJobs={reportJobs} backtests={backtests} busy={busy} reload={() => loadDetail(detail.id)} perform={perform} />}
               {tab === 'governance' && <GovernancePanel key={detail.id} client={client} detail={detail} backtests={backtests} verifications={verifications} events={events} bindings={bindings} methodologyDashboard={methodologyDashboard} reload={() => loadDetail(detail.id)} perform={perform} />}
             </div>
           </>}
@@ -602,7 +607,7 @@ function SignalsPanel({ client, detail, context, reportJobs, reportSets, signals
       </div>
       {estimate && <pre className="strategy-json-summary">{JSON.stringify(estimate, null, 2)}</pre>}
       <div className="strategy-record-list">
-        {reportJobs.map((job) => <article key={job.id}><span className={`record-state is-${job.status}`}>{job.status}</span><div><strong>{String(job.request.start_date || job.request.as_of_date || '')} — {String(job.request.end_date || job.request.as_of_date || '')}</strong><small>{job.id} · 尝试 {job.attempts?.length || 0} 次</small><ReportJobProgressMeter job={job} />{job.error_summary && <p>{job.error_summary}</p>}</div><div className="record-actions">{['queued', 'running'].includes(job.status) && <button onClick={() => void perform(`pause-${job.id}`, async () => { await client.setReportJobPaused(job.id, true); await reload() })}><Pause size={12} />暂停</button>}{job.status === 'paused' && <button onClick={() => void perform(`resume-${job.id}`, async () => { await client.setReportJobPaused(job.id, false); await reload() })}><Play size={12} />恢复</button>}{['failed', 'completed_partial'].includes(job.status) && <button onClick={() => void perform(`retry-${job.id}`, async () => { await client.retryReportJob(job.id, {}); await reload() })}><RefreshCw size={12} />失败节点重试</button>}{!['queued', 'running'].includes(job.status) && <button onClick={() => { if (window.confirm('完整重跑会生成新 revision，确认继续？')) void perform(`rerun-${job.id}`, async () => { await client.retryReportJob(job.id, { full_rerun: true, confirmed: true }); await reload() }) }}><RotateCcw size={12} />完整重跑</button>}</div></article>)}
+        {reportJobs.map((job) => <article key={job.id}><span className={`record-state is-${job.status}`}>{job.status}</span><div><strong>{String(job.request.start_date || job.request.as_of_date || '')} — {String(job.request.end_date || job.request.as_of_date || '')}</strong><small>{job.id} · 尝试 {job.attempts?.length || 0} 次</small><ReportJobProgressMeter job={job} />{job.error_summary && <p>{job.error_summary}</p>}</div><div className="record-actions">{ACTIVE_JOB_STATUSES.has(job.status) && <button onClick={() => void perform(`pause-${job.id}`, async () => { await client.setReportJobPaused(job.id, true); await reload() })}><Pause size={12} />暂停</button>}{job.status === 'paused' && <button onClick={() => void perform(`resume-${job.id}`, async () => { await client.setReportJobPaused(job.id, false); await reload() })}><Play size={12} />恢复</button>}{['failed', 'completed_partial'].includes(job.status) && <button onClick={() => void perform(`retry-${job.id}`, async () => { await client.retryReportJob(job.id, {}); await reload() })}><RefreshCw size={12} />失败节点重试</button>}{!ACTIVE_JOB_STATUSES.has(job.status) && <button onClick={() => { if (window.confirm('完整重跑会生成新 revision，确认继续？')) void perform(`rerun-${job.id}`, async () => { await client.retryReportJob(job.id, { full_rerun: true, confirmed: true }); await reload() }) }}><RotateCcw size={12} />完整重跑</button>}</div></article>)}
         {!reportJobs.length && <p className="strategy-inline-empty">暂无日报任务。</p>}
       </div>
     </section>
@@ -625,44 +630,35 @@ function VersionsPanel({ client, detail }: { client: CognitradeApiClient; detail
 }
 
 function AssignmentsPanel({ client, detail, context, reload, perform }: { client: CognitradeApiClient; detail: StrategyRecord; context: StrategyWorkspaceContext | null; reload: () => Promise<void>; perform: (key: string, action: () => Promise<void>) => Promise<void> }) {
-  const [fundCode, setFundCode] = useState(context?.fundCode || new URLSearchParams(window.location.search).get('fund_code') || '')
+  const [fundCode, setFundCode] = useState(context?.fundCode || '')
   const [fundName, setFundName] = useState(context?.fundName || '')
-  const [mode, setMode] = useState<BacktestMode>(context?.mode || (new URLSearchParams(window.location.search).get('mode') as BacktestMode) || 'fund_only')
+  const [mode, setMode] = useState<BacktestMode>(context?.mode || 'fund_only')
   const create = (event: FormEvent) => { event.preventDefault(); void perform('assignment', async () => { await client.createStrategyAssignment({ strategy_id: detail.id, fund_code: fundCode, fund_name: fundName, mode }); setFundCode(''); setFundName(''); await reload() }) }
   if (!detail.latest_version || detail.is_system_template) return <EmptyPanel icon={BadgeCheck} title="发布后才能绑定基金" text={detail.is_system_template ? '请先复制系统模板并发布个人版本。' : 'Assignment 固定到已发布版本，草稿不能直接运行日报。'} />
   return <div className="strategy-panel-stack"><section className="strategy-subpanel"><PanelTitle kicker="ASSIGNMENT" title="创建基金绑定" description="默认绑定基金本体；披露持仓组合只用于高级穿透研究。绑定不允许覆盖权重、阈值、MA 或费率。" /><form className="strategy-inline-form" onSubmit={create}><Field label="基金代码"><input value={fundCode} onChange={(event) => setFundCode(event.target.value)} required /></Field><Field label="基金名称"><input value={fundName} onChange={(event) => setFundName(event.target.value)} /></Field><Field label="回测模式"><AppSelect value={mode} onChange={(event) => setMode(event.target.value as BacktestMode)}><option value="fund_only">基金本体（推荐）</option><option value="holdings_portfolio">披露持仓组合（高级）</option></AppSelect></Field><button className="primary-button"><Plus size={13} />创建绑定</button></form></section><section className="strategy-subpanel"><PanelTitle kicker="ACTIVE TARGETS" title="已绑定基金" description="暂停不会删除历史日报和信号；已有信号的绑定删除时只会禁用。" /><div className="strategy-record-list">{detail.assignments?.map((row) => { const inactive = row.paused || !row.enabled; return <article key={row.id}><span className={`record-state ${inactive ? 'is-paused' : 'is-completed'}`}>{row.paused ? 'paused' : row.enabled ? 'active' : 'disabled'}</span><div><strong>{row.fund_name || row.fund_code}</strong><small>{row.fund_code} · {modeLabel(row.mode)} · {row.active_version_id}</small><p>下次生效 {row.effective_from}{row.pending_version_id ? ` · 待切换 ${row.pending_version_id}` : ''}</p></div><div className="record-actions"><button onClick={() => void perform(`toggle-${row.id}`, async () => { if (inactive) await client.updateStrategyAssignment(row.id, { enabled: true, paused: false }); else await client.setStrategyAssignmentPaused(row.id, true); await reload() })}>{inactive ? <Play size={12} /> : <Pause size={12} />}{inactive ? '恢复' : '暂停'}</button><button onClick={() => { if (window.confirm('确认删除或禁用该绑定？')) void perform(`delete-${row.id}`, async () => { await client.deleteStrategyAssignment(row.id); await reload() }) }}><Trash2 size={12} />删除</button></div></article> })}{!detail.assignments?.length && <p className="strategy-inline-empty">尚未绑定基金。</p>}</div></section></div>
 }
 
-function compactBacktestRuns(runs: StrategyBacktest[]): Array<{ run: StrategyBacktest; count: number }> {
-  const groups = new Map<string, { run: StrategyBacktest; count: number }>()
-  const ordered = [...runs].sort((left, right) => right.created_at.localeCompare(left.created_at))
-  for (const run of ordered) {
-    const key = run.input_snapshot_hash || [
-      run.strategy_version_id,
-      run.fund_code,
-      run.mode,
-      run.start_date,
-      run.end_date,
-      run.initial_cash,
-    ].join('|')
-    const current = groups.get(key)
-    if (current) current.count += 1
-    else groups.set(key, { run, count: 1 })
-  }
-  return [...groups.values()]
+type BacktestsPanelProps = {
+  client: CognitradeApiClient
+  detail: StrategyRecord
+  context: StrategyWorkspaceContext | null
+  reportJobs: ReportJob[]
+  backtests: StrategyBacktest[]
+  busy: string
+  reload: () => Promise<void>
+  perform: (key: string, action: () => Promise<void>) => Promise<void>
 }
 
-function BacktestsPanel({ client, detail, context, reportJobs, backtests, reload, perform }: { client: CognitradeApiClient; detail: StrategyRecord; context: StrategyWorkspaceContext | null; reportJobs: ReportJob[]; backtests: StrategyBacktest[]; reload: () => Promise<void>; perform: (key: string, action: () => Promise<void>) => Promise<void> }) {
-  const query = new URLSearchParams(window.location.search)
+function BacktestsPanel({ client, detail, context, reportJobs, backtests, busy, reload, perform }: BacktestsPanelProps) {
   const preferredAssignment = detail.assignments?.find((row) => row.mode === 'fund_only') || detail.assignments?.[0]
-  const [versionId, setVersionId] = useState(context?.strategyVersionId || query.get('strategy_version_id') || detail.latest_version?.id || '')
-  const [fundCode, setFundCode] = useState(context?.fundCode || query.get('fund_code') || preferredAssignment?.fund_code || '')
-  const [mode, setMode] = useState<BacktestMode>(context?.mode || (query.get('mode') as BacktestMode) || preferredAssignment?.mode || 'fund_only')
-  const [startDate, setStartDate] = useState(today(-365))
+  const [versionId, setVersionId] = useState(context?.strategyVersionId || detail.latest_version?.id || '')
+  const [fundCode, setFundCode] = useState(context?.fundCode || preferredAssignment?.fund_code || '')
+  const [mode, setMode] = useState<BacktestMode>(context?.mode || preferredAssignment?.mode || 'fund_only')
+  const [startDate, setStartDate] = useState(today(-30))
   const [endDate, setEndDate] = useState(today())
   const [initialCash, setInitialCash] = useState(1_000_000)
-  const [reportPolicy, setReportPolicy] = useState<'existing_only' | 'require_complete'>('existing_only')
-  const [benchmarkChoice, setBenchmarkChoice] = useState<'default' | 'hs300' | 'none'>('default')
+  const [reportPolicy, setReportPolicy] = useState<BacktestReportPolicy>('existing_only')
+  const [benchmarkChoice, setBenchmarkChoice] = useState<BacktestBenchmarkChoice>('default')
   const [preflight, setPreflight] = useState<BacktestPreflight | null>(null)
   const [estimate, setEstimate] = useState<Record<string, unknown> | null>(null)
   const [submittedBackfill, setSubmittedBackfill] = useState<ReportJob | null>(null)
@@ -670,7 +666,13 @@ function BacktestsPanel({ client, detail, context, reportJobs, backtests, reload
   const [resultLoadingId, setResultLoadingId] = useState('')
   const [resultError, setResultError] = useState('')
   const [showAllRuns, setShowAllRuns] = useState(false)
-  const request = { strategy_version_id: versionId, fund_code: fundCode, mode, start_date: startDate, end_date: endDate }
+  const request = {
+    strategy_version_id: versionId,
+    fund_code: fundCode,
+    mode,
+    start_date: startDate,
+    end_date: endDate,
+  }
   const assignmentOptions = detail.assignments?.filter((row) => row.mode === mode) || []
   const selectedVersion = detail.versions?.find((row) => row.id === versionId) || null
   const latestVersion = detail.latest_version || detail.versions?.[0] || null
@@ -683,10 +685,12 @@ function BacktestsPanel({ client, detail, context, reportJobs, backtests, reload
     && String(job.request.end_date || '') === endDate
   )) || null
   const backfillJob = persistedBackfill || submittedBackfill
-  const backfillPending = Boolean(backfillJob && ['queued', 'running', 'paused'].includes(backfillJob.status))
-  const scopedBacktests = backtests.filter((run) => (!fundCode || run.fund_code === fundCode) && run.mode === mode)
+  const backfillPending = Boolean(backfillJob && BACKFILL_PENDING_STATUSES.has(backfillJob.status))
+  const scopedBacktests = backtests
+    .filter((run) => (!fundCode || run.fund_code === fundCode) && run.mode === mode)
+    .sort((left, right) => right.created_at.localeCompare(left.created_at))
   const compactedBacktests = compactBacktestRuns(scopedBacktests)
-  const compactVisibleBacktests = compactedBacktests.slice(0, 12).map((group) => group.run)
+  const compactVisibleBacktests = compactedBacktests.slice(0, DEFAULT_BACKTEST_HISTORY_LIMIT).map((group) => group.run)
   const visibleBacktests = showAllRuns ? scopedBacktests : compactVisibleBacktests
   const duplicateCountById = new Map(compactedBacktests.map((group) => [group.run.id, group.count]))
   const hiddenRunCount = Math.max(0, scopedBacktests.length - compactVisibleBacktests.length)
@@ -696,9 +700,47 @@ function BacktestsPanel({ client, detail, context, reportJobs, backtests, reload
     && preflight.missing_report_dates.length === 0
     && preflight.signal_count === 0,
   )
-  const resetPreflight = () => { setPreflight(null); setEstimate(null); setSubmittedBackfill(null) }
-  const runPreflight = () => perform('preflight', async () => { setPreflight(await client.preflightStrategyBacktest(request)); setEstimate(null) })
-  const estimateMissing = () => perform('estimate-missing', async () => { if (!assignment) throw new Error('没有匹配的基金绑定。'); setEstimate(await client.estimateReportBackfill({ assignment_id: assignment.id, strategy_version_id: versionId, start_date: startDate, end_date: endDate })) })
+  const resetPreflight = () => {
+    setPreflight(null)
+    setEstimate(null)
+    setSubmittedBackfill(null)
+  }
+  const selectVersion = (nextVersionId: string) => {
+    setVersionId(nextVersionId)
+    resetPreflight()
+  }
+  const selectFund = (nextFundCode: string) => {
+    setFundCode(nextFundCode)
+    resetPreflight()
+    setShowAllRuns(false)
+  }
+  const selectMode = (nextMode: BacktestMode) => {
+    const assignments = detail.assignments || []
+    const matching = assignments.find((row) => row.mode === nextMode && row.fund_code === fundCode)
+      || assignments.find((row) => row.mode === nextMode)
+    setMode(nextMode)
+    setFundCode(matching?.fund_code || '')
+    resetPreflight()
+    setShowAllRuns(false)
+  }
+  const selectDate = (kind: 'start' | 'end', value: string) => {
+    if (kind === 'start') setStartDate(value)
+    else setEndDate(value)
+    resetPreflight()
+  }
+  const runPreflight = () => perform('preflight', async () => {
+    setPreflight(await client.preflightStrategyBacktest(request))
+    setEstimate(null)
+  })
+  const estimateMissing = () => perform('estimate-missing', async () => {
+    if (!assignment) throw new Error('没有匹配的基金绑定。')
+    setEstimate(await client.estimateReportBackfill({
+      assignment_id: assignment.id,
+      strategy_version_id: versionId,
+      start_date: startDate,
+      end_date: endDate,
+    }))
+  })
   const backfillMissing = () => perform('backfill-missing', async () => {
     if (!assignment) throw new Error('没有匹配的基金绑定。')
     const job = await client.createReportJob({ assignment_id: assignment.id, strategy_version_id: versionId, start_date: startDate, end_date: endDate }, true)
@@ -706,7 +748,26 @@ function BacktestsPanel({ client, detail, context, reportJobs, backtests, reload
     setEstimate(null)
     await reload()
   })
-  const create = () => perform('backtest', async () => { await client.createStrategyBacktest({ ...request, initial_cash: initialCash, benchmark: { fund_buy_and_hold: mode === 'fund_only', initial_disclosed_weights_static: mode === 'holdings_portfolio', hs300: benchmarkChoice === 'hs300' || (benchmarkChoice === 'default' && mode === 'holdings_portfolio'), category_index: benchmarkChoice === 'default' && mode === 'fund_only' }, report_policy: reportPolicy }); setPreflight(null); await reload() })
+  const launchBacktest = () => perform('backtest', async () => {
+    const checked = await client.preflightStrategyBacktest(request)
+    setPreflight(checked)
+    setEstimate(null)
+    const reportsRequiredButMissing = reportPolicy === 'require_complete' && checked.missing_report_dates.length > 0
+    if (!checked.signal_count || reportsRequiredButMissing) return
+    await client.createStrategyBacktest({
+      ...request,
+      initial_cash: initialCash,
+      benchmark: {
+        fund_buy_and_hold: mode === 'fund_only',
+        initial_disclosed_weights_static: mode === 'holdings_portfolio',
+        hs300: benchmarkChoice === 'hs300' || (benchmarkChoice === 'default' && mode === 'holdings_portfolio'),
+        category_index: benchmarkChoice === 'default' && mode === 'fund_only',
+      },
+      report_policy: reportPolicy,
+    })
+    setPreflight(null)
+    await reload()
+  })
   const openResult = async (run: StrategyBacktest) => {
     if (selectedBacktest?.id === run.id) {
       setSelectedBacktest(null)
@@ -727,34 +788,52 @@ function BacktestsPanel({ client, detail, context, reportJobs, backtests, reload
     <section className="strategy-subpanel">
       <PanelTitle kicker="STRICT BACKTEST CONTRACT" title="基金回测预检" description="默认回测基金本体净值；披露持仓组合仅作为高级研究模拟。先检查日报与信号覆盖。" />
       <div className="strategy-form-grid is-four">
-        <Field label="策略版本"><AppSelect value={versionId} onChange={(event) => { setVersionId(event.target.value); resetPreflight() }}>{detail.versions.map((row) => <option key={row.id} value={row.id}>v{row.version_number}{row.id === latestVersion?.id ? ' · 最新' : ''} · {row.content_hash.slice(0, 8)}</option>)}</AppSelect></Field>
-        <Field label="目标基金"><AppSelect value={fundCode} onChange={(event) => { setFundCode(event.target.value); resetPreflight(); setShowAllRuns(false) }}><option value="">请选择绑定基金</option>{assignmentOptions.map((row) => <option key={row.id} value={row.fund_code}>{row.fund_name || row.fund_code}</option>)}</AppSelect></Field>
-        <Field label="模式"><AppSelect value={mode} onChange={(event) => { const nextMode = event.target.value as BacktestMode; const matching = detail.assignments?.find((row) => row.mode === nextMode && row.fund_code === fundCode) || detail.assignments?.find((row) => row.mode === nextMode); setMode(nextMode); setFundCode(matching?.fund_code || ''); resetPreflight(); setShowAllRuns(false) }}><option value="fund_only">基金本体（推荐）</option><option value="holdings_portfolio">披露持仓组合（高级）</option></AppSelect></Field>
+        <Field label="策略版本"><AppSelect value={versionId} onChange={(event) => selectVersion(event.target.value)}>{detail.versions.map((row) => <option key={row.id} value={row.id}>v{row.version_number}{row.id === latestVersion?.id ? ' · 最新' : ''} · {row.content_hash.slice(0, 8)}</option>)}</AppSelect></Field>
+        <Field label="目标基金"><AppSelect value={fundCode} onChange={(event) => selectFund(event.target.value)}><option value="">请选择绑定基金</option>{assignmentOptions.map((row) => <option key={row.id} value={row.fund_code}>{row.fund_name || row.fund_code}</option>)}</AppSelect></Field>
         <NumberField label="初始资金" value={initialCash} min={10000} max={1_000_000_000} onChange={setInitialCash} />
-        <Field label="开始日期"><input type="date" value={startDate} onChange={(event) => { setStartDate(event.target.value); resetPreflight() }} /></Field>
-        <Field label="结束日期"><input type="date" value={endDate} onChange={(event) => { setEndDate(event.target.value); resetPreflight() }} /></Field>
-        <Field label="报告获取策略"><AppSelect value={reportPolicy} onChange={(event) => setReportPolicy(event.target.value as 'existing_only' | 'require_complete')}><option value="existing_only">使用现有日报（允许 BLOCKED/沿用）</option><option value="require_complete">要求日报完整</option></AppSelect></Field>
-        <Field label="附加基准"><AppSelect value={benchmarkChoice} onChange={(event) => setBenchmarkChoice(event.target.value as 'default' | 'hs300' | 'none')}><option value="default">模式默认（类别指数 / 沪深300）</option><option value="hs300">沪深300</option><option value="none">仅基金/期初持仓基准</option></AppSelect></Field>
+        <Field label="开始日期"><input type="date" value={startDate} onChange={(event) => selectDate('start', event.target.value)} /></Field>
+        <Field label="结束日期"><input type="date" value={endDate} onChange={(event) => selectDate('end', event.target.value)} /></Field>
       </div>
+      <details className="backtest-advanced-config">
+        <summary>高级配置 · {modeLabel(mode)} / 日报完整性 / 比较基准</summary>
+        <div className="strategy-form-grid">
+          <Field label="回测模式"><AppSelect value={mode} onChange={(event) => selectMode(event.target.value as BacktestMode)}><option value="fund_only">基金本体（推荐）</option><option value="holdings_portfolio">披露持仓组合（高级）</option></AppSelect></Field>
+          <Field label="报告获取策略"><AppSelect value={reportPolicy} onChange={(event) => setReportPolicy(event.target.value as BacktestReportPolicy)}><option value="existing_only">使用现有日报（允许 BLOCKED/沿用）</option><option value="require_complete">要求日报完整</option></AppSelect></Field>
+          <Field label="附加基准"><AppSelect value={benchmarkChoice} onChange={(event) => setBenchmarkChoice(event.target.value as BacktestBenchmarkChoice)}><option value="default">模式默认（类别指数 / 沪深300）</option><option value="hs300">沪深300</option><option value="none">仅基金/期初持仓基准</option></AppSelect></Field>
+        </div>
+      </details>
       <div className={`backtest-version-selection ${selectedVersion?.id === latestVersion?.id ? 'is-current' : 'is-stale'}`}>
         <div><strong>本次回测固定使用 {selectedVersion ? `v${selectedVersion.version_number}` : '未选择版本'}</strong><small>{selectedVersion?.id || '请选择一个不可变版本'}{selectedVersion ? ` · ${selectedVersion.content_hash.slice(0, 12)}` : ''}</small></div>
-        {latestVersion && selectedVersion?.id !== latestVersion.id && <button className="secondary-button" onClick={() => { setVersionId(latestVersion.id); resetPreflight() }}><RefreshCw size={13} />切换到最新版 v{latestVersion.version_number}</button>}
+        {latestVersion && selectedVersion?.id !== latestVersion.id && <button className="secondary-button" onClick={() => selectVersion(latestVersion.id)}><RefreshCw size={13} />切换到最新版 v{latestVersion.version_number}</button>}
       </div>
-      <div className="strategy-action-row"><button className="secondary-button" onClick={runPreflight} disabled={!versionId || !fundCode}><ShieldCheck size={13} />执行预检</button><button className="primary-button" onClick={create} disabled={!preflight || !preflight.signal_count || (reportPolicy === 'require_complete' && Boolean(preflight.missing_report_dates.length))}><Play size={13} />启动回测</button></div>
-      {preflight && <div className={`backtest-preflight ${preflight.ready ? 'is-ready' : 'is-warning'}`}><strong>{preflight.signal_count} 个基金信号 · {preflight.available_report_count}/{preflight.trading_day_count} 个日报交易日</strong><p>当前预检版本：{selectedVersion ? `v${selectedVersion.version_number} · ` : ''}{preflight.strategy_content_hash}</p>{versionSignalsMissing && <><p>日报已经齐备，但所选版本尚未生成信号；系统将复用现有日报，不会重新运行持仓 UZI 分析。</p><div className="strategy-action-row"><button className="primary-button" disabled={backfillPending} onClick={backfillMissing}>{backfillJob?.status === 'paused' ? '信号生成已暂停' : backfillPending ? '新版本信号生成中' : `生成 ${selectedVersion ? `v${selectedVersion.version_number}` : '新版本'} 信号`}</button></div></>}{preflight.missing_report_dates.length > 0 && <><p>缺失 {preflight.missing_report_dates.length} 天：{preflight.missing_report_dates.slice(0, 12).join('、')}{preflight.missing_report_dates.length > 12 ? '…' : ''}</p><div className="strategy-action-row"><button className="secondary-button" onClick={estimateMissing} disabled={backfillPending}>估算补跑成本</button><button className="secondary-button" disabled={!estimate || backfillPending} onClick={backfillMissing}>{backfillJob?.status === 'paused' ? '补跑已暂停' : backfillPending ? '补跑进行中' : '确认补跑'}</button></div>{estimate && <pre className="strategy-json-summary">{JSON.stringify(estimate, null, 2)}</pre>}</>}</div>}
+      <div className="strategy-action-row">
+        <button className="primary-button" onClick={launchBacktest} disabled={Boolean(busy) || !versionId || !fundCode}><Play size={13} />检查并启动回测</button>
+      </div>
+      {preflight && (
+        <BacktestPreflightCard
+          preflight={preflight}
+          selectedVersion={selectedVersion}
+          signalsMissing={versionSignalsMissing}
+          backfillPending={backfillPending || Boolean(busy)}
+          backfillJob={backfillJob}
+          estimate={estimate}
+          onEstimate={estimateMissing}
+          onBackfill={backfillMissing}
+        />
+      )}
       {backfillJob && <BackfillProgress job={backfillJob} onPreflight={runPreflight} />}
     </section>
     <section className="strategy-subpanel">
-      <PanelTitle kicker="TRACEABLE RESULTS" title="基金回测记录" description={`仅显示当前基金与模式；默认合并相同输入并保留最近 12 组。共 ${scopedBacktests.length} 次原始运行。`} />
-      {hiddenRunCount > 0 && <div className="strategy-action-row"><button className="secondary-button" onClick={() => setShowAllRuns((value) => !value)}>{showAllRuns ? '收起重复与较早运行' : `展开全部运行（另 ${hiddenRunCount} 次）`}</button></div>}
+      <PanelTitle kicker="TRACEABLE RESULTS" title="基金回测记录" description={`基于策略最近 200 次原始运行，仅显示当前基金与模式；默认合并相同输入并保留最近 ${DEFAULT_BACKTEST_HISTORY_LIMIT} 组。当前筛选命中 ${scopedBacktests.length} 次。`} />
+      {hiddenRunCount > 0 && <div className="strategy-action-row"><button className="secondary-button" onClick={() => setShowAllRuns((value) => !value)}>{showAllRuns ? '收起原始运行' : `展开已加载的原始运行（另 ${hiddenRunCount} 次）`}</button></div>}
       <div className="strategy-record-list">
         {visibleBacktests.map((run) => <article key={run.id} className={selectedBacktest?.id === run.id ? 'is-selected' : ''}>
           <span className={`record-state is-${run.status}`}>{run.status}</span>
           <div><strong>{run.fund_name || run.fund_code} · {modeLabel(run.mode)}</strong><small>{run.start_date} — {run.end_date} · {run.strategy_content_hash.slice(0, 12)}{Number(duplicateCountById.get(run.id) || 1) > 1 ? ` · ${duplicateCountById.get(run.id)} 次相同输入` : ''}</small><p>{metricSummary(run.metrics)}{run.error_summary ? ` · ${run.error_summary}` : ''}</p></div>
           <div className="record-actions">
-            {run.status === 'completed' && <button aria-expanded={selectedBacktest?.id === run.id} aria-controls="backtest-result-panel" disabled={resultLoadingId === run.id} onClick={() => void openResult(run)}>{resultLoadingId === run.id ? <LoaderCircle className="is-spinning" size={12} /> : <BarChart3 size={12} />}{selectedBacktest?.id === run.id ? '收起图表' : '查看图表'}</button>}
-            {['failed', 'cancelled'].includes(run.status) && <button onClick={() => void perform(`retry-bt-${run.id}`, async () => { await client.retryStrategyBacktest(run.id); await reload() })}><RefreshCw size={12} />重试</button>}
-            {['queued', 'running'].includes(run.status) && <button onClick={() => void perform(`cancel-bt-${run.id}`, async () => { await client.cancelStrategyBacktest(run.id); await reload() })}><Pause size={12} />取消</button>}
+            {run.status === 'completed' && <button aria-expanded={selectedBacktest?.id === run.id} aria-controls="backtest-result-panel" disabled={Boolean(busy) || resultLoadingId === run.id} onClick={() => void openResult(run)}>{resultLoadingId === run.id ? <LoaderCircle className="is-spinning" size={12} /> : <BarChart3 size={12} />}{selectedBacktest?.id === run.id ? '收起图表' : '查看图表'}</button>}
+            {['failed', 'cancelled'].includes(run.status) && <button disabled={Boolean(busy)} onClick={() => void perform(`retry-bt-${run.id}`, async () => { await client.retryStrategyBacktest(run.id); await reload() })}><RefreshCw size={12} />重试</button>}
+            {ACTIVE_JOB_STATUSES.has(run.status) && <button disabled={Boolean(busy)} onClick={() => void perform(`cancel-bt-${run.id}`, async () => { await client.cancelStrategyBacktest(run.id); await reload() })}><Pause size={12} />取消</button>}
           </div>
         </article>)}
         {!visibleBacktests.length && <p className="strategy-inline-empty">当前基金与模式暂无回测。</p>}
@@ -765,142 +844,60 @@ function BacktestsPanel({ client, detail, context, reportJobs, backtests, reload
   </div>
 }
 
-type BacktestChartDatum = {
-  date: string
-  strategy?: number
-  fundBuyHold?: number
-  categoryIndex?: number
-  hs300?: number
-}
+type StrategyVersionView = NonNullable<StrategyRecord['versions']>[number]
 
-function BacktestResultPanel({ run, onClose }: { run: StrategyBacktest; onClose: () => void }) {
-  const result = run.result as StrategyBacktestResult
-  const metrics = { ...run.metrics, ...(result.metrics || {}) }
-  const chartData = backtestChartData(result, run.initial_cash)
-  const fundBenchmark = result.benchmarks?.fund_buy_and_hold
-  const benchmarkReturn = finiteNumber(fundBenchmark?.return_pct)
-  const strategyReturn = finiteNumber(metrics.total_return_pct) || 0
-  const excessReturn = benchmarkReturn === null ? null : strategyReturn - benchmarkReturn
-  const hasFundCurve = chartData.some((row) => row.fundBuyHold !== undefined)
-  const hasCategoryCurve = chartData.some((row) => row.categoryIndex !== undefined)
-  const hasHs300Curve = chartData.some((row) => row.hs300 !== undefined)
-  const benchmarkRows = Object.entries(result.benchmarks || {})
-  const trades = result.trades || []
-  const openStatusAssumptions = Array.isArray(result.execution_adapter?.open_status_assumptions)
-    ? result.execution_adapter.open_status_assumptions as Array<Record<string, unknown>>
-    : []
-  return <section id="backtest-result-panel" className="backtest-result-panel" aria-labelledby="backtest-result-title">
-    <header className="backtest-result-header">
-      <div><span className="section-kicker">BACKTEST RESULT</span><h4 id="backtest-result-title">{run.fund_name || run.fund_code} · {modeLabel(run.mode)}</h4><p>{run.start_date} — {run.end_date} · {run.id}</p></div>
-      <button className="secondary-button" onClick={onClose}><ChevronDown size={13} />收起</button>
-    </header>
-    <div className="backtest-result-metrics">
-      <BacktestMetric label="策略收益" value={formatSignedPercent(strategyReturn)} tone={strategyReturn > 0 ? 'positive' : strategyReturn < 0 ? 'negative' : 'neutral'} />
-      <BacktestMetric label="基金买入持有" value={benchmarkReturn === null ? '不可用' : formatSignedPercent(benchmarkReturn)} tone={benchmarkReturn !== null && benchmarkReturn > 0 ? 'positive' : benchmarkReturn !== null && benchmarkReturn < 0 ? 'negative' : 'neutral'} />
-      <BacktestMetric label="相对基金超额" value={excessReturn === null ? '—' : formatSignedPercent(excessReturn)} tone={excessReturn !== null && excessReturn > 0 ? 'positive' : excessReturn !== null && excessReturn < 0 ? 'negative' : 'neutral'} />
-      <BacktestMetric label="最大回撤" value={formatSignedPercent(Number(metrics.max_drawdown_pct || 0))} tone={Number(metrics.max_drawdown_pct || 0) < 0 ? 'negative' : 'neutral'} />
-      <BacktestMetric label="成交 / 换手" value={`${Number(metrics.trade_count || 0)} 笔 · ${Number(metrics.turnover_pct || 0).toFixed(2)}%`} />
-      <BacktestMetric label="期末权益" value={formatCurrency(Number(metrics.final_equity || run.initial_cash))} />
+function BacktestPreflightCard({
+  preflight,
+  selectedVersion,
+  signalsMissing,
+  backfillPending,
+  backfillJob,
+  estimate,
+  onEstimate,
+  onBackfill,
+}: {
+  preflight: BacktestPreflight
+  selectedVersion: StrategyVersionView | null
+  signalsMissing: boolean
+  backfillPending: boolean
+  backfillJob: ReportJob | null
+  estimate: Record<string, unknown> | null
+  onEstimate: () => Promise<void>
+  onBackfill: () => Promise<void>
+}) {
+  const missingDates = preflight.missing_report_dates
+  return (
+    <div className={`backtest-preflight ${preflight.ready ? 'is-ready' : 'is-warning'}`}>
+      <strong>{preflight.signal_count} 个基金信号 · {preflight.available_report_count}/{preflight.trading_day_count} 个日报交易日</strong>
+      <p>当前预检版本：{selectedVersion ? `v${selectedVersion.version_number} · ` : ''}{preflight.strategy_content_hash}</p>
+      {signalsMissing && (
+        <>
+          <p>日报已经齐备，但所选版本尚未生成信号；系统将复用现有日报，不会重新运行持仓 UZI 分析。</p>
+          <div className="strategy-action-row">
+            <button className="primary-button" disabled={backfillPending} onClick={onBackfill}>
+              {backfillJob?.status === 'paused'
+                ? '信号生成已暂停'
+                : backfillPending
+                  ? '新版本信号生成中'
+                  : `生成 ${selectedVersion ? `v${selectedVersion.version_number}` : '新版本'} 信号`}
+            </button>
+          </div>
+        </>
+      )}
+      {missingDates.length > 0 && (
+        <>
+          <p>缺失 {missingDates.length} 天：{missingDates.slice(0, 12).join('、')}{missingDates.length > 12 ? '…' : ''}</p>
+          <div className="strategy-action-row">
+            <button className="secondary-button" onClick={onEstimate} disabled={backfillPending}>估算补跑成本</button>
+            <button className="secondary-button" disabled={!estimate || backfillPending} onClick={onBackfill}>
+              {backfillJob?.status === 'paused' ? '补跑已暂停' : backfillPending ? '补跑进行中' : '确认补跑'}
+            </button>
+          </div>
+          {estimate && <pre className="strategy-json-summary">{JSON.stringify(estimate, null, 2)}</pre>}
+        </>
+      )}
     </div>
-    <div className="backtest-chart-card">
-      <header><div><strong>累计收益曲线</strong><small>全部序列以回测起点归一为 0%</small></div><span>{chartData.length} 个估值日</span></header>
-      {chartData.length ? <div className="backtest-chart" role="img" aria-label={`策略累计收益 ${formatSignedPercent(strategyReturn)}，基金买入持有 ${benchmarkReturn === null ? '不可用' : formatSignedPercent(benchmarkReturn)}`}>
-        <ResponsiveContainer width="100%" height="100%">
-          <RechartsLineChart data={chartData} margin={{ top: 12, right: 14, left: 0, bottom: 4 }} accessibilityLayer>
-            <CartesianGrid stroke="var(--border)" strokeDasharray="3 5" vertical={false} />
-            <XAxis dataKey="date" tickFormatter={(value) => String(value).slice(5)} tick={{ fill: 'var(--muted)', fontSize: 9 }} axisLine={{ stroke: 'var(--border)' }} tickLine={false} />
-            <YAxis tickFormatter={(value) => `${Number(value).toFixed(1)}%`} tick={{ fill: 'var(--muted)', fontSize: 9 }} axisLine={false} tickLine={false} width={46} />
-            <Tooltip formatter={(value) => `${Number(value).toFixed(3)}%`} labelFormatter={(value) => `估值日 ${value}`} contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border-strong)', borderRadius: 8, color: 'var(--text)', fontSize: 10 }} />
-            <Legend wrapperStyle={{ color: 'var(--text-soft)', fontSize: 9, paddingTop: 8 }} />
-            <Line type="monotone" dataKey="strategy" name="策略" stroke="var(--mint)" strokeWidth={2.4} dot={{ r: 2.5 }} activeDot={{ r: 4 }} connectNulls isAnimationActive={false} />
-            {hasFundCurve && <Line type="monotone" dataKey="fundBuyHold" name="基金买入持有" stroke="var(--gold)" strokeWidth={2} strokeDasharray="6 4" dot={{ r: 2 }} connectNulls isAnimationActive={false} />}
-            {hasCategoryCurve && <Line type="monotone" dataKey="categoryIndex" name="类别指数" stroke="var(--blue)" strokeWidth={1.7} dot={false} connectNulls isAnimationActive={false} />}
-            {hasHs300Curve && <Line type="monotone" dataKey="hs300" name="沪深300" stroke="var(--rose)" strokeWidth={1.7} dot={false} connectNulls isAnimationActive={false} />}
-          </RechartsLineChart>
-        </ResponsiveContainer>
-      </div> : <p className="strategy-inline-empty">结果中没有可绘制的权益曲线。</p>}
-      <details className="backtest-data-table"><summary>查看逐日数据</summary><div><table><thead><tr><th>日期</th><th>策略</th><th>基金基准</th><th>类别指数</th><th>沪深300</th></tr></thead><tbody>{chartData.map((row) => <tr key={row.date}><td>{row.date}</td><td>{formatChartValue(row.strategy)}</td><td>{formatChartValue(row.fundBuyHold)}</td><td>{formatChartValue(row.categoryIndex)}</td><td>{formatChartValue(row.hs300)}</td></tr>)}</tbody></table></div></details>
-    </div>
-    <div className="backtest-result-grid">
-      <section><h5>基准与数据质量</h5><div className="backtest-quality-list">{benchmarkRows.map(([key, benchmark]) => <div key={key}><strong>{benchmarkLabel(key)}</strong><span className={benchmark.status === 'available' ? 'is-available' : 'is-unavailable'}>{benchmark.status === 'available' ? `${formatSignedPercent(Number(benchmark.return_pct || 0))}` : `不可用 · ${benchmark.reason || '无有效序列'}`}</span></div>)}{!benchmarkRows.length && <p>未配置比较基准。</p>}</div><ul className="backtest-audit-notes"><li>{result.report_set_ids?.length || 0} 份日报进入本次计算</li><li>结果哈希：{run.result_content_hash || '未返回'}</li>{result.execution_adapter?.max_position_pct !== undefined && <li>基金建仓规则：仓位上限 {Number(result.execution_adapter.max_position_pct)}% · 单批 {Number(result.execution_adapter.entry_tranche_pct)}% · 最多 {Number(result.execution_adapter.max_entry_tranches)} 次 · 间隔 {Number(result.execution_adapter.minimum_entry_interval_days)} 个估值日</li>}{result.execution_adapter?.degraded_estimate === true && <li>场外基金费用与确认周期采用已发布策略版本中的兜底参数</li>}{String(result.execution_adapter?.open_status_validation || '') === 'order_date_and_side' && <li>申购/赎回开放状态仅在真实订单日按方向校验</li>}{openStatusAssumptions.length > 0 && <li>历史开放状态缺失，按开放估算 {openStatusAssumptions.length} 次：{openStatusAssumptions.map((row) => `${String(row.date || '—')} ${row.side === 'sell' ? '赎回' : '申购'}`).join('、')}</li>}</ul></section>
-      <section><h5>成交与信号血缘</h5>{trades.length ? <div className="backtest-trade-table"><table><thead><tr><th>确认日</th><th>方向</th><th>标的</th><th>成交额</th><th>费用</th><th>信号</th></tr></thead><tbody>{trades.map((trade, index) => <tr key={`${trade.date}-${trade.symbol || ''}-${index}`}><td>{trade.date}<small>{trade.order_date ? `下单 ${trade.order_date}` : ''}</small></td><td><span className={`trade-side is-${trade.side}`}>{trade.side === 'buy' ? '申购/买入' : '赎回/卖出'}</span>{trade.entry_tranche_index ? <small>第 {trade.entry_tranche_index}/{trade.entry_tranche_limit} 批</small> : null}</td><td>{trade.symbol || trade.instrument_id || '—'}</td><td>{formatCurrency(Number(trade.gross_value || 0))}</td><td>{formatCurrency(Number(trade.fees?.total || 0))}</td><td><code>{trade.signal_id || trade.signal_ids?.[0] || '—'}</code></td></tr>)}</tbody></table></div> : <div className="backtest-no-trades"><ShieldCheck size={18} /><div><strong>本次没有形成成交</strong><p>策略权益曲线仍然有效：它表示信号门禁下保持现金或既有仓位的实际结果。</p></div></div>}</section>
-    </div>
-  </section>
-}
-
-function BacktestMetric({ label, value, tone = 'neutral' }: { label: string; value: string; tone?: 'positive' | 'negative' | 'neutral' }) {
-  return <article className={`backtest-metric is-${tone}`}><span>{label}</span><strong>{value}</strong></article>
-}
-
-function backtestChartData(result: StrategyBacktestResult, initialCash: number): BacktestChartDatum[] {
-  const rows = new Map<string, BacktestChartDatum>()
-  const ensure = (dateValue: string) => {
-    const current = rows.get(dateValue) || { date: dateValue }
-    rows.set(dateValue, current)
-    return current
-  }
-  for (const row of result.equity_curve || []) {
-    const equity = finiteNumber(row.equity)
-    if (!row.date || equity === null || initialCash <= 0) continue
-    ensure(row.date).strategy = (equity / initialCash - 1) * 100
-  }
-  const benchmarkKeys: Array<[string, keyof Omit<BacktestChartDatum, 'date'>]> = [
-    ['fund_buy_and_hold', 'fundBuyHold'],
-    ['category_index', 'categoryIndex'],
-    ['hs300', 'hs300'],
-  ]
-  for (const [benchmarkKey, dataKey] of benchmarkKeys) {
-    for (const row of result.benchmarks?.[benchmarkKey]?.equity_curve || []) {
-      const value = finiteNumber(row.return_pct)
-      if (!row.date || value === null) continue
-      ensure(row.date)[dataKey] = value
-    }
-  }
-  return [...rows.values()].sort((left, right) => left.date.localeCompare(right.date))
-}
-
-function benchmarkLabel(key: string): string {
-  return ({ fund_buy_and_hold: '基金买入持有', category_index: '类别指数', hs300: '沪深300', initial_disclosed_weights_static: '期初披露持仓' } as Record<string, string>)[key] || key
-}
-
-function finiteNumber(value: unknown): number | null {
-  const number = Number(value)
-  return Number.isFinite(number) ? number : null
-}
-
-function formatSignedPercent(value: number): string { return `${value > 0 ? '+' : ''}${value.toFixed(2)}%` }
-function formatChartValue(value: number | undefined): string { return value === undefined ? '—' : formatSignedPercent(value) }
-function formatCurrency(value: number): string { return Number.isFinite(value) ? `¥${value.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}` : '—' }
-
-function BackfillProgress({ job, onPreflight }: { job: ReportJob; onPreflight: () => Promise<void> }) {
-  const { total, completed, failed, processed, percent, completeReportDays, partialReportDays, blockedReportDays } = reportJobProgress(job)
-  const terminal = ['completed', 'completed_partial', 'failed', 'cancelled'].includes(job.status)
-  return <div className={`backfill-progress is-${job.status}`}>
-    <header><div><strong>日报补跑 · {job.status.toUpperCase()}</strong><code>{job.id}</code></div><span>{processed}/{total} · {percent}%</span></header>
-    <div className="backfill-progress-track" role="progressbar" aria-label="日报补跑进度" aria-valuemin={0} aria-valuemax={total} aria-valuenow={processed}><span style={{ width: `${percent}%` }} /></div>
-    <p>已结算 {completed} · 完整日报 {completeReportDays} · 部分日报 {partialReportDays} · 阻断日报 {blockedReportDays} · 执行异常 {failed}{job.progress.current_date ? ` · 当前 ${String(job.progress.current_date)}` : ''}</p>
-    {job.error_summary && <p className="strategy-inline-error">{job.error_summary}</p>}
-    {terminal && <button className="secondary-button" onClick={() => void onPreflight()}><ShieldCheck size={13} />重新执行预检</button>}
-  </div>
-}
-
-function ReportJobProgressMeter({ job }: { job: ReportJob }) {
-  const { total, completed, failed, processed, percent, completeReportDays, partialReportDays, blockedReportDays } = reportJobProgress(job)
-  return <div className="report-job-progress">
-    <div><span>{processed}/{total} · {percent}%</span><small>已结算 {completed} · 完整 {completeReportDays} · 部分 {partialReportDays} · 阻断 {blockedReportDays} · 异常 {failed}{job.progress.current_date ? ` · 当前 ${String(job.progress.current_date)}` : ''}</small></div>
-    <div className="backfill-progress-track" role="progressbar" aria-label={`日报任务进度 ${job.id}`} aria-valuemin={0} aria-valuemax={total} aria-valuenow={processed}><span style={{ width: `${percent}%` }} /></div>
-  </div>
-}
-
-function reportJobProgress(job: ReportJob) {
-  const total = Math.max(0, Number(job.progress.total) || 0)
-  const completed = Math.max(0, Number(job.progress.completed) || 0)
-  const failed = Math.max(0, Number(job.progress.failed) || 0)
-  const processed = Math.min(total, completed + failed)
-  const completeReportDays = Math.max(0, Number(job.progress.complete_report_days) || 0)
-  const partialReportDays = Math.max(0, Number(job.progress.partial_report_days) || 0)
-  const blockedReportDays = Math.max(0, Number(job.progress.blocked_report_days) || 0)
-  return { total, completed, failed, processed, completeReportDays, partialReportDays, blockedReportDays, percent: total ? Math.round((processed / total) * 100) : 0 }
+  )
 }
 
 function GovernancePanel({ client, detail, backtests, verifications, events, bindings, methodologyDashboard, reload, perform }: { client: CognitradeApiClient; detail: StrategyRecord; backtests: StrategyBacktest[]; verifications: StrategyVerification[]; events: StrategyEvent[]; bindings: PaperStrategyBinding[]; methodologyDashboard: ReturnType<typeof useCognitrade>['methodologyDashboard']; reload: () => Promise<void>; perform: (key: string, action: () => Promise<void>) => Promise<void> }) {
@@ -943,16 +940,61 @@ function SignalTable({ signals }: { signals: TradeSignal[] }) {
   return <div className="strategy-signal-table"><table><thead><tr><th>层级/标的</th><th>状态</th><th>分数区间</th><th>coverage</th><th>confidence</th><th>来源</th></tr></thead><tbody>{signals.map((row) => <tr key={row.id || `${row.kind}-${row.subject_code}`}><td><strong>{row.kind === 'fund' ? '基金' : '个股'} · {row.subject_code}</strong><small>{row.as_of_date}</small></td><td><span className={`signal-state is-${row.state.toLowerCase()}`}>{row.state}</span></td><td>{formatScore(row.score_lower_bound)}–{formatScore(row.score_upper_bound)}</td><td>{formatPercent(row.coverage)}</td><td>{formatPercent(row.confidence)}</td><td><code>{row.source_report_set_id}</code></td></tr>)}{!signals.length && <tr><td colSpan={6}>选择真实日报后预演；这里不会生成演示信号。</td></tr>}</tbody></table></div>
 }
 
-function RuleSection({ index, title, description, children }: { index: string; title: string; description: string; children: React.ReactNode }) { return <section className="strategy-rule-section"><header><span>{index}</span><div><h3>{title}</h3><p>{description}</p></div></header>{children}</section> }
-function PanelTitle({ kicker, title, description }: { kicker: string; title: string; description: string }) { return <header className="strategy-panel-title"><div><span className="section-kicker">{kicker}</span><h3>{title}</h3><p>{description}</p></div></header> }
-function Field({ label, wide, children }: { label: string; wide?: boolean; children: React.ReactNode }) { return <label className={`strategy-field ${wide ? 'is-wide' : ''}`}><span>{label}</span>{children}</label> }
-function NumberField({ label, value, min, max, step = 1, disabled = false, onChange }: { label: string; value: number; min: number; max: number; step?: number | 'any'; disabled?: boolean; onChange: (value: number) => void }) { return <Field label={label}><input type="number" value={value} min={min} max={max} step={step} disabled={disabled} onChange={(event) => onChange(Number(event.target.value))} /></Field> }
-function PercentField({ label, value, disabled, onChange }: { label: string; value: number; disabled: boolean; onChange: (value: number) => void }) { return <Field label={label}><div className="strategy-percent-input"><input type="number" min="0" max="100" step="1" value={Number((value * 100).toFixed(4))} disabled={disabled} onChange={(event) => onChange(Number(event.target.value) / 100)} /><span>%</span></div></Field> }
-function CheckField({ label, checked, disabled = false, onChange = () => undefined }: { label: string; checked: boolean; disabled?: boolean; onChange?: (value: boolean) => void }) { return <label className="strategy-check-field"><input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} /><span><i><Check size={10} /></i>{label}</span></label> }
-function FactorGroup({ title, weights, disabled, onChange }: { title: string; weights: Record<string, number>; disabled: boolean; onChange: (key: string, value: number) => void }) { const total = Object.values(weights).reduce((sum, value) => sum + value, 0); return <section className="strategy-factor-group"><header><strong>{title}</strong><span className={Math.abs(total - 1) < .0001 ? 'is-valid' : 'is-invalid'}>{(total * 100).toFixed(0)}%</span></header>{Object.entries(weights).map(([key, value]) => <label key={key}><code>{factorLabel(key)}</code><div className="strategy-percent-input"><input type="number" min="0" max="100" value={Number((value * 100).toFixed(4))} disabled={disabled} onChange={(event) => onChange(key, Number(event.target.value) / 100)} /><span>%</span></div></label>)}</section> }
-function EmptyPanel({ icon: Icon, title, text }: { icon: LucideIcon; title: string; text: string }) { return <div className="strategy-empty-panel"><Icon size={24} /><strong>{title}</strong><p>{text}</p></div> }
+function RuleSection({ index, title, description, children }: { index: string; title: string; description: string; children: React.ReactNode }) {
+  return (
+    <section className="strategy-rule-section">
+      <header><span>{index}</span><div><h3>{title}</h3><p>{description}</p></div></header>
+      {children}
+    </section>
+  )
+}
 
-function readUnsavedForm(strategyId: string, revision: number): { name: string; document: StrategyDocument } | null { try { const value = JSON.parse(localStorage.getItem(UNSAVED_FORM_KEY) || '{}') as { strategy_id?: string; server_revision?: number; unsaved_form?: { name: string; document: StrategyDocument } }; return value.strategy_id === strategyId && value.server_revision === revision && value.unsaved_form ? value.unsaved_form : null } catch { return null } }
+function PanelTitle({ kicker, title, description }: { kicker: string; title: string; description: string }) {
+  return <header className="strategy-panel-title"><div><span className="section-kicker">{kicker}</span><h3>{title}</h3><p>{description}</p></div></header>
+}
+
+function Field({ label, wide, children }: { label: string; wide?: boolean; children: React.ReactNode }) {
+  return <label className={`strategy-field ${wide ? 'is-wide' : ''}`}><span>{label}</span>{children}</label>
+}
+
+function NumberField({ label, value, min, max, step = 1, disabled = false, onChange }: { label: string; value: number; min: number; max: number; step?: number | 'any'; disabled?: boolean; onChange: (value: number) => void }) {
+  return <Field label={label}><input type="number" value={value} min={min} max={max} step={step} disabled={disabled} onChange={(event) => onChange(Number(event.target.value))} /></Field>
+}
+
+function PercentField({ label, value, disabled, onChange }: { label: string; value: number; disabled: boolean; onChange: (value: number) => void }) {
+  return <Field label={label}><div className="strategy-percent-input"><input type="number" min="0" max="100" step="1" value={Number((value * 100).toFixed(4))} disabled={disabled} onChange={(event) => onChange(Number(event.target.value) / 100)} /><span>%</span></div></Field>
+}
+
+function CheckField({ label, checked, disabled = false, onChange = () => undefined }: { label: string; checked: boolean; disabled?: boolean; onChange?: (value: boolean) => void }) {
+  return <label className="strategy-check-field"><input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} /><span><i><Check size={10} /></i>{label}</span></label>
+}
+
+function FactorGroup({ title, weights, disabled, onChange }: { title: string; weights: Record<string, number>; disabled: boolean; onChange: (key: string, value: number) => void }) {
+  const total = Object.values(weights).reduce((sum, value) => sum + value, 0)
+  return <section className="strategy-factor-group"><header><strong>{title}</strong><span className={Math.abs(total - 1) < .0001 ? 'is-valid' : 'is-invalid'}>{(total * 100).toFixed(0)}%</span></header>{Object.entries(weights).map(([key, value]) => <label key={key}><code>{factorLabel(key)}</code><div className="strategy-percent-input"><input type="number" min="0" max="100" value={Number((value * 100).toFixed(4))} disabled={disabled} onChange={(event) => onChange(key, Number(event.target.value) / 100)} /><span>%</span></div></label>)}</section>
+}
+
+function EmptyPanel({ icon: Icon, title, text }: { icon: LucideIcon; title: string; text: string }) {
+  return <div className="strategy-empty-panel"><Icon size={24} /><strong>{title}</strong><p>{text}</p></div>
+}
+
+type CachedStrategyDraft = {
+  strategy_id?: string
+  server_revision?: number
+  unsaved_form?: { name: string; document: StrategyDocument }
+}
+
+function readUnsavedForm(strategyId: string, revision: number): CachedStrategyDraft['unsaved_form'] | null {
+  try {
+    const cached = JSON.parse(localStorage.getItem(UNSAVED_FORM_KEY) || '{}') as CachedStrategyDraft
+    return cached.strategy_id === strategyId && cached.server_revision === revision && cached.unsaved_form
+      ? cached.unsaved_form
+      : null
+  } catch {
+    return null
+  }
+}
+
 function readWorkspaceContext(): StrategyWorkspaceContext {
   const query = new URLSearchParams(window.location.search)
   const tabValue = query.get('tab') || ''
@@ -972,16 +1014,127 @@ function readWorkspaceContext(): StrategyWorkspaceContext {
     holdingSymbol: query.get('holding_symbol') || undefined,
   }
 }
-function validateDocument(document: StrategyDocument, name: string): string { if (!name.trim()) return '策略名称不能为空。'; if (Math.abs(Object.values(document.fund_composite).reduce((sum, value) => sum + value, 0) - 1) > .0001) return '复合模型三组权重之和必须等于 100%。'; for (const [group, weights] of Object.entries(document.factor_weights)) if (Math.abs(Object.values(weights).reduce((sum, value) => sum + value, 0) - 1) > .0001) return `${group} 因子权重之和必须等于 100%。`; if (document.signal_thresholds.watch >= document.signal_thresholds.buy) return '观察阈值必须低于买入阈值。'; if (document.quality_gates.minimum_coverage >= document.quality_gates.normal_coverage) return '最低 coverage 必须低于正常 coverage。'; if (document.execution.fast_period >= document.execution.slow_period) return '快均线周期必须小于慢均线周期。'; const otc = document.asset_execution.otc_fund; if (Number(otc.max_position_pct ?? 100) <= 0 || Number(otc.max_position_pct ?? 100) > 100) return '基金最大仓位必须在 0–100% 之间。'; if (Number(otc.entry_tranche_pct ?? 100) <= 0 || Number(otc.entry_tranche_pct ?? 100) > 100) return '单次建仓比例必须在 0–100% 之间。'; if (!Number.isInteger(Number(otc.max_entry_tranches ?? 1)) || Number(otc.max_entry_tranches ?? 1) < 1) return '最大建仓次数必须是正整数。'; if (!Number.isInteger(Number(otc.minimum_entry_interval_days ?? 0)) || Number(otc.minimum_entry_interval_days ?? 0) < 0) return '建仓间隔估值日必须是非负整数。'; return '' }
-function filterLabel(value: StrategyFilter): string { return ({ all: '全部', template: '模板', draft: '草稿', published: '已发布', archived: '已归档' })[value] }
-function lifecycleLabel(value: string): string { return ({ draft: '草稿', published: '已发布', archived: '已归档' } as Record<string, string>)[value] || value }
-function governanceLabel(value: string): string { return ({ published: 'Published', verified: 'Verified', promoted: 'Promoted' } as Record<string, string>)[value] || value }
-function modeLabel(value: BacktestMode): string { return value === 'fund_only' ? '基金本体' : '持仓组合' }
-function factorLabel(value: string): string { return ({ year_1_return: '近一年收益', since_inception_annualized: '成立以来年化', benchmark_excess_year_1: '近一年超额', max_drawdown: '最大回撤', volatility: '波动率', fee: '费率', return_consistency: '收益一致性', uzi_overall_score: 'UZI 总评分', count_coverage: '数量覆盖', weight_coverage: '权重覆盖', disclosure_freshness: '披露新鲜度', concentration_risk: '集中风险', lookthrough_completeness: '穿透完整度', unsupported_weight: '不支持权重' } as Record<string, string>)[value] || value }
-function eventLabel(value: string): string { return ({ created: '创建策略', draft_saved: '保存草稿', published: '发布版本', assignment_created: '创建绑定', assignment_updated: '更新绑定', verification_created: '创建验证', verified: '人工确认 Verified', promoted: '晋级 Promoted', archived: '归档策略', restored: '恢复策略' } as Record<string, string>)[value] || value }
-function formatDate(value: string): string { const parsed = new Date(value); return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString('zh-CN', { hour12: false }) }
-function formatPercent(value: unknown): string { const number = Number(value); return Number.isFinite(number) ? `${(number * 100).toFixed(1)}%` : '—' }
-function formatScore(value: unknown): string { const number = Number(value); return Number.isFinite(number) ? number.toFixed(1) : '—' }
-function metricSummary(metrics: Record<string, number>): string { if (!Object.keys(metrics || {}).length) return '等待结果'; return `收益 ${Number(metrics.total_return_pct || 0).toFixed(2)}% · 回撤 ${Number(metrics.max_drawdown_pct || 0).toFixed(2)}% · Sharpe ${Number(metrics.sharpe || 0).toFixed(2)}` }
-function today(offsetDays = 0): string { const value = new Date(); value.setDate(value.getDate() + offsetDays); return value.toISOString().slice(0, 10) }
-function errorMessage(value: unknown): string { if (value instanceof CognitradeApiError) return `${value.message}${value.requestId ? `（request ${value.requestId}）` : ''}`; return value instanceof Error ? value.message : String(value || '未知错误') }
+
+function validateDocument(document: StrategyDocument, name: string): string {
+  if (!name.trim()) return '策略名称不能为空。'
+  if (!hasUnitWeight(document.fund_composite)) return '复合模型三组权重之和必须等于 100%。'
+  for (const [group, weights] of Object.entries(document.factor_weights)) {
+    if (!hasUnitWeight(weights)) return `${group} 因子权重之和必须等于 100%。`
+  }
+  if (document.signal_thresholds.watch >= document.signal_thresholds.buy) return '观察阈值必须低于买入阈值。'
+  if (document.quality_gates.minimum_coverage >= document.quality_gates.normal_coverage) return '最低 coverage 必须低于正常 coverage。'
+  if (document.execution.fast_period >= document.execution.slow_period) return '快均线周期必须小于慢均线周期。'
+
+  const otc = document.asset_execution.otc_fund
+  const maxPosition = Number(otc.max_position_pct ?? 100)
+  const entryTranche = Number(otc.entry_tranche_pct ?? 100)
+  const maxTranches = Number(otc.max_entry_tranches ?? 1)
+  const minimumInterval = Number(otc.minimum_entry_interval_days ?? 0)
+  if (maxPosition <= 0 || maxPosition > 100) return '基金最大仓位必须在 0–100% 之间。'
+  if (entryTranche <= 0 || entryTranche > 100) return '单次建仓比例必须在 0–100% 之间。'
+  if (!Number.isInteger(maxTranches) || maxTranches < 1) return '最大建仓次数必须是正整数。'
+  if (!Number.isInteger(minimumInterval) || minimumInterval < 0) return '建仓间隔估值日必须是非负整数。'
+  return ''
+}
+
+function hasUnitWeight(weights: Record<string, number>): boolean {
+  return !(Math.abs(Object.values(weights).reduce((sum, value) => sum + value, 0) - 1) > .0001)
+}
+
+const FILTER_LABELS: Record<StrategyFilter, string> = {
+  all: '全部',
+  template: '模板',
+  draft: '草稿',
+  published: '已发布',
+  archived: '已归档',
+}
+
+const LIFECYCLE_LABELS: Record<string, string> = {
+  draft: '草稿',
+  published: '已发布',
+  archived: '已归档',
+}
+
+const GOVERNANCE_LABELS: Record<string, string> = {
+  published: 'Published',
+  verified: 'Verified',
+  promoted: 'Promoted',
+}
+
+const FACTOR_LABELS: Record<string, string> = {
+  year_1_return: '近一年收益',
+  since_inception_annualized: '成立以来年化',
+  benchmark_excess_year_1: '近一年超额',
+  max_drawdown: '最大回撤',
+  volatility: '波动率',
+  fee: '费率',
+  return_consistency: '收益一致性',
+  uzi_overall_score: 'UZI 总评分',
+  count_coverage: '数量覆盖',
+  weight_coverage: '权重覆盖',
+  disclosure_freshness: '披露新鲜度',
+  concentration_risk: '集中风险',
+  lookthrough_completeness: '穿透完整度',
+  unsupported_weight: '不支持权重',
+}
+
+const EVENT_LABELS: Record<string, string> = {
+  created: '创建策略',
+  draft_saved: '保存草稿',
+  published: '发布版本',
+  assignment_created: '创建绑定',
+  assignment_updated: '更新绑定',
+  verification_created: '创建验证',
+  verified: '人工确认 Verified',
+  promoted: '晋级 Promoted',
+  archived: '归档策略',
+  restored: '恢复策略',
+}
+
+function filterLabel(value: StrategyFilter): string {
+  return FILTER_LABELS[value]
+}
+
+function lifecycleLabel(value: string): string {
+  return LIFECYCLE_LABELS[value] || value
+}
+
+function governanceLabel(value: string): string {
+  return GOVERNANCE_LABELS[value] || value
+}
+
+function factorLabel(value: string): string {
+  return FACTOR_LABELS[value] || value
+}
+
+function eventLabel(value: string): string {
+  return EVENT_LABELS[value] || value
+}
+
+function formatDate(value: string): string {
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString('zh-CN', { hour12: false })
+}
+
+function formatPercent(value: unknown): string {
+  const number = Number(value)
+  return Number.isFinite(number) ? `${(number * 100).toFixed(1)}%` : '—'
+}
+
+function formatScore(value: unknown): string {
+  const number = Number(value)
+  return Number.isFinite(number) ? number.toFixed(1) : '—'
+}
+
+function today(offsetDays = 0): string {
+  const value = new Date()
+  value.setDate(value.getDate() + offsetDays)
+  return value.toISOString().slice(0, 10)
+}
+
+function errorMessage(value: unknown): string {
+  if (value instanceof CognitradeApiError) {
+    return `${value.message}${value.requestId ? `（request ${value.requestId}）` : ''}`
+  }
+  return value instanceof Error ? value.message : String(value || '未知错误')
+}

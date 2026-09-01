@@ -851,10 +851,33 @@ class ExecutionGraphRunner:
             if not commit_intents:
                 raise GraphExecutionError("execution event history has no persisted snapshots")
             snapshot_event = commit_intents[-1]
-        replayed = ExecutionRunSnapshot.model_validate(snapshot_event["snapshot"])
+        replayed = self._snapshot_from_event(snapshot_event)
         if replayed.model_dump(mode="json") != snapshot.model_dump(mode="json"):
             raise GraphExecutionError("execution replay does not match the persisted snapshot")
         return replayed
+
+    def _snapshot_from_event(self, event: dict[str, Any]) -> ExecutionRunSnapshot:
+        """Load current reference receipts while retaining legacy event replay."""
+
+        legacy = event.get("snapshot")
+        if isinstance(legacy, dict):
+            return ExecutionRunSnapshot.model_validate(legacy)
+        relative_ref = str(event.get("snapshot_ref") or "").strip()
+        expected_hash = str(event.get("snapshot_hash") or "").strip().lower()
+        if not relative_ref or not expected_hash:
+            raise GraphExecutionError("execution snapshot receipt is incomplete")
+        candidate = (self.run_root / relative_ref).resolve()
+        try:
+            candidate.relative_to(self.run_root.resolve())
+        except ValueError as exc:
+            raise GraphExecutionError("execution snapshot receipt escapes the run root") from exc
+        payload = read_json(candidate)
+        if not isinstance(payload, dict):
+            raise GraphExecutionError(f"execution snapshot receipt is missing: {relative_ref}")
+        actual_hash = self._snapshot_hash(payload)
+        if actual_hash != expected_hash:
+            raise GraphExecutionError("execution snapshot receipt hash mismatch")
+        return ExecutionRunSnapshot.model_validate(payload)
 
     def _new_snapshot(
         self,
@@ -893,7 +916,13 @@ class ExecutionGraphRunner:
         if pending_approvals:
             self._set_run_status(snapshot, "waiting_approval")
             self._emit("graph_approval_required", approval_ids=pending_approvals)
-        self._emit("graph_snapshot_created", snapshot=snapshot.model_dump(mode="json"))
+        self._emit(
+            "graph_snapshot_created",
+            **self._write_snapshot_checkpoint(
+                snapshot.model_dump(mode="json"),
+                checkpoint_kind="created",
+            ),
+        )
         return snapshot
 
     def _validate_graph_governance(self, graph: ExecutionGraph, *, run_id: str) -> None:
@@ -1442,14 +1471,29 @@ class ExecutionGraphRunner:
         selected: list[ArtifactRecord] = []
         for port in node.consumes:
             if node.input_artifact_ids:
-                candidates = [
+                pinned_for_type = [
                     artifact
                     for artifact_id in node.input_artifact_ids
                     for artifact in [self.board.get(artifact_id)]
                     if artifact is not None
-                    and artifact.status == "active"
                     and artifact.artifact_type == port.artifact_type
                 ]
+                if pinned_for_type:
+                    # A same-type pin remains strict, including invalidation.
+                    candidates = [
+                        artifact
+                        for artifact in pinned_for_type
+                        if artifact.status == "active"
+                    ]
+                else:
+                    # IDs are shared by all ports on the node. An ID belonging
+                    # to an already-available optional input must not hide a
+                    # different port produced later by a dependency.
+                    candidates = self.board.list_artifacts(
+                        run_id=snapshot.run_id,
+                        artifact_type=port.artifact_type,
+                        status="active",
+                    )
             else:
                 candidates = self.board.list_artifacts(
                     run_id=snapshot.run_id,
@@ -2949,13 +2993,49 @@ class ExecutionGraphRunner:
     def _persist(self, snapshot: ExecutionRunSnapshot) -> None:
         snapshot.graph = ExecutionGraph.model_validate(snapshot.graph.model_dump(mode="python"))
         payload = snapshot.model_dump(mode="json")
+        receipt = self._write_snapshot_checkpoint(payload, checkpoint_kind="safe_point")
         self._emit(
             "graph_snapshot_commit_started",
-            snapshot=payload,
+            **receipt,
         )
         write_json(self.graph_path, snapshot.graph.model_dump(mode="json"))
         write_json(self.snapshot_path, payload)
-        self._emit("graph_snapshot_persisted", snapshot=payload)
+        self._emit("graph_snapshot_persisted", **receipt)
+
+    def _write_snapshot_checkpoint(
+        self,
+        payload: dict[str, Any],
+        *,
+        checkpoint_kind: str,
+    ) -> dict[str, Any]:
+        relative_path = Path("checkpoints") / f"execution_snapshot-{generate_ulid()}.json"
+        write_json(self.run_root / relative_path, payload)
+        graph = payload.get("graph") if isinstance(payload.get("graph"), dict) else {}
+        return {
+            "snapshot_ref": relative_path.as_posix(),
+            "snapshot_hash": self._snapshot_hash(payload),
+            "snapshot_size_bytes": len(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ),
+            "checkpoint_kind": checkpoint_kind,
+            "status": payload.get("status"),
+            "graph_revision": graph.get("revision"),
+        }
+
+    @staticmethod
+    def _snapshot_hash(payload: dict[str, Any]) -> str:
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     def _load_snapshot(self) -> ExecutionRunSnapshot | None:
         payload = read_json(self.snapshot_path)

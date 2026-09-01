@@ -4,12 +4,12 @@ from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 from research_system.market_data.contracts import (
-    CONTRACT_VERSION,
     CoverageResult,
     DimensionCoverage,
     EvidenceGrade,
     SnapshotStatus,
     cutoff_at_for_date,
+    is_supported_uzi_contract_version,
     require_aware_utc,
 )
 from research_system.market_data.dimension_contracts import (
@@ -19,7 +19,11 @@ from research_system.market_data.dimension_contracts import (
 )
 from research_system.market_data.historical import is_safe_degradation_manifest
 from research_system.market_data.ingestion import validate_persisted_snapshot_contract
-from research_system.market_data.models import MarketDataSnapshot
+from research_system.market_data.models import (
+    MarketDataEvidence,
+    MarketDataSeriesPoint,
+    MarketDataSnapshot,
+)
 from research_system.market_data.repository import MarketDataRepository
 from research_system.market_data.uzi_gate import (
     evaluate_uzi_collection_gate,
@@ -34,6 +38,94 @@ def _database_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _safe_non_data_disclosure(snapshot: MarketDataSnapshot) -> bool:
+    payload = dict(snapshot.payload_json or {})
+    return bool(
+        snapshot.status == SnapshotStatus.DATA_GAP.value
+        and is_safe_degradation_manifest(snapshot.query_manifest_json)
+        and payload.get("availability") == "historically_unavailable"
+        and payload.get("excluded_from_scoring") is True
+    )
+
+
+def _snapshot_pit_visibility_errors(
+    repository: MarketDataRepository,
+    snapshot: MarketDataSnapshot,
+    cutoff_at: datetime,
+    *,
+    evidence: list[MarketDataEvidence] | None = None,
+    series_points: list[MarketDataSeriesPoint] | None = None,
+) -> list[str]:
+    """Return hard PIT violations without changing UZI quality semantics.
+
+    A snapshot collected after a historical cutoff may still be usable when it
+    is a grade-B reconstruction backed by immutable, pre-cutoff evidence.  All
+    other rows must have been observable by the cutoff.  These checks are a
+    candidate-selection boundary, unlike the richer contract/audit checks that
+    intentionally remain independent from UZI's native ``eligible`` value.
+    """
+
+    cutoff = require_aware_utc(cutoff_at, field_name="cutoff_at")
+    if _safe_non_data_disclosure(snapshot):
+        # This is a post-hoc statement that no recoverable data exists, not a
+        # market fact.  Keeping its empty slot makes the gap auditable while
+        # ``excluded_from_scoring`` prevents it from leaking into a backtest.
+        return []
+
+    evidence = (
+        repository.list_snapshot_evidence(snapshot.id)
+        if evidence is None
+        else evidence
+    )
+    series_points = (
+        repository.list_snapshot_series_points(snapshot.id)
+        if series_points is None
+        else series_points
+    )
+    errors: list[str] = []
+    if _database_utc(snapshot.published_at) > cutoff:
+        errors.append("snapshot was published after cutoff")
+
+    reconstruction_proven = bool(evidence) and all(
+        _database_utc(item.published_at) <= cutoff
+        and (
+            _database_utc(item.observed_at) <= cutoff
+            or (
+                item.grade == EvidenceGrade.B.value
+                and bool(item.immutable_proof)
+            )
+        )
+        for item in evidence
+    )
+    if _database_utc(snapshot.observed_at) > cutoff and not (
+        snapshot.evidence_grade == EvidenceGrade.B.value
+        and reconstruction_proven
+    ):
+        errors.append("snapshot was not observable by cutoff")
+
+    for item in evidence:
+        if _database_utc(item.published_at) > cutoff:
+            errors.append("snapshot evidence was published after cutoff")
+        if _database_utc(item.observed_at) > cutoff and not (
+            item.grade == EvidenceGrade.B.value and bool(item.immutable_proof)
+        ):
+            errors.append("snapshot evidence was not observable by cutoff")
+
+    reconstruction_snapshot = (
+        snapshot.evidence_grade == EvidenceGrade.B.value
+        and reconstruction_proven
+    )
+    for point in series_points:
+        if _database_utc(point.published_at) > cutoff:
+            errors.append("snapshot series point was published after cutoff")
+        if (
+            _database_utc(point.observed_at) > cutoff
+            and not reconstruction_snapshot
+        ):
+            errors.append("snapshot series point was not observable by cutoff")
+    return list(dict.fromkeys(errors))
 
 
 class SnapshotResolver:
@@ -91,7 +183,9 @@ class SnapshotResolver:
             for dimension, snapshot in selected_snapshots.items()
             if snapshot is not None
         }
-        uses_uzi_gate = self.registry.contract_version == CONTRACT_VERSION
+        uses_uzi_gate = is_supported_uzi_contract_version(
+            self.registry.contract_version
+        )
         uzi_integrity_by_profile = (
             {
                 profile: evaluate_uzi_collection_gate(
@@ -215,6 +309,7 @@ class SnapshotResolver:
             market=market,
             dimension=contract.dimension,
             as_of_date=as_of_date,
+            cutoff_at=cutoff_at,
             include_revoked=True,
             limit=200,
         )
@@ -231,8 +326,42 @@ class SnapshotResolver:
                 -_database_utc(row.published_at).timestamp(),
             )
         )
-        if candidates:
-            snapshot = candidates[0]
+        snapshot = next(
+            (
+                row
+                for row in candidates
+                if not _snapshot_pit_visibility_errors(
+                    self.repository,
+                    row,
+                    cutoff_at,
+                )
+            ),
+            None,
+        )
+        if snapshot is None:
+            # An explicit historical-unavailable disclosure is intentionally
+            # created after the requested day.  It contains no market facts
+            # and is excluded from scoring, so preserve that auditable empty
+            # slot without weakening the SQL cutoff for ordinary snapshots.
+            disclosure_candidates = self.repository.list_snapshots(
+                symbol=symbol,
+                market=market,
+                dimension=contract.dimension,
+                as_of_date=as_of_date,
+                include_revoked=True,
+                limit=200,
+            )
+            snapshot = next(
+                (
+                    row
+                    for row in disclosure_candidates
+                    if row.contract_version == self.registry.contract_version
+                    and row.revoked_at is None
+                    and _safe_non_data_disclosure(row)
+                ),
+                None,
+            )
+        if snapshot is not None:
             audit_error = self._evidence_error(snapshot, contract, cutoff_at)
             conflicts = self.repository.list_open_conflicts(
                 symbol=symbol,

@@ -12,7 +12,7 @@ describe('MethodDeliveryDossier', () => {
         content: {
           method_id: 'returns_attribution', quality_status: 'available',
           results: [{ symbol: 'portfolio', result: { holdings: [{ ticker: '600519', contribution_pct: 8.6 }], total_return_pct: 8.6 } }],
-          data_gap: [], assumptions: [], source_commit: '1b5cdcb', implementation: 'vendored_uzi_3_9_2_pure_function',
+          data_gap: [], assumptions: [], source_commit: 'b3665e8', implementation: 'vendored_uzi_3_9_2_pure_function',
         },
       },
       {

@@ -17,7 +17,7 @@ seed_artifacts:
         id: finance-research-failure-request
   - artifact_type: uzi_native_analysis
     content:
-      source_commit: 1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4
+      source_commit: b3665e85b8666477038e11157d8e8feb0e006b76
       methodology_version: 3.9.4-source-parity
       profile: lite
       results:

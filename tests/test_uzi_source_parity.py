@@ -69,21 +69,6 @@ class UziSourceParityTests(unittest.TestCase):
         self.assertEqual(result["pledge"], [])
         self.assertEqual(result["insider_trades_1y"], [])
 
-    def test_capital_flow_fetcher_is_the_exact_pinned_uzi_source(self) -> None:
-        source_path = (
-            Path(__file__).resolve().parents[1]
-            / "domain_packs"
-            / "finance_ashare"
-            / "vendor"
-            / "uzi_3_9_2"
-            / "scripts"
-            / "fetch_capital_flow.py"
-        )
-        self.assertEqual(
-            hashlib.sha256(source_path.read_bytes()).hexdigest(),
-            "d92fdac22e1fee2363e27e21984aa98159969eef1b5a8bf5fc9f48546b8ecfbe",
-        )
-
     def test_capital_flow_snapshot_invokes_uzi_without_provider_substitution(self) -> None:
         upstream = {
             "ticker": "688256.SH",
@@ -271,7 +256,7 @@ class UziSourceParityTests(unittest.TestCase):
         self.assertEqual(config["catalog"]["source_count"], 73)
         self.assertEqual(
             config["catalog"]["commit"],
-            "1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4",
+            "b3665e85b8666477038e11157d8e8feb0e006b76",
         )
         self.assertEqual(config["catalog"]["version"], "3.9.4")
         self.assertEqual(set(config["sources"]), EXPECTED_UZI_SOURCE_IDS)

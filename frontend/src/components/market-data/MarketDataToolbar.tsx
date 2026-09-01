@@ -22,7 +22,7 @@ export function MarketDataToolbar({ controller, onManual, onReport }: {
       dimensions: 'all',
       mode,
       max_concurrency: 5,
-      publish_when_complete: true,
+      publish_when_complete: false,
     }).then(() => controller.setUrlState({ tab: 'jobs' })).catch(() => undefined)
   }
 
@@ -68,10 +68,10 @@ export function MarketDataToolbar({ controller, onManual, onReport }: {
             <FilePlus2 size={15} aria-hidden="true" />手工录入
           </button>
           <button className="primary-button" type="button" disabled={loading.action || !controller.canFreezeReport} onClick={onReport} title={!controller.canFreezeReport ? controller.freezeBlockReason : undefined}>
-            <Play size={15} aria-hidden="true" />{controller.resolvedAssetFamily === 'fund' ? '冻结十大持仓组合' : '冻结报告输入'}
+            <Play size={15} aria-hidden="true" />{controller.resolvedAssetFamily === 'fund' ? '创建十大持仓 Manifest' : '创建报告 Manifest'}
           </button>
         </div>
-        {!controller.canFreezeReport && controller.freezeBlockReason ? <p className="mdc-freeze-block-reason">冻结受阻：{controller.freezeBlockReason}</p> : null}
+        {!controller.canFreezeReport && controller.freezeBlockReason ? <p className="mdc-freeze-block-reason">报告输入受阻：{controller.freezeBlockReason}</p> : null}
       </div>
     </section>
   )

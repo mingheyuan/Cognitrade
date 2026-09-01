@@ -5,18 +5,14 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, ConfigDict, Field
-from starlette.concurrency import run_in_threadpool
 
 from research_system.api.dependencies import (
     ApiPrincipal,
     get_strategy_backtesting,
     require_principal,
 )
-from research_system.api.errors import ApiError
+from research_system.api.route_support import call_strategy_service as _call
 from research_system.strategies.contracts import BacktestMode
-from research_system.strategies.errors import StrategyDomainError
-from research_system.strategies.service import owner_scope
-
 
 router = APIRouter(prefix="/finance", tags=["strategy backtests"])
 
@@ -113,23 +109,5 @@ async def cancel_strategy_backtest(
     service=Depends(get_strategy_backtesting),
 ) -> dict[str, Any]:
     return await _call(service.cancel, principal, backtest_id)
-
-
-async def _call(operation, principal: ApiPrincipal, *args, **kwargs):
-    scope = owner_scope(
-        tenant_id=principal.tenant_id,
-        user_id=principal.user_id,
-        actor_id=principal.actor_id,
-    )
-    try:
-        return await run_in_threadpool(operation, scope, *args, **kwargs)
-    except StrategyDomainError as exc:
-        raise ApiError(
-            status_code=exc.status_code,
-            code=exc.code,
-            message=exc.message,
-            details=exc.details,
-        ) from exc
-
 
 __all__ = ["router"]

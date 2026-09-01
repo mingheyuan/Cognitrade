@@ -2,7 +2,7 @@
 
 状态：已实施（核心链路落地；真实 provider 全量数据与性能验收为持续项）
 方案日期：2026-08-20
-适用基线：Cognitrade `codex/benchmark-uzi-concurrency-fixes`；UZI Skill `3.9.4` / `1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4`
+适用基线：Cognitrade `codex/benchmark-uzi-concurrency-fixes`；UZI Skill `3.9.4` / `b3665e85b8666477038e11157d8e8feb0e006b76`
 
 ### 实施结果摘要
 
@@ -340,7 +340,7 @@ POST   /api/v2/finance/market-data/report-manifests
   "dimensions": "all",
   "mode": "missing_or_stale",
   "max_concurrency": 5,
-  "publish_when_complete": true,
+  "publish_when_complete": false,
   "asset_family": "equity"
 }
 ```
@@ -348,6 +348,9 @@ POST   /api/v2/finance/market-data/report-manifests
 基金请求使用 `symbols=["020464"]`、`asset_family="fund"`、
 `top_n=10`，且 `start_date=end_date`。后端创建单槽父 Job，再展开十只
 持仓股的完整 22 槽 child Job；同一 Job 不允许混合股票与基金。
+人工 Job 的 `publish_when_complete` 固定为 `false`，采集和 Agent 补采都只形成
+可审阅候选；只有用户提交精确 proposal hash 后才发布。仅双重 opt-in 的归档订阅
+允许由调度器在完整通过时自动发布。
 
 ## 9. Provider 适配与失败语义
 

@@ -35,7 +35,7 @@ DIMENSIONS = (
 def _snapshot(dimension: str, data: dict, *, quality: str = "available"):
     return SimpleNamespace(
         status="available",
-        source_version="uzi-3.9.4-1b5cdcb",
+        source_version="uzi-3.9.4-b3665e8",
         payload_json={"raw": data},
         query_manifest_json={"native_quality_status": quality},
         validation_json={"native_available": True, "audit_errors": []},

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from threading import Event, RLock, Thread
@@ -16,15 +15,24 @@ from research_system.strategies.backtesting.adapters import (
     ExchangeExecutionAdapter,
     OTCExecutionAdapter,
 )
-from research_system.strategies.backtesting.instruments import AssetType, InstrumentResolver
+from research_system.strategies.backtesting.instruments import (
+    AssetType,
+    InstrumentResolver,
+)
 from research_system.strategies.backtesting.market_data_gateway import MarketDataGateway
 from research_system.strategies.backtesting.portfolio_ledger import (
     run_exchange_single_asset,
     run_holdings_portfolio,
     run_otc_single_asset,
 )
-from research_system.strategies.backtesting.result_store import ContentAddressedResultStore
-from research_system.strategies.backtesting.signal_core import HikyuuSignalCore, TechnicalSignalCore
+from research_system.strategies.backtesting.result_store import (
+    ContentAddressedResultStore,
+    json_content_hash,
+)
+from research_system.strategies.backtesting.signal_core import (
+    HikyuuSignalCore,
+    TechnicalSignalCore,
+)
 from research_system.strategies.contracts import BacktestMode, StrategyDocumentV1
 from research_system.strategies.database import StrategyDatabase
 from research_system.strategies.errors import StrategyConflict, StrategyDomainError
@@ -46,6 +54,36 @@ from research_system.strategies.trading_calendar import trading_dates
 
 class _BacktestControlRequested(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class _BacktestInputs:
+    request: dict[str, Any]
+    start_date: date
+    end_date: date
+    mode: BacktestMode
+    strategy: Strategy
+    version: StrategyVersion
+    assignment: StrategyAssignment
+    document: StrategyDocumentV1
+    signals: list[TradeSignal]
+    reports: list[DailyReportSet]
+    nodes_by_report: dict[str, list[DailyReportNode]]
+
+    @property
+    def initial_cash(self) -> float:
+        return float(self.request["initial_cash"])
+
+    @property
+    def warmup_start(self) -> date:
+        return self.start_date - timedelta(days=self.document.execution.slow_period * 3)
+
+
+@dataclass(frozen=True)
+class _ModeResult:
+    ledger: dict[str, Any]
+    benchmarks: dict[str, Any]
+    instruments: list[dict[str, Any]]
 
 
 class StrategyBacktestService:
@@ -192,34 +230,66 @@ class StrategyBacktestService:
             "report_policy": report_policy,
             "assignment_id": preflight["assignment_id"],
         }
-        with self.database.session() as session:
-            version = session.get(StrategyVersion, strategy_version_id)
-            assignment = session.get(StrategyAssignment, preflight["assignment_id"])
-            if version is None or assignment is None:
-                raise StrategyConflict("backtest_context_changed", "回测上下文已变化，请重新预检")
-            row = BacktestRun(
-                parent_backtest_run_id=parent_backtest_run_id,
-                tenant_id=scope.tenant_id,
-                user_id=scope.user_id,
-                strategy_id=version.strategy_id,
-                strategy_version_id=version.id,
-                strategy_content_hash=version.content_hash,
-                fund_code=fund_code,
-                fund_name=assignment.fund_name,
-                mode=mode.value,
-                start_date=start_date,
-                end_date=end_date,
-                initial_cash=float(initial_cash),
-                benchmark_json=benchmark_config,
-                request_json=request,
-                input_snapshot_hash=_hash(request),
-                engine_version=self.signal_core.engine_version,
-                status="queued",
+        request_hash = json_content_hash(request)
+        # Coalesce rapid duplicate submissions while keeping completed runs
+        # replayable for deterministic verification.
+        with self._lock, self.database.session() as session:
+            active_query = (
+                select(BacktestRun)
+                .where(
+                    BacktestRun.tenant_id == scope.tenant_id,
+                    BacktestRun.user_id == scope.user_id,
+                    BacktestRun.input_snapshot_hash == request_hash,
+                    BacktestRun.status.in_(["queued", "running"]),
+                    BacktestRun.cancel_requested.is_(False),
+                )
             )
-            session.add(row)
-            session.flush()
+            if parent_backtest_run_id is not None:
+                # A retry is a child of one specific attempt. Reusing an
+                # unrelated active run would silently erase that lineage.
+                active_query = active_query.where(
+                    BacktestRun.parent_backtest_run_id == parent_backtest_run_id
+                )
+            active = session.scalar(
+                active_query.order_by(BacktestRun.created_at.asc()).limit(1)
+            )
+            if active is not None:
+                row = active
+            else:
+                version = session.get(StrategyVersion, strategy_version_id)
+                assignment = session.get(
+                    StrategyAssignment,
+                    preflight["assignment_id"],
+                )
+                if version is None or assignment is None:
+                    raise StrategyConflict(
+                        "backtest_context_changed",
+                        "回测上下文已变化，请重新预检",
+                    )
+                row = BacktestRun(
+                    parent_backtest_run_id=parent_backtest_run_id,
+                    tenant_id=scope.tenant_id,
+                    user_id=scope.user_id,
+                    strategy_id=version.strategy_id,
+                    strategy_version_id=version.id,
+                    strategy_content_hash=version.content_hash,
+                    fund_code=fund_code,
+                    fund_name=assignment.fund_name,
+                    mode=mode.value,
+                    start_date=start_date,
+                    end_date=end_date,
+                    initial_cash=float(initial_cash),
+                    benchmark_json=benchmark_config,
+                    request_json=request,
+                    input_snapshot_hash=request_hash,
+                    engine_version=self.signal_core.engine_version,
+                    status="queued",
+                )
+                session.add(row)
+                session.flush()
             payload = self._payload(row)
-        self._submit(row.id)
+            backtest_id = row.id
+        self._submit(backtest_id)
         return payload
 
     def list(
@@ -385,238 +455,42 @@ class StrategyBacktestService:
         control: Callable[[], None] = lambda: None,
     ) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
         control()
-        start_date = date.fromisoformat(str(request["start_date"]))
-        end_date = date.fromisoformat(str(request["end_date"]))
-        mode = BacktestMode(str(request["mode"]))
-        with self.database.session() as session:
-            strategy, version, assignment, document = self._context(
-                session,
-                scope,
-                strategy_version_id=str(request["strategy_version_id"]),
-                fund_code=str(request["fund_code"]),
-                mode=mode,
-            )
-            signals = list(
-                session.scalars(
-                    select(TradeSignal).where(
-                        TradeSignal.tenant_id == scope.tenant_id,
-                        TradeSignal.user_id == scope.user_id,
-                        TradeSignal.assignment_id == assignment.id,
-                        TradeSignal.strategy_version_id == version.id,
-                        TradeSignal.effective_from <= end_date,
-                    ).order_by(TradeSignal.effective_from.asc(), TradeSignal.revision.asc())
-                )
-            )
-            if not signals:
-                raise StrategyConflict("backtest_signals_missing", "回测信号不存在")
-            # Trading may only consume signals whose effective date is inside
-            # the backtest horizon.  Fund NAV marking has a different clock:
-            # the report dated on the final session is valid end-of-day market
-            # data even when its signal only becomes actionable on T+1.  Load
-            # those report sources without exposing their future-effective
-            # signals to the execution engine.
-            valuation_report_ids = list(
-                session.scalars(
-                    select(TradeSignal.source_report_set_id)
-                    .where(
-                        TradeSignal.tenant_id == scope.tenant_id,
-                        TradeSignal.user_id == scope.user_id,
-                        TradeSignal.assignment_id == assignment.id,
-                        TradeSignal.strategy_version_id == version.id,
-                        TradeSignal.as_of_date <= end_date,
-                    )
-                    .distinct()
-                )
-            )
-            report_ids = list(
-                dict.fromkeys(
-                    [signal.source_report_set_id for signal in signals]
-                    + valuation_report_ids
-                )
-            )
-            reports = list(
-                session.scalars(
-                    select(DailyReportSet)
-                    .where(DailyReportSet.id.in_(report_ids))
-                    .order_by(DailyReportSet.effective_date.asc(), DailyReportSet.revision.asc())
-                )
-            )
-            nodes_by_report = {
-                report.id: list(
-                    session.scalars(
-                        select(DailyReportNode)
-                        .where(DailyReportNode.report_set_id == report.id)
-                        .order_by(DailyReportNode.rank.asc())
-                    )
-                )
-                for report in reports
-            }
+        inputs = self._load_inputs(scope, request)
+        start_date = inputs.start_date
+        end_date = inputs.end_date
+        mode = inputs.mode
+        strategy = inputs.strategy
+        version = inputs.version
+        assignment = inputs.assignment
+        signals = inputs.signals
+        reports = inputs.reports
         signal_payloads = [_signal_payload(row) for row in signals]
         control()
         fund_signals = [row for row in signal_payloads if row["kind"] == "fund"]
         if not fund_signals:
             raise StrategyConflict("fund_signal_missing", "回测区间没有基金总门禁信号")
-        fund_sources = [
-            {
-                "report_as_of": report.as_of_date,
-                "source": next(
-                    (
-                        dict(node.source_json or {})
-                        for node in nodes_by_report[report.id]
-                        if node.node_type == "fund_report"
-                    ),
-                    {},
-                ),
-            }
-            for report in reports
-        ]
-        latest_fund_payload = next(
-            (entry["source"] for entry in reversed(fund_sources) if entry["source"]),
-            {},
-        )
-        warmup_start = start_date - timedelta(days=document.execution.slow_period * 3)
         market_hashes: dict[str, str] = {}
         benchmark_config = dict(request.get("benchmark") or {})
         if mode == BacktestMode.FUND_ONLY:
-            instrument = InstrumentResolver.resolve_fund(
-                latest_fund_payload,
-                code=assignment.fund_code,
-                name=assignment.fund_name,
-            )
-            series = self.market_data_gateway.get_series(
-                instrument,
-                start_date=warmup_start,
-                end_date=end_date,
-                as_of_date=end_date,
-                fund_sources=fund_sources,
-            )
-            control()
-            bars = list(series.bars)
-            market_hashes[instrument.instrument_id] = series.content_hash
-            events = self.signal_core.events(
-                instrument=instrument,
-                bars=bars,
-                signals=fund_signals,
-                fast_period=document.execution.fast_period,
-                slow_period=document.execution.slow_period,
-            )
-            control()
-            if instrument.asset_type == AssetType.OTC_FUND:
-                ledger = run_otc_single_asset(
-                    instrument=instrument,
-                    bars=bars,
-                    events=events,
-                    fund_signals=fund_signals,
-                    adapter=OTCExecutionAdapter.from_document(document),
-                    initial_cash=float(request["initial_cash"]),
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-            else:
-                ledger = run_exchange_single_asset(
-                    instrument=instrument,
-                    bars=bars,
-                    events=events,
-                    adapter=ExchangeExecutionAdapter.exchange_fund(document),
-                    initial_cash=float(request["initial_cash"]),
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-            benchmarks: dict[str, Any] = {}
-            if benchmark_config.get("fund_buy_and_hold", True):
-                benchmarks["fund_buy_and_hold"] = _buy_hold_benchmark(bars, start_date, end_date)
-            if benchmark_config.get("category_index"):
-                category_code, category_name = _category_benchmark(latest_fund_payload)
-                benchmarks["category_index"] = (
-                    self._index_benchmark(
-                        code=category_code,
-                        name=category_name,
-                        start_date=start_date,
-                        end_date=end_date,
-                        market_hashes=market_hashes,
-                    )
-                    if category_code
-                    else {"status": "unavailable", "reason": "category_index_code_unavailable"}
-                )
-            instruments_payload = [instrument.payload()]
-        else:
-            report_schedule = _report_schedule(reports, nodes_by_report)
-            symbols = sorted(
-                {
-                    symbol
-                    for report in report_schedule
-                    for symbol in report["target_weights"]
-                }
-            )
-            instruments = {
-                symbol: InstrumentResolver.resolve_stock(symbol, _holding_name(symbol, nodes_by_report))
-                for symbol in symbols
-            }
-            stock_signals: dict[str, list[dict[str, Any]]] = {
-                symbol: [
-                    row
-                    for row in signal_payloads
-                    if row["kind"] == "holding_stock" and row["subject_code"] == symbol
-                ]
-                for symbol in symbols
-            }
-            bars_by_symbol: dict[str, list[dict[str, Any]]] = {}
-            events_by_symbol: dict[str, list[dict[str, Any]]] = {}
-            for symbol, instrument in instruments.items():
-                control()
-                if not stock_signals[symbol]:
-                    raise StrategyConflict("holding_signal_missing", f"持仓 {symbol} 缺少可追溯个股信号")
-                series = self.market_data_gateway.get_series(
-                    instrument,
-                    start_date=warmup_start,
-                    end_date=end_date,
-                    as_of_date=end_date,
-                )
-                bars_by_symbol[symbol] = list(series.bars)
-                market_hashes[instrument.instrument_id] = series.content_hash
-                events_by_symbol[symbol] = self.signal_core.events(
-                    instrument=instrument,
-                    bars=bars_by_symbol[symbol],
-                    signals=stock_signals[symbol],
-                    fast_period=document.execution.fast_period,
-                    slow_period=document.execution.slow_period,
-                )
-                control()
-            ledger = run_holdings_portfolio(
-                instruments=instruments,
-                bars_by_symbol=bars_by_symbol,
-                events_by_symbol=events_by_symbol,
-                stock_signals=stock_signals,
+            mode_result = self._run_fund_only(
+                inputs,
                 fund_signals=fund_signals,
-                report_schedule=report_schedule,
-                adapter=ExchangeExecutionAdapter.stock(document),
-                initial_cash=float(request["initial_cash"]),
-                start_date=start_date,
-                end_date=end_date,
-                max_single_stock_pct=document.execution.max_single_stock_pct,
-                drift_pct_points=document.execution.rebalance_drift_pct_points,
+                benchmark_config=benchmark_config,
+                market_hashes=market_hashes,
+                control=control,
             )
-            control()
-            benchmarks = {}
-            if benchmark_config.get("initial_disclosed_weights_static", True):
-                benchmarks["initial_disclosed_weights_static"] = _static_holdings_benchmark(
-                    report_schedule,
-                    bars_by_symbol,
-                    start_date,
-                    end_date,
-                )
-            if benchmark_config.get("hs300", True):
-                benchmarks["hs300"] = self._index_benchmark(
-                    code="000300",
-                    name="沪深300",
-                    start_date=start_date,
-                    end_date=end_date,
-                    market_hashes=market_hashes,
-                )
-            instruments_payload = [value.payload() for value in instruments.values()]
+        else:
+            mode_result = self._run_holdings_portfolio(
+                inputs,
+                signal_payloads=signal_payloads,
+                fund_signals=fund_signals,
+                benchmark_config=benchmark_config,
+                market_hashes=market_hashes,
+                control=control,
+            )
         custom_code = str(benchmark_config.get("custom_code") or "").strip()
         if custom_code:
-            benchmarks["custom"] = self._index_benchmark(
+            mode_result.benchmarks["custom"] = self._index_benchmark(
                 code=custom_code,
                 name=str(benchmark_config.get("custom_name") or custom_code),
                 start_date=start_date,
@@ -624,7 +498,7 @@ class StrategyBacktestService:
                 market_hashes=market_hashes,
             )
         _enrich_trade_lineage(
-            ledger["trades"],
+            mode_result.ledger["trades"],
             strategy=strategy,
             version=version,
             assignment=assignment,
@@ -648,14 +522,14 @@ class StrategyBacktestService:
             "fund_name": assignment.fund_name,
             "mode": mode.value,
             "period": {"start": start_date, "end": end_date},
-            "instruments": instruments_payload,
+            "instruments": mode_result.instruments,
             "market_data_hashes": market_hashes,
             "report_set_ids": [report.id for report in reports],
-            "benchmarks": benchmarks,
-            **ledger,
+            "benchmarks": mode_result.benchmarks,
+            **mode_result.ledger,
         }
         links = _lineage_links(result["trades"], allowed_signal_ids={row.id for row in signals})
-        input_hash = _hash(
+        input_hash = json_content_hash(
             {
                 "request": request,
                 "strategy_content_hash": version.content_hash,
@@ -665,6 +539,317 @@ class StrategyBacktestService:
             }
         )
         return result, input_hash, links
+
+    def _run_fund_only(
+        self,
+        inputs: _BacktestInputs,
+        *,
+        fund_signals: list[dict[str, Any]],
+        benchmark_config: dict[str, Any],
+        market_hashes: dict[str, str],
+        control: Callable[[], None],
+    ) -> _ModeResult:
+        fund_sources = [
+            {
+                "report_as_of": report.as_of_date,
+                "source": next(
+                    (
+                        dict(node.source_json or {})
+                        for node in inputs.nodes_by_report[report.id]
+                        if node.node_type == "fund_report"
+                    ),
+                    {},
+                ),
+            }
+            for report in inputs.reports
+        ]
+        latest_fund_payload = next(
+            (entry["source"] for entry in reversed(fund_sources) if entry["source"]),
+            {},
+        )
+        instrument = InstrumentResolver.resolve_fund(
+            latest_fund_payload,
+            code=inputs.assignment.fund_code,
+            name=inputs.assignment.fund_name,
+        )
+        series = self.market_data_gateway.get_series(
+            instrument,
+            start_date=inputs.warmup_start,
+            end_date=inputs.end_date,
+            as_of_date=inputs.end_date,
+            fund_sources=fund_sources,
+        )
+        control()
+        bars = list(series.bars)
+        market_hashes[instrument.instrument_id] = series.content_hash
+        events = self.signal_core.events(
+            instrument=instrument,
+            bars=bars,
+            signals=fund_signals,
+            fast_period=inputs.document.execution.fast_period,
+            slow_period=inputs.document.execution.slow_period,
+        )
+        control()
+        if instrument.asset_type == AssetType.OTC_FUND:
+            ledger = run_otc_single_asset(
+                instrument=instrument,
+                bars=bars,
+                events=events,
+                fund_signals=fund_signals,
+                adapter=OTCExecutionAdapter.from_document(inputs.document),
+                initial_cash=inputs.initial_cash,
+                start_date=inputs.start_date,
+                end_date=inputs.end_date,
+            )
+        else:
+            ledger = run_exchange_single_asset(
+                instrument=instrument,
+                bars=bars,
+                events=events,
+                adapter=ExchangeExecutionAdapter.exchange_fund(inputs.document),
+                initial_cash=inputs.initial_cash,
+                start_date=inputs.start_date,
+                end_date=inputs.end_date,
+            )
+        benchmarks: dict[str, Any] = {}
+        if benchmark_config.get("fund_buy_and_hold", True):
+            benchmarks["fund_buy_and_hold"] = _buy_hold_benchmark(
+                bars,
+                inputs.start_date,
+                inputs.end_date,
+            )
+        if benchmark_config.get("category_index"):
+            category_code, category_name = _category_benchmark(latest_fund_payload)
+            benchmarks["category_index"] = (
+                self._index_benchmark(
+                    code=category_code,
+                    name=category_name,
+                    start_date=inputs.start_date,
+                    end_date=inputs.end_date,
+                    market_hashes=market_hashes,
+                )
+                if category_code
+                else {
+                    "status": "unavailable",
+                    "reason": "category_index_code_unavailable",
+                }
+            )
+        if benchmark_config.get("hs300"):
+            benchmarks["hs300"] = self._index_benchmark(
+                code="000300",
+                name="沪深300",
+                start_date=inputs.start_date,
+                end_date=inputs.end_date,
+                market_hashes=market_hashes,
+            )
+        return _ModeResult(
+            ledger=ledger,
+            benchmarks=benchmarks,
+            instruments=[instrument.payload()],
+        )
+
+    def _run_holdings_portfolio(
+        self,
+        inputs: _BacktestInputs,
+        *,
+        signal_payloads: list[dict[str, Any]],
+        fund_signals: list[dict[str, Any]],
+        benchmark_config: dict[str, Any],
+        market_hashes: dict[str, str],
+        control: Callable[[], None],
+    ) -> _ModeResult:
+        report_schedule = _report_schedule(inputs.reports, inputs.nodes_by_report)
+        symbols = sorted(
+            {
+                symbol
+                for report in report_schedule
+                for symbol in report["target_weights"]
+            }
+        )
+        instruments = {
+            symbol: InstrumentResolver.resolve_stock(
+                symbol,
+                _holding_name(symbol, inputs.nodes_by_report),
+            )
+            for symbol in symbols
+        }
+        stock_signals = {
+            symbol: [
+                row
+                for row in signal_payloads
+                if row["kind"] == "holding_stock" and row["subject_code"] == symbol
+            ]
+            for symbol in symbols
+        }
+        bars_by_symbol: dict[str, list[dict[str, Any]]] = {}
+        events_by_symbol: dict[str, list[dict[str, Any]]] = {}
+        for symbol, instrument in instruments.items():
+            control()
+            if not stock_signals[symbol]:
+                raise StrategyConflict(
+                    "holding_signal_missing",
+                    f"持仓 {symbol} 缺少可追溯个股信号",
+                )
+            series = self.market_data_gateway.get_series(
+                instrument,
+                start_date=inputs.warmup_start,
+                end_date=inputs.end_date,
+                as_of_date=inputs.end_date,
+            )
+            bars_by_symbol[symbol] = list(series.bars)
+            market_hashes[instrument.instrument_id] = series.content_hash
+            events_by_symbol[symbol] = self.signal_core.events(
+                instrument=instrument,
+                bars=bars_by_symbol[symbol],
+                signals=stock_signals[symbol],
+                fast_period=inputs.document.execution.fast_period,
+                slow_period=inputs.document.execution.slow_period,
+            )
+            control()
+        ledger = run_holdings_portfolio(
+            instruments=instruments,
+            bars_by_symbol=bars_by_symbol,
+            events_by_symbol=events_by_symbol,
+            stock_signals=stock_signals,
+            fund_signals=fund_signals,
+            report_schedule=report_schedule,
+            adapter=ExchangeExecutionAdapter.stock(inputs.document),
+            initial_cash=inputs.initial_cash,
+            start_date=inputs.start_date,
+            end_date=inputs.end_date,
+            max_single_stock_pct=inputs.document.execution.max_single_stock_pct,
+            drift_pct_points=inputs.document.execution.rebalance_drift_pct_points,
+        )
+        control()
+        benchmarks: dict[str, Any] = {}
+        if benchmark_config.get("initial_disclosed_weights_static", True):
+            benchmarks["initial_disclosed_weights_static"] = (
+                _static_holdings_benchmark(
+                    report_schedule,
+                    bars_by_symbol,
+                    inputs.start_date,
+                    inputs.end_date,
+                )
+            )
+        if benchmark_config.get("hs300", True):
+            benchmarks["hs300"] = self._index_benchmark(
+                code="000300",
+                name="沪深300",
+                start_date=inputs.start_date,
+                end_date=inputs.end_date,
+                market_hashes=market_hashes,
+            )
+        return _ModeResult(
+            ledger=ledger,
+            benchmarks=benchmarks,
+            instruments=[value.payload() for value in instruments.values()],
+        )
+
+    def _load_inputs(
+        self,
+        scope: OwnerScope,
+        request: dict[str, Any],
+    ) -> _BacktestInputs:
+        start_date = date.fromisoformat(str(request["start_date"]))
+        end_date = date.fromisoformat(str(request["end_date"]))
+        mode = BacktestMode(str(request["mode"]))
+        with self.database.session() as session:
+            strategy, version, assignment, document = self._context(
+                session,
+                scope,
+                strategy_version_id=str(request["strategy_version_id"]),
+                fund_code=str(request["fund_code"]),
+                mode=mode,
+            )
+            signals = list(
+                session.scalars(
+                    select(TradeSignal).where(
+                        TradeSignal.tenant_id == scope.tenant_id,
+                        TradeSignal.user_id == scope.user_id,
+                        TradeSignal.assignment_id == assignment.id,
+                        TradeSignal.strategy_version_id == version.id,
+                        TradeSignal.effective_from <= end_date,
+                    ).order_by(
+                        TradeSignal.effective_from.asc(),
+                        TradeSignal.revision.asc(),
+                    )
+                )
+            )
+            if not signals:
+                raise StrategyConflict("backtest_signals_missing", "回测信号不存在")
+            report_ids = self._report_ids_for_valuation(
+                session,
+                scope=scope,
+                assignment=assignment,
+                version=version,
+                signals=signals,
+                end_date=end_date,
+            )
+            reports = list(
+                session.scalars(
+                    select(DailyReportSet)
+                    .where(DailyReportSet.id.in_(report_ids))
+                    .order_by(
+                        DailyReportSet.effective_date.asc(),
+                        DailyReportSet.revision.asc(),
+                    )
+                )
+            )
+            nodes_by_report = {
+                report.id: list(
+                    session.scalars(
+                        select(DailyReportNode)
+                        .where(DailyReportNode.report_set_id == report.id)
+                        .order_by(DailyReportNode.rank.asc())
+                    )
+                )
+                for report in reports
+            }
+        return _BacktestInputs(
+            request=request,
+            start_date=start_date,
+            end_date=end_date,
+            mode=mode,
+            strategy=strategy,
+            version=version,
+            assignment=assignment,
+            document=document,
+            signals=signals,
+            reports=reports,
+            nodes_by_report=nodes_by_report,
+        )
+
+    @staticmethod
+    def _report_ids_for_valuation(
+        session,
+        *,
+        scope: OwnerScope,
+        assignment: StrategyAssignment,
+        version: StrategyVersion,
+        signals: list[TradeSignal],
+        end_date: date,
+    ) -> list[str]:
+        # A final-session report is valid NAV evidence even when its signal is
+        # only actionable on T+1. Keep those reports out of execution signals.
+        valuation_report_ids = list(
+            session.scalars(
+                select(TradeSignal.source_report_set_id)
+                .where(
+                    TradeSignal.tenant_id == scope.tenant_id,
+                    TradeSignal.user_id == scope.user_id,
+                    TradeSignal.assignment_id == assignment.id,
+                    TradeSignal.strategy_version_id == version.id,
+                    TradeSignal.as_of_date <= end_date,
+                )
+                .distinct()
+            )
+        )
+        return list(
+            dict.fromkeys(
+                [signal.source_report_set_id for signal in signals]
+                + valuation_report_ids
+            )
+        )
 
     def _claim(self, backtest_id: str) -> tuple[OwnerScope | None, dict[str, Any] | None]:
         now = datetime.now(UTC)
@@ -877,6 +1062,9 @@ class StrategyBacktestService:
             "end_date": row.end_date,
             "initial_cash": row.initial_cash,
             "benchmark": row.benchmark_json,
+            "report_policy": str(
+                (row.request_json or {}).get("report_policy") or "existing_only"
+            ),
             "input_snapshot_hash": row.input_snapshot_hash,
             "engine_version": row.engine_version,
             "status": row.status,
@@ -1141,14 +1329,6 @@ def _lineage_links(
 
 def _trading_dates(start: date, end: date) -> list[date]:
     return trading_dates(start, end)
-
-
-def _hash(payload: Any) -> str:
-    return hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode(
-            "utf-8"
-        )
-    ).hexdigest()
 
 
 def _aware(value: datetime | None) -> datetime | None:

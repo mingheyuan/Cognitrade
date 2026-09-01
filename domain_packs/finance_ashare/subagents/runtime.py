@@ -359,9 +359,20 @@ def collect_snapshot(context):
     query_text = str(query.content.get("query") or "")
     symbols = _unique_strings(query.content.get("symbols") or [])
     inputs = dict(context.node.inputs or {})
+    request_artifacts = _context_artifacts(context, "user_request")
+    request_content = (
+        dict(request_artifacts[-1].content or {})
+        if request_artifacts
+        else {}
+    )
     intent = str(inputs.get("intent") or "").strip()
     sector = str(inputs.get("sector") or inputs.get("sector_query") or "").strip() or None
-    snapshots = list(query.content.get("snapshots") or inputs.get("snapshots") or [])
+    snapshots = list(
+        query.content.get("snapshots")
+        or request_content.get("snapshots")
+        or inputs.get("snapshots")
+        or []
+    )
     data_source_mode = str(inputs.get("data_source_mode") or "").strip().lower()
     if data_source_mode == "bundle_only":
         # This is a second, in-graph hard gate.  Even if a caller bypasses API
@@ -370,12 +381,16 @@ def collect_snapshot(context):
         validate_bundle_only_input(
             snapshots=[row for row in snapshots if isinstance(row, dict)],
             manifest=(
-                inputs.get("report_data_manifest")
+                request_content.get("report_data_manifest")
+                if isinstance(request_content.get("report_data_manifest"), dict)
+                else inputs.get("report_data_manifest")
                 if isinstance(inputs.get("report_data_manifest"), dict)
                 else None
             ),
             bundle=(
-                inputs.get("market_data_bundle")
+                request_content.get("market_data_bundle")
+                if isinstance(request_content.get("market_data_bundle"), dict)
+                else inputs.get("market_data_bundle")
                 if isinstance(inputs.get("market_data_bundle"), dict)
                 else None
             ),
@@ -399,7 +414,11 @@ def collect_snapshot(context):
         "degraded": False,
     }
     if data_source_mode == "bundle_only":
-        manifest = dict(inputs.get("report_data_manifest") or {})
+        manifest = dict(
+            request_content.get("report_data_manifest")
+            or inputs.get("report_data_manifest")
+            or {}
+        )
         collection.update(
             {
                 "data_source_mode": "bundle_only",
@@ -494,7 +513,11 @@ def collect_snapshot(context):
     )
     collection.setdefault("quality_status", "data_gap" if not snapshots else "available")
     collection["degraded"] = str(collection.get("quality_status") or "") in {"degraded", "data_gap"}
-    source_refs = list(inputs.get("source_refs") or [])
+    source_refs = list(
+        request_content.get("source_refs")
+        or inputs.get("source_refs")
+        or []
+    )
     if not source_refs:
         source_refs = (
             provider_source_refs

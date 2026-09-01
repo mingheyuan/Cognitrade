@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Generate the frontend's Finance Artifact type inventory from Pack schemas.
 
 The generated module is intentionally limited to backend-owned facts: declared
@@ -14,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import yaml
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PACK_ROOT = REPOSITORY_ROOT / "domain_packs" / "finance_ashare"
@@ -30,21 +30,13 @@ DEFAULT_OUTPUT = (
 
 
 def _declared_artifact_types() -> list[str]:
-    # Avoid making PyYAML a requirement of the frontend generation command.
-    # The manifest's artifact_types block is deliberately simple and ends at
-    # the first top-level key after it.
-    lines = DOMAIN_MANIFEST.read_text(encoding="utf-8").splitlines()
-    in_artifacts = False
-    result: list[str] = []
-    for line in lines:
-        if line == "artifact_types:":
-            in_artifacts = True
-            continue
-        if in_artifacts and line and not line.startswith(" "):
-            break
-        marker = "  - artifact_type: "
-        if in_artifacts and line.startswith(marker):
-            result.append(line.removeprefix(marker).strip())
+    manifest = yaml.safe_load(DOMAIN_MANIFEST.read_text(encoding="utf-8"))
+    rows = manifest.get("artifact_types") if isinstance(manifest, dict) else None
+    result = [
+        str(row["artifact_type"])
+        for row in rows or []
+        if isinstance(row, dict) and row.get("artifact_type")
+    ]
     if not result:
         raise RuntimeError(f"No artifact types found in {DOMAIN_MANIFEST}")
     return result
@@ -56,7 +48,7 @@ def _load_schema(artifact_type: str) -> dict[str, Any]:
         raise RuntimeError(f"Missing schema for declared artifact: {artifact_type}")
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
-        raise RuntimeError(f"Artifact schema must be an object: {path}")
+        raise TypeError(f"Artifact schema must be an object: {path}")
     return value
 
 
@@ -70,7 +62,7 @@ def _resolve_local_ref(schema: dict[str, Any], root: dict[str, Any]) -> dict[str
             raise RuntimeError(f"Unresolvable local schema reference: {reference}")
         current = current[part]
     if not isinstance(current, dict):
-        raise RuntimeError(f"Local schema reference is not an object: {reference}")
+        raise TypeError(f"Local schema reference is not an object: {reference}")
     return {**current, **{key: value for key, value in schema.items() if key != "$ref"}}
 
 
@@ -125,15 +117,10 @@ def generate() -> str:
             for field in _field_paths(schemas[artifact_type], root=schemas[artifact_type])
         )
         lines.append("  ],")
-    lines.extend(
-        [
-            "] as unknown as never",  # replaced below to keep prettier output stable
-        ]
+    lines.append(
+        "} as const satisfies Record<FinanceArtifactType, readonly string[]>"
     )
-    # The closing line above is assembled this way so accidental search/replace
-    # cannot produce an untyped object.  Normalize it in the final text.
-    text = "\n".join(lines) + "\n"
-    return text.replace("] as unknown as never\n", "} as const satisfies Record<FinanceArtifactType, readonly string[]>\n")
+    return "\n".join(lines) + "\n"
 
 
 def main() -> None:

@@ -86,17 +86,11 @@ class SignalEngineService:
                 raise StrategyConflict("daily_report_not_final", "只有已结算日报可以生成交易信号")
             if strategy_version_id is None:
                 self._activate_pending(assignment, report_set.effective_date)
-            version = session.get(
-                StrategyVersion,
+            version = self._version_for_assignment(
+                session,
+                assignment,
                 strategy_version_id or assignment.active_version_id,
             )
-            if version is None:
-                raise StrategyDomainError("strategy_version_not_found", "Assignment 的策略版本不存在", status_code=409)
-            if version.strategy_id != assignment.strategy_id:
-                raise StrategyConflict(
-                    "assignment_strategy_version_mismatch",
-                    "所选策略版本不属于当前 Assignment 的策略",
-                )
             document = StrategyDocumentV1.model_validate(version.document_json)
             nodes = self.repository.list_report_nodes(session, report_set.id)
             result = self._calculate(
@@ -123,26 +117,27 @@ class SignalEngineService:
                 calculation=result["fund_signal"],
                 factor_snapshot_id=factor_snapshot.id,
             )
-            stock_signals: list[TradeSignal] = []
             if (
                 document.report_inputs.independent_holding_signals_enabled
                 or BacktestMode.HOLDINGS_PORTFOLIO
                 in document.report_inputs.enabled_backtest_modes
             ):
-                for stock in result["stock_signals"]:
-                    stock_signals.append(
-                        self._persist_signal(
-                            session,
-                            scope=scope,
-                            assignment=assignment,
-                            version=version,
-                            report_set=report_set,
-                            kind="holding_stock",
-                            subject_code=str(stock["subject_code"]),
-                            calculation=stock,
-                            factor_snapshot_id=None,
-                        )
+                stock_signals = [
+                    self._persist_signal(
+                        session,
+                        scope=scope,
+                        assignment=assignment,
+                        version=version,
+                        report_set=report_set,
+                        kind="holding_stock",
+                        subject_code=str(stock["subject_code"]),
+                        calculation=stock,
+                        factor_snapshot_id=None,
                     )
+                    for stock in result["stock_signals"]
+                ]
+            else:
+                stock_signals = []
             session.flush()
             return {
                 "assignment_id": assignment.id,
@@ -271,17 +266,11 @@ class SignalEngineService:
             )
             if assignment is None:
                 raise StrategyDomainError("assignment_not_found", "未找到 Assignment", status_code=404)
-            version = session.get(
-                StrategyVersion,
+            version = self._version_for_assignment(
+                session,
+                assignment,
                 strategy_version_id or assignment.active_version_id,
             )
-            if version is None:
-                raise StrategyDomainError("strategy_version_not_found", "策略版本不存在", status_code=409)
-            if version.strategy_id != assignment.strategy_id:
-                raise StrategyConflict(
-                    "assignment_strategy_version_mismatch",
-                    "所选策略版本不属于当前 Assignment 的策略",
-                )
             document = StrategyDocumentV1.model_validate(version.document_json)
             previous = session.scalar(
                 select(TradeSignal)
@@ -425,7 +414,7 @@ class SignalEngineService:
 
     @staticmethod
     def _hard_reasons(report_set, fund_node, fund_payload: dict[str, Any]) -> list[str]:
-        gaps = set(str(value) for value in (report_set.data_gaps_json or []))
+        gaps = {str(value) for value in (report_set.data_gaps_json or [])}
         if fund_node is None:
             gaps.add("fund_report_missing")
         else:
@@ -620,6 +609,26 @@ class SignalEngineService:
         if assignment.pending_version_id and assignment.effective_from <= effective_date:
             assignment.active_version_id = assignment.pending_version_id
             assignment.pending_version_id = None
+
+    @staticmethod
+    def _version_for_assignment(
+        session,
+        assignment: StrategyAssignment,
+        version_id: str | None,
+    ) -> StrategyVersion:
+        version = session.get(StrategyVersion, version_id)
+        if version is None:
+            raise StrategyDomainError(
+                "strategy_version_not_found",
+                "Assignment 的策略版本不存在",
+                status_code=409,
+            )
+        if version.strategy_id != assignment.strategy_id:
+            raise StrategyConflict(
+                "assignment_strategy_version_mismatch",
+                "所选策略版本不属于当前 Assignment 的策略",
+            )
+        return version
 
     @staticmethod
     def _signal_payload(row: TradeSignal) -> dict[str, Any]:

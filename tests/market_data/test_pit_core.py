@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import date, datetime, timedelta, timezone
+from threading import Barrier, Event
 
 import pytest
 from sqlalchemy import create_engine, func, select, update
@@ -37,6 +40,7 @@ from research_system.market_data.models import (
     ReportDataManifestItem,
 )
 from research_system.market_data.resolver import _database_utc
+from research_system.strategies.database import StrategyDatabase
 from research_system.strategies.models import Base
 
 AS_OF = date(2026, 8, 20)
@@ -732,6 +736,7 @@ def test_resolver_never_reuses_a_snapshot_across_logical_days(session: Session) 
 def test_future_or_grade_c_inputs_are_persisted_as_data_gaps(session: Session) -> None:
     repository = MarketDataRepository(session)
     ingestion = SnapshotIngestionService(repository)
+    safe_row = ingestion.ingest(_input("0_basic"))
     future = datetime(2026, 8, 20, 16, 1, tzinfo=timezone.utc)
     future_row = ingestion.ingest(
         _input(
@@ -752,14 +757,132 @@ def test_future_or_grade_c_inputs_are_persisted_as_data_gaps(session: Session) -
     assert c_row.status == SnapshotStatus.DATA_GAP.value
     assert c_row.evidence_grade == EvidenceGrade.C.value
 
+    visible_rows = repository.list_snapshots(
+        symbol="600519.SH",
+        market="CN_EQUITY",
+        dimension="0_basic",
+        as_of_date=AS_OF,
+        cutoff_at=cutoff_at_for_date(AS_OF, "Asia/Shanghai"),
+        include_revoked=True,
+    )
+    assert [row.id for row in visible_rows] == [safe_row.id]
+
     coverage = SnapshotResolver(repository).coverage(
         "600519.SH", "CN_EQUITY", AS_OF, now=NOW
     )
     basic = next(item for item in coverage.dimensions if item.dimension == "0_basic")
-    assert basic.snapshot_id == future_row.id
+    assert basic.snapshot_id == safe_row.id
     assert basic.eligible is True
-    assert basic.audit_eligible is False
-    assert basic.audit_reason and "cutoff" in basic.audit_reason
+    assert basic.audit_eligible is True
+
+    financials = next(
+        item for item in coverage.dimensions if item.dimension == "1_financials"
+    )
+    assert financials.snapshot_id == c_row.id
+    assert financials.eligible is True
+    assert financials.audit_eligible is False
+    assert financials.audit_reason and "grade C" in financials.audit_reason
+
+
+def test_future_only_uzi_snapshot_cannot_form_a_bundle(session: Session) -> None:
+    repository = MarketDataRepository(session)
+    ingestion = SnapshotIngestionService(repository)
+    for dimension in DIMENSION_IDS[1:]:
+        ingestion.ingest(_input(dimension))
+
+    future = datetime(2026, 8, 20, 16, 1, tzinfo=timezone.utc)
+    future_row = ingestion.ingest(
+        _input(
+            "0_basic",
+            published_at=future,
+            observed_at=future,
+            ingested_at=future + timedelta(minutes=1),
+        )
+    )
+    assert future_row.status == SnapshotStatus.DATA_GAP.value
+
+    coverage = SnapshotResolver(repository).coverage(
+        "600519.SH",
+        "CN_EQUITY",
+        AS_OF,
+        now=future + timedelta(minutes=1),
+    )
+    basic = coverage.dimensions[0]
+    assert basic.snapshot_id is None
+    assert basic.eligible is False
+    assert coverage.structurally_complete is False
+
+    with pytest.raises(IncompleteBundleError) as captured:
+        BundlePublisher(repository).publish(
+            symbol="600519.SH",
+            market="CN_EQUITY",
+            as_of_date=AS_OF,
+            now=future + timedelta(minutes=1),
+        )
+    assert "0_basic" in captured.value.missing_dimensions
+
+
+def test_resolver_skips_snapshot_not_observable_by_cutoff(session: Session) -> None:
+    repository = MarketDataRepository(session)
+    ingestion = SnapshotIngestionService(repository)
+    safe_row = ingestion.ingest(_input("0_basic"))
+    observed_after_cutoff = cutoff_at_for_date(
+        AS_OF, "Asia/Shanghai"
+    ) + timedelta(minutes=1)
+    unsafe_row = ingestion.ingest(
+        _input(
+            "0_basic",
+            published_at=PUBLISHED,
+            observed_at=observed_after_cutoff,
+            ingested_at=observed_after_cutoff + timedelta(minutes=1),
+        )
+    )
+    assert unsafe_row.status == SnapshotStatus.DATA_GAP.value
+    assert {
+        row.id
+        for row in repository.list_snapshots(
+            symbol="600519.SH",
+            market="CN_EQUITY",
+            dimension="0_basic",
+            as_of_date=AS_OF,
+            cutoff_at=cutoff_at_for_date(AS_OF, "Asia/Shanghai"),
+            include_revoked=True,
+        )
+    } == {safe_row.id, unsafe_row.id}
+
+    basic = SnapshotResolver(repository).coverage(
+        "600519.SH",
+        "CN_EQUITY",
+        AS_OF,
+        now=observed_after_cutoff + timedelta(minutes=1),
+    ).dimensions[0]
+    assert basic.snapshot_id == safe_row.id
+    assert basic.eligible is True
+
+
+def test_materializer_rejects_legacy_uzi_bundle_crossing_pit_cutoff(
+    session: Session,
+) -> None:
+    repository, _ = _ingest_complete_set(session)
+    bundle = BundlePublisher(repository).publish(
+        symbol="600519.SH",
+        market="CN_EQUITY",
+        as_of_date=AS_OF,
+        now=NOW,
+    )
+    basic_item = repository.list_bundle_items(bundle.id)[0]
+    future = cutoff_at_for_date(AS_OF, "Asia/Shanghai") + timedelta(minutes=1)
+    session.execute(
+        update(MarketDataSnapshot)
+        .where(MarketDataSnapshot.id == basic_item.snapshot_id)
+        .values(published_at=future, observed_at=future)
+        .execution_options(synchronize_session=False)
+    )
+    session.flush()
+    session.expire_all()
+
+    with pytest.raises(BundleIntegrityError, match="PIT cutoff"):
+        BundleMaterializer(repository).materialize(bundle.id)
 
 
 def test_grade_b_reconstruction_is_eligible_only_with_immutable_proof(
@@ -972,6 +1095,137 @@ def test_coverage_publish_and_materialize_freeze_all_22_slots(session: Session) 
         row["availability_status"] == "available" for row in materialized.snapshots
     )
     assert materialized.manifest_hash == bundle.manifest_hash
+
+
+def test_concurrent_bundle_publish_is_idempotent_and_revision_is_scope_unique(
+    tmp_path,
+) -> None:
+    database = StrategyDatabase(f"sqlite:///{tmp_path / 'bundle-race.sqlite3'}")
+    database.create_schema()
+    try:
+        with database.session() as seed_session:
+            _ingest_complete_set(seed_session)
+
+        cutoffs = [NOW, NOW + timedelta(minutes=1)] * 3
+        barrier = Barrier(len(cutoffs))
+
+        def publish(cutoff: datetime) -> tuple[str, int, str]:
+            with database.session() as worker_session:
+                barrier.wait(timeout=5)
+                bundle = BundlePublisher(MarketDataRepository(worker_session)).publish(
+                    symbol="600519.SH",
+                    market="CN_EQUITY",
+                    as_of_date=AS_OF,
+                    cutoff_at=cutoff,
+                    published_by="concurrency-test",
+                    now=NOW + timedelta(minutes=2),
+                )
+                return bundle.id, bundle.revision, bundle.manifest_hash
+
+        with ThreadPoolExecutor(max_workers=len(cutoffs)) as executor:
+            results = list(executor.map(publish, cutoffs))
+
+        assert len({manifest_hash for _, _, manifest_hash in results}) == 2
+        assert len({bundle_id for bundle_id, _, _ in results}) == 2
+        assert {revision for _, revision, _ in results} == {1, 2}
+        with database.session() as verify_session:
+            bundles = list(
+                verify_session.scalars(
+                    select(MarketDataBundle).order_by(MarketDataBundle.revision)
+                )
+            )
+            assert [bundle.revision for bundle in bundles] == [1, 2]
+    finally:
+        database.close()
+
+
+def test_snapshot_revoke_racing_publish_cannot_leave_a_published_reference(
+    tmp_path,
+) -> None:
+    database = StrategyDatabase(f"sqlite:///{tmp_path / 'revoke-race.sqlite3'}")
+    database.create_schema()
+    plan_ready = Event()
+    release_publish = Event()
+    revoke_started = Event()
+    try:
+        with database.session() as seed_session:
+            repository, _ = _ingest_complete_set(seed_session)
+            snapshot_id = repository.list_snapshots(
+                symbol="600519.SH",
+                market="CN_EQUITY",
+                dimension="0_basic",
+                as_of_date=AS_OF,
+            )[0].id
+
+        class PausingResolver(SnapshotResolver):
+            def coverage(self, *args, **kwargs):
+                result = super().coverage(*args, **kwargs)
+                plan_ready.set()
+                assert release_publish.wait(timeout=5)
+                return result
+
+        def publish() -> str:
+            with database.session() as worker_session:
+                repository = MarketDataRepository(worker_session)
+                bundle = BundlePublisher(
+                    repository,
+                    resolver=PausingResolver(repository),
+                ).publish(
+                    symbol="600519.SH",
+                    market="CN_EQUITY",
+                    as_of_date=AS_OF,
+                    published_by="race-test",
+                    now=NOW,
+                )
+                return bundle.id
+
+        def revoke() -> None:
+            revoke_started.set()
+            with database.session() as worker_session:
+                MarketDataRepository(worker_session).revoke_snapshot(
+                    snapshot_id,
+                    reason="race correction",
+                    revoked_by="race-test",
+                    revoked_at=NOW + timedelta(minutes=1),
+                )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            publish_future = executor.submit(publish)
+            assert plan_ready.wait(timeout=5)
+            revoke_future = executor.submit(revoke)
+            assert revoke_started.wait(timeout=5)
+            try:
+                with pytest.raises(FutureTimeoutError):
+                    revoke_future.result(timeout=0.2)
+            finally:
+                release_publish.set()
+            bundle_id = publish_future.result(timeout=5)
+            revoke_future.result(timeout=5)
+
+        with database.session() as verify_session:
+            bundle = verify_session.get(MarketDataBundle, bundle_id)
+            snapshot = verify_session.get(MarketDataSnapshot, snapshot_id)
+            assert bundle is not None and bundle.status == "invalidated"
+            assert snapshot is not None and snapshot.revoked_at is not None
+            published_revoked_count = verify_session.scalar(
+                select(func.count(MarketDataBundleItem.id))
+                .join(
+                    MarketDataBundle,
+                    MarketDataBundle.id == MarketDataBundleItem.bundle_id,
+                )
+                .join(
+                    MarketDataSnapshot,
+                    MarketDataSnapshot.id == MarketDataBundleItem.snapshot_id,
+                )
+                .where(
+                    MarketDataBundle.status == "published",
+                    MarketDataSnapshot.revoked_at.is_not(None),
+                )
+            )
+            assert published_revoked_count == 0
+    finally:
+        release_publish.set()
+        database.close()
 
 
 def test_missing_blocks_while_conflict_is_audit_only_and_revocation_invalidates_bundle(

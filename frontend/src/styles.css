@@ -801,6 +801,7 @@ input,
 textarea,
 select {
   font: inherit;
+  outline: none;
 }
 
 button {
@@ -815,13 +816,6 @@ select:not(:disabled) {
 button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
-}
-
-button,
-input,
-textarea,
-select {
-  outline: none;
 }
 
 button:focus-visible,
@@ -2354,7 +2348,10 @@ select:focus-visible {
 .research-verdict {
   display: flex;
   min-width: 110px;
+  min-height: 48px;
   flex-direction: column;
+  padding-left: 22px;
+  border-left: 1px solid var(--border);
 }
 
 
@@ -2368,23 +2365,14 @@ select:focus-visible {
   display: flex;
   align-items: center;
   gap: 3px;
+  color: var(--muted);
   font-size: 9px;
-}
-
-.research-verdict {
-  min-height: 48px;
-  padding-left: 22px;
-  border-left: 1px solid var(--border);
 }
 
 .research-verdict strong {
   margin: 2px 0;
   color: var(--gold);
   font-size: 16px;
-}
-
-.research-verdict small {
-  color: var(--muted);
 }
 
 .market-up {
@@ -2531,6 +2519,7 @@ select:focus-visible {
 
 .metric-grid {
   display: grid;
+  gap: 9px;
   margin-top: 14px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -2586,15 +2575,17 @@ select:focus-visible {
 
 
 .segmented-control button {
+  min-height: 27px;
+  padding: 0 9px;
   border: 0;
   border-radius: 4px;
   background: transparent;
   color: var(--muted-dim);
+  font-size: 9px;
   transition: 160ms ease;
 }
 
 
-.range-selector button.is-active,
 .segmented-control button:hover,
 .segmented-control button.is-active {
   background: var(--surface-hover);
@@ -3455,10 +3446,11 @@ select:focus-visible {
 }
 
 .live-data-label {
-  border: 1px solid var(--border);
+  border: 1px solid rgba(125, 226, 189, 0.2);
   border-radius: 4px;
   padding: 1px 5px;
-  color: var(--muted-dim);
+  background: var(--mint-soft);
+  color: var(--mint);
 }
 
 .focus-company {
@@ -3895,12 +3887,6 @@ select:focus-visible {
   gap: 7px;
 }
 
-.segmented-control button {
-  min-height: 27px;
-  padding: 0 9px;
-  font-size: 9px;
-}
-
 .segmented-control button span {
   margin-left: 4px;
   color: var(--muted-dim);
@@ -4063,12 +4049,6 @@ select:focus-visible {
   align-items: center;
   gap: 2px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-.valuation-state.is-low {
-  border-color: rgba(125, 226, 189, 0.16);
-  background: var(--mint-soft);
-  color: var(--mint);
 }
 
 .reason-cell {
@@ -4525,6 +4505,24 @@ select:focus-visible {
 .backtest-version-selection.is-current { border-color: color-mix(in srgb, var(--mint) 28%, var(--border)); }
 .backtest-version-selection.is-stale { border-color: color-mix(in srgb, var(--warning) 38%, var(--border)); background: var(--warning-soft); }
 
+.backtest-advanced-config {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-soft);
+}
+
+.backtest-advanced-config > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.backtest-advanced-config > .strategy-form-grid {
+  margin-top: 10px;
+}
+
 .strategy-record-list > article.is-selected {
   border-color: color-mix(in srgb, var(--mint) 42%, var(--border));
   background: color-mix(in srgb, var(--mint-soft) 60%, var(--surface-soft));
@@ -4872,14 +4870,6 @@ select:focus-visible {
   margin: 0;
   color: #ff9b7f;
   font-size: 11px;
-}
-
-.is-spinning {
-  animation: uzi-report-spin 0.8s linear infinite;
-}
-
-@keyframes uzi-report-spin {
-  to { transform: rotate(360deg); }
 }
 
 @media (max-width: 760px) {
@@ -5412,25 +5402,6 @@ select:focus-visible {
   background: rgba(229, 110, 117, 0.07);
   color: var(--danger);
   font-size: 8px;
-}
-
-.dag-node.is-complete {
-  border-color: rgba(125, 226, 189, 0.14);
-}
-
-.dag-node.is-complete > span,
-.dag-node.is-complete strong {
-  color: var(--mint);
-}
-
-.dag-node.is-running {
-  border-color: rgba(115, 168, 221, 0.3);
-  background: rgba(115, 168, 221, 0.08);
-}
-
-.dag-node.is-running > span,
-.dag-node.is-running strong {
-  color: var(--blue);
 }
 
 .active-run-events {
@@ -6210,12 +6181,6 @@ select:focus-visible {
   box-shadow: 0 0 0 4px rgba(221, 168, 92, 0.1);
 }
 
-.live-data-label {
-  color: var(--mint);
-  border-color: rgba(125, 226, 189, 0.2);
-  background: var(--mint-soft);
-}
-
 .live-empty-state {
   display: grid;
   place-items: center;
@@ -6457,18 +6422,6 @@ select:focus-visible {
   gap: 14px;
 }
 
-.quote-direction.is-up {
-  border: 1px solid rgba(240, 120, 120, 0.25);
-  background: var(--market-up-soft);
-  color: var(--market-up);
-}
-
-.quote-direction.is-down {
-  border: 1px solid rgba(82, 200, 152, 0.25);
-  background: var(--market-down-soft);
-  color: var(--market-down);
-}
-
 .number-up {
   color: var(--market-up) !important;
 }
@@ -6506,12 +6459,6 @@ select:focus-visible {
   color: var(--warning);
 }
 
-.metric-grid {
-  display: grid;
-  gap: 9px;
-}
-
-
 .paper-order-ticket,
 .paper-positions-card,
 .paper-orders-card {
@@ -6529,6 +6476,7 @@ select:focus-visible {
   display: flex;
   min-height: 68px;
   align-items: center;
+  justify-content: space-between;
   gap: 11px;
   padding: 14px 17px;
   border-bottom: 1px solid var(--border);
@@ -6548,35 +6496,6 @@ select:focus-visible {
   margin: 2px 0 0;
   color: var(--text-soft);
   font-size: 14px;
-}
-
-.kline-range-switch button.is-active {
-  background: var(--mint-soft);
-  color: var(--mint);
-}
-
-.kline-candle.is-up {
-  color: var(--market-up);
-}
-
-.kline-candle.is-up .kline-body {
-  fill: transparent;
-}
-
-
-.kline-candle.is-selected .kline-wick {
-  stroke-width: 2;
-}
-
-
-.kline-candle.is-selected .kline-volume {
-  opacity: 0.72;
-}
-
-.kline-detail-table .finance-table-scroll {
-  max-height: 420px;
-  border-top: 1px solid var(--border);
-  overflow: auto;
 }
 
 .finance-table-scroll {
@@ -6755,12 +6674,6 @@ select:focus-visible {
 .paper-order-ticket {
   align-self: start;
   padding-bottom: 15px;
-}
-
-.paper-order-ticket > header,
-.paper-positions-card > header,
-.paper-orders-card > header {
-  justify-content: space-between;
 }
 
 .paper-order-ticket > header + *,
@@ -7070,12 +6983,6 @@ select:focus-visible {
 }
 
 @media (max-width: 1280px) {
-
-  .market-identity-card > .secondary-button {
-    grid-column: 1 / -1;
-    justify-self: start;
-  }
-
   .paper-account-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -7264,10 +7171,6 @@ select:focus-visible {
   border-bottom: 1px solid var(--border);
 }
 
-.fund-candidate-card.is-eligible {
-  border-color: color-mix(in srgb, var(--mint) 45%, var(--border));
-}
-
 .fund-rank {
   display: grid;
   place-items: center;
@@ -7317,15 +7220,6 @@ select:focus-visible {
 
   .finance-hero {
     padding: 17px;
-  }
-
-  .security-search .primary-button {
-    grid-column: 1 / -1;
-    width: 100%;
-  }
-
-  .market-identity-card > .secondary-button {
-    grid-column: 1;
   }
 
   .paper-account-grid {

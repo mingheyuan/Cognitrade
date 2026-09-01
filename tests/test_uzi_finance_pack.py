@@ -1,32 +1,31 @@
 from __future__ import annotations
 
 import copy
-import json
 import hashlib
+import json
+import unittest
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
-import unittest
 
 import jsonschema
 import yaml
-
 from fastapi.testclient import TestClient
 
-from domain_packs.finance_ashare.subagents.uzi_methodology import (
-    build_features,
-    select_profile,
-)
 from domain_packs.finance_ashare.subagents.runtime import (
     _collection_research_profile,
     _requested_snapshot_types,
     collect_snapshot,
 )
-from domain_packs.finance_ashare.vendor.uzi_3_9_2 import verify_vendored_uzi_integrity
+from domain_packs.finance_ashare.subagents.uzi_methodology import (
+    build_features,
+    select_profile,
+)
+from domain_packs.finance_ashare.tools import snapshot_collector
 from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshots
-import domain_packs.finance_ashare.tools.snapshot_collector as snapshot_collector
+from domain_packs.finance_ashare.vendor.uzi_3_9_2 import verify_vendored_uzi_integrity
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
@@ -272,7 +271,7 @@ class UziFinancePackTests(unittest.TestCase):
                 "16_lhb", "17_sentiment", "18_trap", "19_contests", "6_fund_holders", "similar_stocks",
             },
         )
-        self.assertEqual(mapping["source"]["commit"], "1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4")
+        self.assertEqual(mapping["source"]["commit"], "b3665e85b8666477038e11157d8e8feb0e006b76")
         self.assertEqual(mapping["profiles"]["lite"]["panel_seats"], 66)
         self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 66)
         self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 66)
@@ -645,6 +644,42 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertIsNotNone(features["pe_quantile_5y"])
         self.assertTrue(features["ai_chain_hit"])
         self.assertIn("stage_num=Weinstein", " ".join(features["feature_derivations"]))
+
+    def test_latest_reported_revenue_yoy_overrides_annual_history_growth(self) -> None:
+        rows = [
+            {
+                "snapshot_type": "fundamental",
+                "symbol": "600000",
+                "snapshot_date": "2026-08-31",
+                "facts": {
+                    "financial_abstract": {
+                        "revenue_growth_yoy": 7.25,
+                        "revenue_growth": "+7.2%",
+                        "revenue_growth_period": "2026-06-30",
+                        "revenue_growth_basis": "reported_yoy",
+                        "revenue_growth_source": (
+                            "akshare.stock_financial_analysis_indicator:"
+                            "营业总收入同比增长(%)"
+                        ),
+                    },
+                    "financial_abstract_history": [
+                        {"报告期": 2024, "营业总收入": "100亿"},
+                        {"报告期": 2025, "营业总收入": "150亿"},
+                    ],
+                },
+                "source": {"vendor": "fixture"},
+            }
+        ]
+
+        features = build_features(rows, "600000")
+
+        self.assertEqual(features["revenue_growth_latest"], 7.25)
+        self.assertEqual(features["revenue_growth_period"], "2026-06-30")
+        self.assertEqual(features["revenue_growth_basis"], "reported_yoy")
+        self.assertIn(
+            "营业总收入同比增长",
+            features["revenue_growth_source"],
+        )
 
     def test_uzi_market_currency_is_explicit_for_a_h_us_and_global_symbols(self) -> None:
         cases = {

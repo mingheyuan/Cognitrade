@@ -1,9 +1,9 @@
 # Vendored UZI source
 
 - Repository: `https://github.com/wbh604/UZI-Skill`
-- Analysis commit: `1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4`
+- Analysis commit: `b3665e85b8666477038e11157d8e8feb0e006b76`
 - Analysis version: `3.9.4`
-- Report presentation commit: `1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4`
+- Report presentation commit: `b3665e85b8666477038e11157d8e8feb0e006b76`
 - Report presentation version: `3.9.4`
 - License: MIT; see `LICENSE`
 - Imported capability roots:

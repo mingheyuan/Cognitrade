@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import json
-from importlib.util import find_spec
 import os
-from pathlib import Path
 import sqlite3
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
 import unittest
+from importlib.util import find_spec
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from research_system.runtime.diagnostics.status.deployment_preflight import (
@@ -16,7 +16,6 @@ from research_system.runtime.diagnostics.status.deployment_preflight import (
 )
 from research_system.strategies.database import StrategyDatabase
 from research_system.strategies.migration_backup import backup_migration_state
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -92,11 +91,13 @@ class StrategyDeploymentPreflightTests(unittest.TestCase):
                     [
                         sys.executable,
                         "-c",
-                        "import os; from pathlib import Path; "
-                        "from research_system.runtime.diagnostics.status.deployment_preflight "
-                        "import _probe_veighna_runtime; "
-                        "print(_probe_veighna_runtime(Path("
-                        "os.environ['COGNITRADE_VEIGHNA_RUNTIME_ROOT'])))",
+                        (
+                            "import os; from pathlib import Path; "
+                            "from research_system.runtime.diagnostics.status.deployment_preflight "
+                            "import _probe_veighna_runtime; "
+                            "print(_probe_veighna_runtime(Path("
+                            "os.environ['COGNITRADE_VEIGHNA_RUNTIME_ROOT'])))"
+                        ),
                     ],
                     cwd=REPO_ROOT,
                     env=environment,
@@ -161,7 +162,7 @@ class StrategyDeploymentPreflightTests(unittest.TestCase):
             finally:
                 database.close()
 
-    def test_sqlite_0004_upgrade_preserves_existing_collection_children(self) -> None:
+    def test_sqlite_latest_upgrade_preserves_existing_collection_children(self) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)
             database_path = workspace / "migrated.sqlite3"
@@ -259,7 +260,117 @@ class StrategyDeploymentPreflightTests(unittest.TestCase):
                     connection.execute(
                         "SELECT version_num FROM alembic_version"
                     ).fetchone()[0],
+                    "20260820_0005",
+                )
+
+    def test_sqlite_0005_repairs_legacy_cutoff_scoped_bundle_revisions(self) -> None:
+        with TemporaryDirectory() as temporary:
+            database_path = Path(temporary) / "migrated.sqlite3"
+            environment = {
+                **os.environ,
+                "COGNITRADE_DATABASE_URL": f"sqlite:///{database_path}",
+            }
+            baseline = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "alembic",
+                    "-c",
+                    "alembic.ini",
+                    "upgrade",
                     "20260820_0004",
+                ],
+                cwd=REPO_ROOT,
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(baseline.returncode, 0, baseline.stdout)
+            with sqlite3.connect(database_path) as connection:
+                values = (
+                    "600519.SH",
+                    "CN_EQUITY",
+                    "Asia/Shanghai",
+                    "2026-08-20",
+                    "uzi-test-v1",
+                    "published",
+                    22,
+                    22,
+                    22,
+                    0,
+                    "{}",
+                    "tester",
+                    "2026-08-20 03:00:00",
+                )
+                connection.execute(
+                    """
+                    INSERT INTO market_data_bundles (
+                        id, symbol, market, exchange_timezone, as_of_date,
+                        cutoff_at, contract_version, status, revision,
+                        expected_dimension_count, ready_dimension_count,
+                        available_count, verified_empty_count, coverage_json,
+                        manifest_hash, published_by, published_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    ("legacy-bundle-1", *values[:4], "2026-08-20 07:59:00", *values[4:6], 1,
+                     *values[6:11], "1" * 64, *values[11:]),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO market_data_bundles (
+                        id, symbol, market, exchange_timezone, as_of_date,
+                        cutoff_at, contract_version, status, revision,
+                        expected_dimension_count, ready_dimension_count,
+                        available_count, verified_empty_count, coverage_json,
+                        manifest_hash, published_by, published_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    ("legacy-bundle-2", *values[:4], "2026-08-20 08:00:00", *values[4:6], 1,
+                     *values[6:11], "2" * 64, *values[11:]),
+                )
+
+            upgraded = subprocess.run(
+                [sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"],
+                cwd=REPO_ROOT,
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(upgraded.returncode, 0, upgraded.stdout)
+            with sqlite3.connect(database_path) as connection:
+                self.assertEqual(
+                    connection.execute(
+                        "SELECT revision FROM market_data_bundles ORDER BY revision"
+                    ).fetchall(),
+                    [(1,), (2,)],
+                )
+                unique_indexes = [
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA index_list(market_data_bundles)"
+                    )
+                    if row[2]
+                ]
+                revision_columns = None
+                for index_name in unique_indexes:
+                    columns = [
+                        row[2]
+                        for row in connection.execute(
+                            f'PRAGMA index_info("{index_name}")'
+                        )
+                    ]
+                    if columns[-1:] == ["revision"] and "contract_version" in columns:
+                        revision_columns = columns
+                        break
+                self.assertEqual(
+                    revision_columns,
+                    ["symbol", "market", "as_of_date", "contract_version", "revision"],
                 )
 
     def test_migrated_database_object_store_and_policy_pass(self) -> None:

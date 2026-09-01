@@ -64,35 +64,43 @@ class ArtifactBoard:
             ]
         with self._lock:
             prepared = [self._prepare(item) for item in artifacts]
-            batch_ids = {item.artifact_id for item in prepared}
-            if len(batch_ids) != len(prepared):
-                raise ValueError("artifact batch contains duplicate artifact IDs")
             existing = {item.artifact_id: item for item in self._read_all()}
-            known_ids = set(existing) | batch_ids
-            normalized: list[ArtifactRecord] = []
-            for artifact in prepared:
-                if artifact.supersedes_artifact_id:
-                    previous = existing.get(artifact.supersedes_artifact_id)
-                    if previous is None:
-                        raise ValueError(
-                            f"unknown superseded artifact: {artifact.supersedes_artifact_id}"
-                        )
-                    if previous.artifact_type != artifact.artifact_type:
-                        raise ValueError("an artifact can only supersede the same artifact type")
-                    if artifact.artifact_version <= previous.artifact_version:
-                        artifact = artifact.model_copy(
-                            update={"artifact_version": previous.artifact_version + 1}
-                        )
-                for parent_id in artifact.parent_artifact_ids:
-                    if parent_id not in known_ids:
-                        raise ValueError(f"unknown parent artifact: {parent_id}")
-                normalized.append(artifact)
+            normalized = self._normalize_batch(prepared, existing)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
                 for artifact in normalized:
                     handle.write(json.dumps(artifact.model_dump(mode="json"), ensure_ascii=True))
                     handle.write("\n")
             return normalized
+
+    @staticmethod
+    def _normalize_batch(
+        artifacts: list[ArtifactRecord],
+        existing: dict[str, ArtifactRecord],
+    ) -> list[ArtifactRecord]:
+        batch_ids = {item.artifact_id for item in artifacts}
+        if len(batch_ids) != len(artifacts):
+            raise ValueError("artifact batch contains duplicate artifact IDs")
+        known_ids = set(existing) | batch_ids
+        normalized: list[ArtifactRecord] = []
+        for artifact in artifacts:
+            if artifact.supersedes_artifact_id:
+                previous = existing.get(artifact.supersedes_artifact_id)
+                if previous is None:
+                    raise ValueError(
+                        f"unknown superseded artifact: {artifact.supersedes_artifact_id}"
+                    )
+                if previous.artifact_type != artifact.artifact_type:
+                    raise ValueError("an artifact can only supersede the same artifact type")
+                if artifact.artifact_version <= previous.artifact_version:
+                    artifact = artifact.model_copy(
+                        update={"artifact_version": previous.artifact_version + 1}
+                    )
+            for parent_id in artifact.parent_artifact_ids:
+                if parent_id not in known_ids:
+                    raise ValueError(f"unknown parent artifact: {parent_id}")
+            normalized.append(artifact)
+        return normalized
 
     def _read_all(self) -> list[ArtifactRecord]:
         return [ArtifactRecord.model_validate(row) for row in read_jsonl(self.path)]

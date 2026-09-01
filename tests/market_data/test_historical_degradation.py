@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -10,6 +10,7 @@ from jsonschema import Draft202012Validator
 from domain_packs.finance_ashare.subagents.runtime import _snapshot_artifact_content
 from research_system.market_data.bundles import BundleMaterializer, BundlePublisher
 from research_system.market_data.dimension_contracts import DEFAULT_DIMENSION_REGISTRY
+from research_system.market_data.historical import reconstruct_historical_snapshot
 from research_system.market_data.ingestion import SnapshotIngestionService
 from research_system.market_data.report_inputs import DatabaseReportInputGateway
 from research_system.market_data.repository import MarketDataRepository
@@ -98,6 +99,50 @@ class HistoricalDegradationTests(unittest.TestCase):
             manifest["items"][0]["bundle"]["degraded_dimension_count"],
             22,
         )
+
+    def test_native_capital_flow_aliases_survive_historical_projection(self) -> None:
+        reconstructed = reconstruct_historical_snapshot(
+            {
+                "snapshot_type": "capital_flow",
+                "facts": {
+                    "_uzi_raw_result": {
+                        "data": {
+                            "main_fund_flow_20d": [
+                                {"日期": "2026-08-18", "主力净流入": 1}
+                            ],
+                            "margin_recent": [
+                                {"日期": "2026-08-18", "融资余额": 2}
+                            ],
+                            "holder_count_history": [
+                                {"股东户数统计截止日": "2026-06-30", "股东户数": 3}
+                            ],
+                            "institutional_history": {
+                                "quarters": ["26Q2"],
+                                "fund": [4],
+                                "qfii": [5],
+                                "shehui": [6],
+                            },
+                            "block_trades_recent": [
+                                {"交易日期": "2026-08-18", "成交额": 7}
+                            ],
+                            "unlock_recent": [
+                                {"解禁日期": "2026-08-19", "解禁市值": 8}
+                            ],
+                        }
+                    }
+                },
+            },
+            dimension="12_capital_flow",
+            as_of_date=date(2026, 8, 20),
+        )
+
+        self.assertIsNotNone(reconstructed)
+        data = reconstructed["facts"]["_uzi_raw_result"]["data"]
+        self.assertEqual(len(data["money_flow"]), 1)
+        self.assertEqual(len(data["margin"]), 1)
+        self.assertEqual(len(data["shareholder_counts"]), 1)
+        self.assertEqual(data["institutions"][0]["period"], "26Q2")
+        self.assertEqual(len(data["events"]), 2)
 
 
 if __name__ == "__main__":

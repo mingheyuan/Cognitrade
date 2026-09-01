@@ -1,16 +1,18 @@
 # Cognitrade 2.0 中文版本说明
 
 发布日期：2026-08-18
-数据中心补充说明：2026-08-20
+数据中心补充说明：2026-08-31
 
 ## 发布概要
 
 Cognitrade 2.0 的核心升级，是把研究报告、策略信号、历史回测、机器验证、人工确认和
 模拟交易连接成可审计的策略治理闭环。同时，内置 UZI 股票研究能力以 UZI-Skill
-`main` 分支提交 `1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4` 为唯一基准完成严格
+`main` 分支提交 `b3665e85b8666477038e11157d8e8feb0e006b76` 为唯一基准完成严格
 对齐，上游版本号仍为 `3.9.4`。
-该最新提交的核心变化是亏损股分析恢复：统一清理建模边界的空特征，
-避免负值/缺失财务特征令研究流程异常，且在估值不可用时不再伪造目标价和评级。
+该基线包含两组关键修复：一是统一清理建模边界的空值与非有限数，避免亏损股或
+部分财务数据令估值、IC Memo、VCP 和报告渲染异常，并在估值不可用时不伪造目标价
+和评级；二是营收增速优先采用最近已披露报告期的同比值，同时保留 period、basis、
+source，避免用年度历史差分覆盖最新季报同比。
 
 这次发布不是仅更换报告样式。它既新增了 2.0 的策略回测主线，也同步并验收了 UZI 的
 生产 Python 运行时、数据采集器、方法论、commands、skills、报告模板、渲染辅助器和
@@ -101,6 +103,24 @@ Cognitrade 宿主边界。完整的 `v1.0` 差异见
   直接调用任一声明 `report_requires_bundle` 的 UZI 方法也会执行同一 DB 预检。
 - `POST /api/v2/finance/market-data/report-manifests` 只冻结和持久化报告输入，
   不直接启动 Agent OS run。
+- 人工股票/基金 Job 固定为“采集草稿 → 可选 Agent 补采 → 候选审阅 → 用户确认冻结”。
+  采集和补采都不会自动生成 Bundle；确认必须提交当前候选的精确 proposal hash，
+  降级候选还需明确确认披露。基金确认在单一事务中发布父基金和 10 只持仓股共
+  11 个 Bundle，不留下半冻结组合。
+- Agent 补采遵循 UZI Stage 1 的 MX→DDGS→Playwright 自动兜底，再执行
+  suggested-fix 缺口循环、三组定性 Agent evidence 和完整性复检；恢复结果只追加
+  新 Snapshot，不修改旧 Snapshot 或已发布 Bundle。
+- Job、子 Job 和 Agent stage 都使用持久租约/checkpoint。服务重启只回收过期租约，
+  取消请求会在数据库中终态化；基金父任务会恢复其 parented child，且跳过已成功子任务，
+  不再因进程重启等待两小时或重跑整篮子。
+- 长任务会持续续租并用 owner token 做写入 fencing；租约被新 worker 接管后，旧 worker
+  不能再覆盖 task、Agent stage 或父任务的最终状态。相同 idempotency key 仅可重放完全
+  相同的规范化请求；改换标的、日期、维度、模式或任务类型会返回 `409`。
+- Bundle revision 在 `(symbol, market, as_of_date, contract_version)` 范围内由数据库锁
+  串行分配；Snapshot 撤销和发布共用锁。基金的 11 个发布 scope 先按全局稳定顺序预锁，
+  避免重叠持仓顺序相反时在 PostgreSQL 形成死锁。
+- 新采集写入 `uzi-3.9.4-b3665e8-v1`。旧 `uzi-3.9.4-1b5cdcb-v1` Bundle 保持
+  只读物化和 report manifest 冻结兼容，不会因升级丢失既有回测输入。
 
 历史 PIT 保持保守语义：当原生 UZI fetcher 没有 `as_of` 能力时，历史日期记录
 `pit_not_supported` / `data_gap`，不得用当前网页值冒充历史事实。这些缺口只能由
@@ -201,7 +221,7 @@ Cognitrade 宿主边界。完整的 `v1.0` 差异见
 
 ## 来源、完整性和 CI
 
-- 所有 UZI source commit pin 统一为 `1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4`。
+- 所有 UZI source commit pin 统一为 `b3665e85b8666477038e11157d8e8feb0e006b76`。
 - CI 使用该提交的 pristine checkout 做逐字节对比，并将 vendored 实现覆盖到上游测试树中运行。
 - 源码树、command 树、分析资产、独立 skill 和报告渲染器均有 SHA-256 完整性锁。
 - 完整后端 CI 按测试文件使用独立 Python 解释器，隔离 UZI/provider 原生依赖的进程级状态，
@@ -223,12 +243,29 @@ Cognitrade 宿主边界。完整的 `v1.0` 差异见
 - 完整性报告：`valid=true`。
 - 上游确定性测试集合共 710 项；本地为 709 项通过、1 项可选依赖测试跳过，CI 安装完整依赖后执行全部集合。上游另有 2 项 `multiprocessing spawn` 微基准使用 1 秒级墙钟阈值，在 macOS 和 GitHub 托管 runner 上均会受进程启动抖动影响；CI 保留其行为覆盖，但改用 Cognitrade 的 5 秒生产启动预算分别验证硬超时回收和串行组调度，不放宽生产 fetcher 的 120/300 秒超时策略。
 
+### 2026-08-31 数据中心验收样本
+
+- 最新 UZI 五个变更文件与 `b3665e85...` 官方 checkout 逐字节一致；运行时源码树、
+  报告模板和渲染器完整性校验 `valid=true`，上游新增亏损股/部分财务数据回归 21 项通过。
+- 数据中心/UZI 相关后端回归 375 项、214 个 subtest 通过；前端 17 个测试文件、
+  78 项测试，以及 ESLint、TypeScript、Vite 生产构建全部通过。
+- 隔离数据库对 600519.SH 执行一次当前日完整 UZI root：286.8 秒落库 22 个 Snapshot，
+  初始 20/22 通过且 Bundle 数为 0。用户显式启动 Agent 后再用 125.4 秒，追加 9 个
+  Snapshot，将 critical 从 2 降到 0；提交 proposal hash 后 Bundle 数才由 0 变 1，
+  随后成功物化 22 个 Snapshot 并冻结 report manifest。
+- 该实测环境保留了 UZI 自己的 mini-racer 崩溃哨兵，因此 `7_industry`、
+  `12_capital_flow` 的部分 cninfo/lg 原生调用按上游保护逻辑被跳过。Agent 恢复了行业，
+  资金流仍作为 warning 留痕；这证明门禁与披露有效，不表示所有外部 provider 在任意时刻
+  都能达到 22/22。
+
 ## UZI 对齐的升级影响
 
 - UZI 方法论版本仍为 3.9.4；数据/报告解耦新增
   `20260820_0003_market_data_point_in_time.py` 和
-  `20260820_0004_fund_holding_inputs.py`。后者保存基金父子 Job 谱系与
-  report manifest 父依赖。升级已有环境必须在备份后显式
+  `20260820_0004_fund_holding_inputs.py`；并发发布修复新增
+  `20260820_0005_bundle_revision_scope.py`。后两者分别保存基金父子 Job 谱系/
+  report manifest 父依赖，以及修复旧库中跨 cutoff 重复的 Bundle revision。
+  升级已有环境必须在备份后显式
   执行 Alembic 迁移，进程启动不会隐式改库。
 - 依赖 artifact `source_commit` 常量的调用方需接受新的 commit pin。
 - 旧的文件数据缓存不迁移、不读取、不用于补齐新 Bundle；需要的数据必须

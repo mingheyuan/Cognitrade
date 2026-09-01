@@ -8,11 +8,11 @@ It never invents evidence or performs an external UZI runtime call.
 
 from __future__ import annotations
 
+import json
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from hashlib import sha256
-import json
-import logging
 from pathlib import Path
 from threading import Event, get_ident
 from time import monotonic
@@ -20,9 +20,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from domain_packs.finance_ashare.subagents.uzi_agent_roleplay import LATEST_UZI_SOURCE_COMMIT
-from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_structured
-
+from domain_packs.finance_ashare.subagents.uzi_agent_roleplay import (
+    LATEST_UZI_SOURCE_COMMIT,
+)
+from domain_packs.finance_ashare.subagents.uzi_llm_support import (
+    parse_uzi_structured,
+    resolve_uzi_llm_worker_count,
+)
 
 _LOGGER = logging.getLogger("uvicorn.error")
 _QUALITATIVE_STAGE_CACHE_SCHEMA_VERSION = "uzi-3.9.4-qualitative-stage-v1"
@@ -182,7 +186,11 @@ def apply_qualitative_deep_dive(
             cache_hit=True,
         )
     with ThreadPoolExecutor(
-        max_workers=_configured_workers(llm_provider, len(pending_groups), ceiling=3),
+        max_workers=resolve_uzi_llm_worker_count(
+            llm_provider,
+            len(pending_groups),
+            ceiling=3,
+        ),
         thread_name_prefix="uzi-qualitative",
     ) as pool:
         futures = {
@@ -384,16 +392,6 @@ def _group_repair_feedback(
         if str(error).startswith(f"{group_label}:")
     ]
     return list(dict.fromkeys(scoped))[-8:]
-
-
-def _configured_workers(provider: Any, task_count: int, *, ceiling: int) -> int:
-    settings = getattr(provider, "settings", None)
-    configured = getattr(settings, "uzi_llm_max_concurrency", ceiling)
-    try:
-        limit = int(configured)
-    except (TypeError, ValueError):
-        limit = ceiling
-    return max(1, min(task_count or 1, ceiling, max(limit, 1)))
 
 
 def _qualitative_stage_cache_path(

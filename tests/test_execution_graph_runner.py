@@ -183,6 +183,23 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
             self.assertTrue(
                 any(event["event_type"] == "gate_evaluator_completed" for event in events)
             )
+            snapshot_events = [
+                event
+                for event in events
+                if event["event_type"]
+                in {
+                    "graph_snapshot_created",
+                    "graph_snapshot_commit_started",
+                    "graph_snapshot_persisted",
+                }
+            ]
+            self.assertTrue(snapshot_events)
+            for event in snapshot_events:
+                self.assertNotIn("snapshot", event)
+                self.assertRegex(str(event.get("snapshot_hash") or ""), r"^[0-9a-f]{64}$")
+                self.assertTrue(
+                    (Path(temporary_directory) / str(event["snapshot_ref"])).is_file()
+                )
             self.assertEqual(runner.replay().model_dump(mode="json"), result.snapshot.model_dump(mode="json"))
             for artifact in runner.board.list_artifacts(run_id="legal-run", status="active"):
                 self.assertTrue(artifact.source_refs)

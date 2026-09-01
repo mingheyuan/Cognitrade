@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import func, select
 
+from research_system.market_data.instruments import SecurityIdentityResolver
 from research_system.market_data.models import (
     MarketDataBundle,
     MarketDataCollectionJob,
@@ -17,7 +18,6 @@ from research_system.market_data.models import (
     MarketDataConflict,
     MarketDataSnapshot,
 )
-from research_system.market_data.instruments import SecurityIdentityResolver
 from research_system.market_data.service import (
     MarketDataCenterService,
     MarketDataServiceError,
@@ -355,6 +355,16 @@ class MarketDataServiceBoundaryTests(unittest.TestCase):
                 "child_missing_by_symbol": {"600000.SH": ["12_capital_flow"]},
                 "child_job_ids": [child.id],
                 "last_child_runs": [{"job_id": child.id, "attempt": 1}],
+                "agent_recovery": {
+                    "status": "running",
+                    "attempted": 1,
+                    "succeeded": 0,
+                    "failed": 0,
+                },
+                "publication_candidate": {
+                    "proposal_hash": "a" * 64,
+                    "degraded": True,
+                },
             }
             session.add_all(
                 [
@@ -403,6 +413,9 @@ class MarketDataServiceBoundaryTests(unittest.TestCase):
         self.assertEqual(parent_payload["task_summary"]["retryable_failed"], 1)
         self.assertEqual(parent_payload["portfolio_summary"]["ready_slots"], 219)
         self.assertEqual(parent_payload["portfolio_summary"]["retryable_slots"], 1)
+        self.assertEqual(parent_payload["agent_recovery"]["status"], "running")
+        self.assertEqual(parent_payload["freeze_status"], "awaiting_recovery")
+        self.assertFalse(parent_payload["can_confirm_freeze"])
 
     def test_fund_is_one_holding_slot_then_top_ten_equity_workflow(self) -> None:
         contract = self.service.get_contract(market="CN_FUND")
@@ -429,7 +442,7 @@ class MarketDataServiceBoundaryTests(unittest.TestCase):
                 "dimensions": ["fund_top_holdings"],
                 "mode": "missing_or_stale",
                 "max_concurrency": 5,
-                "publish_when_complete": True,
+                "publish_when_complete": False,
                 "asset_family": "auto",
                 "top_n": 10,
             },
@@ -438,6 +451,7 @@ class MarketDataServiceBoundaryTests(unittest.TestCase):
         self.assertEqual(len(self.fund_collection.create_calls), 1)
         self.assertEqual(self.fund_collection.create_calls[0]["fund_code"], "020464")
         self.assertEqual(self.fund_collection.create_calls[0]["equity_dimensions"], "all")
+        self.assertFalse(self.fund_collection.create_calls[0]["publish_when_complete"])
         self.assertEqual(self.collection.create_calls, [])
 
         with self.assertRaises(MarketDataServiceError) as captured:
@@ -572,13 +586,33 @@ class MarketDataServiceBoundaryTests(unittest.TestCase):
                 "dimensions": ["0_basic"],
                 "mode": "missing_or_stale",
                 "max_concurrency": 5,
-                "publish_when_complete": True,
+                "publish_when_complete": False,
             },
         )
 
         self.assertEqual(job["status"], "queued")
         self.assertEqual(len(self.collection.create_calls), 1)
         self.assertEqual(self.collection.create_calls[0]["max_concurrency"], 5)
+        self.assertFalse(self.collection.create_calls[0]["publish_when_complete"])
+
+    def test_manual_collection_rejects_automatic_bundle_publication(self) -> None:
+        with self.assertRaises(MarketDataServiceError) as captured:
+            self.service.create_collection_job(
+                tenant_id="tenant",
+                user_id="user",
+                actor_id="actor",
+                request={
+                    "symbols": ["600519.SH"],
+                    "start_date": self.as_of_date,
+                    "end_date": self.as_of_date,
+                    "dimensions": ["0_basic"],
+                    "publish_when_complete": True,
+                },
+            )
+
+        self.assertEqual(captured.exception.code, "manual_auto_publish_not_allowed")
+        self.assertEqual(captured.exception.status_code, 422)
+        self.assertEqual(self.collection.create_calls, [])
 
     def test_enabled_subscription_still_does_nothing_while_global_switch_is_off(self) -> None:
         subscription = self.service.upsert_subscription(

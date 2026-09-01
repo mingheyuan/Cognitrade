@@ -198,7 +198,8 @@ Content-Type: application/json
 
 `GET /api/v2/finance/market-data/contract?market=CN_EQUITY` 是股票维度数、
 顺序、required fields、freshness、历史窗口和 `verified_empty` 规则的
-唯一客户端契约。当前股票契约版本为 `uzi-3.9.4-1b5cdcb-v1`，
+唯一客户端契约。当前股票契约版本为 `uzi-3.9.4-b3665e8-v1`；旧版
+`uzi-3.9.4-1b5cdcb-v1` Bundle 保持只读兼容，新采集不会再写入旧契约，
 `expected_dimension_count=22`：
 
 - 20 个编号 collector：`0_basic`–`19_contests`。
@@ -229,7 +230,7 @@ GET /api/v2/finance/market-data/coverage?symbol=600519.SH&market=CN_EQUITY&as_of
 
 对股票，`eligible` 只表示 UZI 原生结果是否有可用 payload；A/B 证据、
 required fields、PIT、过期和冲突在 `audit_*` 中单独披露，不重写 UZI 状态。
-`report_generatable=true` 表示 22 个槽已冻结，可进入 UZI Agent 恢复流程；
+`report_generatable=true` 表示 22 个槽均有原生结果或明确缺口，可进入 UZI Agent 恢复流程；
 `report_ready` 是 Medium 档数据阶段预检，不是最终 HTML 发布结论。最终完整
 Agent self-review 仅在 `critical_count > 0` 时阻断，warning 允许出报告并留痕。
 基金父 `fund_top_holdings` 契约仍是严格 PIT/A-B 验收，不适用股票 UZI 门语义。
@@ -253,7 +254,7 @@ Content-Type: application/json
   "dimensions": "all",
   "mode": "missing_or_stale",
   "max_concurrency": 5,
-  "publish_when_complete": true,
+  "publish_when_complete": false,
   "asset_family": "equity"
 }
 ```
@@ -264,6 +265,9 @@ Content-Type: application/json
 任务、标的 × 维度子任务、attempt、
 checkpoint 和每日结果持久化。重启后只恢复已由用户创建的 pending Job，不会
 自行创建新 Job。
+人工 Job 的 `publish_when_complete` 必须为 `false`（省略时也是 `false`）；传
+`true` 返回 `422 manual_auto_publish_not_allowed`。采集完成只生成可审阅的冻结候选，
+不会生成 Bundle。
 
 基金只是前十大持仓股票分析的父入口。一个基金 Job 只接受一只基金、
 一个自然日和固定 `top_n=10`；不允许与股票混合创建，也不允许只选部分
@@ -280,30 +284,42 @@ Content-Type: application/json
   "dimensions": "all",
   "mode": "missing_or_stale",
   "max_concurrency": 5,
-  "publish_when_complete": true,
+  "publish_when_complete": false,
   "asset_family": "fund",
   "top_n": 10
 }
 ```
 
-后端先为 `020464 / CN_FUND` 验收并发布单槽
-`fund_top_holdings` 父 Bundle，再按父快照固定的精确 10 只 A 股展开
+后端先为 `020464 / CN_FUND` 验收并落库单槽
+`fund_top_holdings` 父 Snapshot，再按父快照固定的精确 10 只 A 股展开
 10 份完整 22 槽采集。基金 Job 响应会标记 `asset_family=fund`、
 `top_n=10`，并在 checkpoint 就绪后返回 `expanded_holdings`、
-`child_collection_job_ids`、`parent_snapshot_id` 和 `parent_bundle_id`，
+`child_collection_job_ids`、`parent_snapshot_id`；用户确认冻结后才返回
+`parent_bundle_id`，
 便于审计整条展开链。
 
 ```text
 GET  /api/v2/finance/market-data/collection-jobs
 GET  /api/v2/finance/market-data/collection-jobs/{job_id}
 POST /api/v2/finance/market-data/collection-jobs/{job_id}/retry-failed
+POST /api/v2/finance/market-data/collection-jobs/{job_id}/agent-recovery
+POST /api/v2/finance/market-data/collection-jobs/{job_id}/confirm-freeze
 POST /api/v2/finance/market-data/collection-jobs/{job_id}/cancel
 ```
 
 `retry-failed` 只重置可重试且尚有 attempt 预算的失败/部分维度，不全量重跑。
 对基金 Job，父 `fund_top_holdings` 快照一旦成功落库并写入 checkpoint，
-后续重试会复用该父快照/Bundle，只为仍缺失或过期的持仓股票槽创建
+后续重试会复用该父快照，只为仍缺失或过期的持仓股票槽创建
 child Job；不会因一只持仓股失败而重采整份基金披露。
+`agent-recovery` 是用户显式启动的 UZI 完整缺口恢复阶段。原生 Stage 1 先完成
+MX→DDGS 与 Playwright 自动兜底；随后 Agent 按 suggested-fix 缺口循环、三组定性
+Agent evidence 和完整性复检顺序追加新 Snapshot，并重新计算候选。
+`confirm-freeze` 必须提交当前候选的 64 位 `proposal_hash`；候选为 degraded 时
+还必须提交 `acknowledge_degraded=true`。股票确认发布 1 个 Bundle；基金确认在同一事务
+发布父基金与 10 只持仓股票共 11 个 Bundle。已冻结 Job 不允许重试或 Agent 补采。
+运行中 Job 与 Agent stage 会续租并用 owner token 防止过期 worker 覆盖新 worker；
+服务重启只接管已过期租约。内部调度或父子任务重放同一 idempotency key 时，只有
+规范化请求完全一致才会复用原 Job，否则返回 `409 collection_idempotency_conflict`。
 原生 UZI provider 对无 `as_of` 的历史日期不会拿当前值回填，而是记录
 `pit_not_supported` / `data_gap`；该缺口需带不可变证据的人工 B 级快照，或新的
 PIT-aware adapter。
@@ -329,12 +345,15 @@ GET  /api/v2/finance/market-data/bundles/{bundle_id}
 POST /api/v2/finance/market-data/bundles/publish
 ```
 
-发布动作是纯数据库操作，不访问 provider。`CN_EQUITY` 的 22 个 collector
-必须全部为 A/B 级的 `available` / `verified_empty`、未过期、未撤销且无开放
-冲突时才能发布；`CN_FUND` 父 Bundle 则必须通过唯一的
-`fund_top_holdings` 槽（精确 10 只 A 股）。否则
-返回 `409 market_data_bundle_incomplete`。相同 manifest 幂等，内容变化产生新 revision，
-不覆盖旧 Bundle。
+发布动作是纯数据库操作，不访问 provider。`CN_EQUITY` 严格候选要求 UZI 22 维
+质量门全部通过；若 22 个槽均有原生结果或明确 `data_gap`，则可形成 degraded 候选，
+但必须由用户明确确认缺口披露。`CN_FUND` 父 Bundle 必须通过唯一的
+`fund_top_holdings` 槽（精确 10 只 A 股）。候选不成立时返回
+`409 market_data_bundle_incomplete`。相同 manifest 幂等，内容变化产生新 revision，
+不覆盖旧 Bundle；并发发布在同一 symbol/market/day/contract scope 内串行分配 revision。
+发布与 Snapshot 撤销共用数据库锁，基金 11 个 scope 还会按全局稳定顺序预锁；不会留下
+引用已撤销 Snapshot 的 published Bundle，也不会发布半套基金组合。人工 Job 推荐只经
+`confirm-freeze` 发布其精确候选。
 
 ### 归档订阅与 provider 能力
 
@@ -758,7 +777,7 @@ VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
 
 - `uzi_integrity.before_recovery`：主 provider 完成后的 18 项检查、关键/可选缺口、16 个扩展维度缺口与逐项恢复任务；
 - `uzi_integrity.after_recovery`：MX、DDGS、Playwright 全部结束后的复检；顶层覆盖率字段与此一致；
-- `uzi_recovery.stage_order`：固定为 `primary_providers → integrity_check → mx_api → ddgs → playwright → integrity_recheck`；
+- `uzi_recovery.stage_order`：固定为 `primary_providers → integrity_check → mx_api → ddgs → playwright → suggested_fix_loop → qualitative_agent_evidence → integrity_recheck`；
 - `uzi_recovery.qualitative_stage`：六类定性维度的 MX→DDGS 尝试及完整 `source_trace`；
 - `uzi_recovery.playwright_stage`：按 Lite/Medium/Deep 白名单触发的浏览器最终兜底、质量触发原因、策略来源和解析状态；
 - `uzi_recovery.attempts`：供列表展示的统一摘要。失败保留为 `data_gap`，不生成模拟值。

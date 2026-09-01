@@ -7,6 +7,7 @@ import {
 import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { CognitradeApiClient } from '../api-client'
 import { useCognitrade } from '../CognitradeContext'
+import { asRecord } from '../utils/value'
 import { FundAnalysisDossier } from './FundAnalysisDossier'
 import { AppSelect } from './AppSelect'
 import type { StrategyWorkspaceContext } from '../strategy-contracts'
@@ -189,10 +190,6 @@ export function Funds({ onOpenRun, onOpenStrategy = () => undefined }: FundsProp
       </div>
     </main>
   )
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
 function cycleLabel(value: string): string {

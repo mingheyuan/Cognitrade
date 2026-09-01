@@ -304,6 +304,7 @@ def build_unit_economics(features: dict, raw_data: dict) -> dict:
 
 def build_value_creation_plan(features: dict, raw_data: dict) -> dict:
     """Post-investment value creation roadmap — 5 years."""
+    features = sanitize_features(features)
     dims = raw_data.get("dimensions", {}) or {}
     fin = (dims.get("1_financials") or {}).get("data") or {}
 

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MarketData, type MarketDataViewState } from './MarketData'
 
@@ -92,9 +92,31 @@ function installApi(options: { ready?: boolean; jobResponses?: unknown[][] } = {
     }], total_count: 1, limit: 50, offset: 0 })
     if (url.endsWith('/market-data/collection-jobs') && init?.method === 'POST') return json({
       id: 'job-1', status: 'queued', mode: 'missing_or_stale', asset_family: 'equity', top_n: 10, symbols: ['600519.SH'], dimensions: ['d0', 'd1', 'd2'],
-      start_date: '2026-08-20', end_date: '2026-08-20', max_concurrency: 5, publish_when_complete: true,
+      start_date: '2026-08-20', end_date: '2026-08-20', max_concurrency: 5, publish_when_complete: false,
       progress: { total: 3, completed: 0, by_status: { queued: 3 } }, created_at: '2026-08-20T08:00:00Z',
     })
+    if (url.endsWith('/agent-recovery') && init?.method === 'POST') {
+      const current = options.jobResponses?.[0]?.[0] as Record<string, unknown> | undefined
+      const recovered = current ? {
+        ...current,
+        status: 'succeeded',
+        freeze_status: 'awaiting_confirmation',
+        can_confirm_freeze: true,
+        agent_recovery: { status: 'completed', attempted: 1, succeeded: 1, failed: 0 },
+        publication_candidate: { can_publish: true, quality_gate: 'strict', proposal_hash: 'c'.repeat(64), missing_dimensions: [], scopes: [{ symbol: '600519.SH', as_of_date: '2026-08-20', can_publish: true }] },
+      } : {}
+      if (options.jobResponses) options.jobResponses[0] = [recovered]
+      return json(recovered)
+    }
+    if (url.endsWith('/confirm-freeze') && init?.method === 'POST') {
+      const current = options.jobResponses?.[0]?.[0] as Record<string, unknown> | undefined
+      const frozen = current ? { ...current, freeze_status: 'frozen', can_confirm_freeze: false } : {}
+      if (options.jobResponses) options.jobResponses[0] = [frozen]
+      return json(frozen)
+    }
+    if (/\/market-data\/collection-jobs\/[^/]+$/.test(url) && init?.method !== 'POST') {
+      return json(options.jobResponses?.[0]?.[0] || {})
+    }
     if (url.includes('/market-data/collection-jobs')) {
       const responses = options.jobResponses || []
       const items = responses[Math.min(jobRequestIndex, Math.max(0, responses.length - 1))] || []
@@ -285,7 +307,7 @@ describe('MarketDataCenter', () => {
     await waitFor(() => expect(requests.some((request) => request.url.endsWith('/collection-jobs') && request.init?.method === 'POST')).toBe(true))
     const creation = requests.find((request) => request.url.endsWith('/collection-jobs') && request.init?.method === 'POST')
     expect(JSON.parse(String(creation?.init?.body))).toMatchObject({
-      symbols: ['600519.SH'], asset_family: 'equity', top_n: 10, dimensions: 'all', mode: 'missing_or_stale', max_concurrency: 5, publish_when_complete: true,
+      symbols: ['600519.SH'], asset_family: 'equity', top_n: 10, dimensions: 'all', mode: 'missing_or_stale', max_concurrency: 5, publish_when_complete: false,
     })
     expect(await screen.findByRole('heading', { name: '新建采集任务' })).toBeInTheDocument()
     expect(screen.getByRole('spinbutton', { name: '采集并发' })).toHaveAttribute('max', '5')
@@ -330,16 +352,51 @@ describe('MarketDataCenter', () => {
     expect(collectionReads()).toBe(readsAfterCompletion)
   })
 
+  it('keeps collection as a draft, runs Agent recovery, and freezes only after confirmation', async () => {
+    window.history.replaceState({}, '', '/market-data?symbol=600519.SH&as_of_date=2026-08-20&cutoff=eod&tab=jobs')
+    const recoverableJob = {
+      ...pollingJob,
+      id: 'job-draft-1',
+      status: 'partial',
+      publish_when_complete: false,
+      freeze_status: 'awaiting_recovery',
+      can_confirm_freeze: false,
+      progress: { total: 3, completed: 2, failed: 1, by_status: { succeeded: 2, failed: 1 } },
+      task_summary: { total: 3, by_status: { succeeded: 2, failed: 1 }, active: 0, succeeded: 2, skipped: 0, retryable_failed: 0, blocked_failed: 1, by_error_code: [], by_dimension: [] },
+      publication_candidate: { can_publish: false, quality_gate: 'blocked', missing_dimensions: ['d1'], scopes: [] },
+    }
+    const jobResponses: unknown[][] = [[recoverableJob]]
+    const { requests } = installApi({ jobResponses })
+    renderPage()
+
+    const jobCode = await screen.findByText('job-draft-1')
+    fireEvent.click(jobCode.closest('summary') as HTMLElement)
+    expect(screen.getByText('Bundle 发布：需用户确认')).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: '启动 Agent 缺口补采' }))
+
+    await waitFor(() => expect(requests.some((request) => request.url.endsWith('/collection-jobs/job-draft-1/agent-recovery') && request.init?.method === 'POST')).toBe(true))
+    const freeze = await screen.findByRole('button', { name: '确认冻结 Bundle' })
+    fireEvent.click(freeze)
+    const dialog = screen.getByRole('dialog')
+    expect(dialog).toHaveTextContent('采集流程的提交边界')
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: '我确认将当前采集草稿发布为不可变 Bundle' }))
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认冻结 Bundle' }))
+
+    await waitFor(() => expect(requests.some((request) => request.url.endsWith('/collection-jobs/job-draft-1/confirm-freeze') && request.init?.method === 'POST')).toBe(true))
+    const confirmation = requests.find((request) => request.url.endsWith('/collection-jobs/job-draft-1/confirm-freeze') && request.init?.method === 'POST')
+    expect(JSON.parse(String(confirmation?.init?.body))).toEqual({ proposal_hash: 'c'.repeat(64), acknowledge_degraded: false })
+  })
+
   it('freezes a ready bundle and launches the selected report profile', async () => {
     const { requests } = installApi({ ready: true })
     const onResearch = researchHandler()
     renderPage(onResearch)
     await screen.findByRole('heading', { name: '采集槽完整度' })
 
-    fireEvent.click(screen.getByRole('button', { name: '冻结报告输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建报告 Manifest' }))
     expect(screen.getByRole('dialog')).toHaveTextContent('报告阶段外部数据调用数必须为 0')
     fireEvent.click(screen.getByRole('radio', { name: /Deep/ }))
-    fireEvent.click(screen.getByRole('button', { name: '冻结 DEEP 输入' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建 DEEP Manifest' }))
 
     await waitFor(() => expect(requests.some((request) => request.url.endsWith('/report-manifests') && request.init?.method === 'POST')).toBe(true))
     const creation = requests.find((request) => request.url.endsWith('/report-manifests') && request.init?.method === 'POST')
@@ -451,13 +508,13 @@ describe('MarketDataCenter', () => {
     const onResearch = researchHandler()
     renderPage(onResearch)
 
-    const freeze = await screen.findByRole('button', { name: '冻结十大持仓组合' })
+    const freeze = await screen.findByRole('button', { name: '创建十大持仓 Manifest' })
     await waitFor(() => expect(freeze).toBeEnabled())
     fireEvent.click(freeze)
     expect(screen.getByRole('dialog')).toHaveTextContent('基金代码不会被当成股票分析')
     expect(screen.getByRole('dialog')).toHaveTextContent('10 只股票')
     fireEvent.click(screen.getByRole('radio', { name: /Deep/ }))
-    fireEvent.click(screen.getByRole('button', { name: '冻结十大持仓 · DEEP' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建十大持仓 · DEEP Manifest' }))
 
     await waitFor(() => expect(requests.some((request) => request.url.endsWith('/report-manifests') && request.init?.method === 'POST')).toBe(true))
     const creation = requests.find((request) => request.url.endsWith('/report-manifests') && request.init?.method === 'POST')

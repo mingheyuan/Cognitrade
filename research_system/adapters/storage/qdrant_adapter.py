@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import math
 import json
+import math
 import re
 import uuid
 from collections import Counter
@@ -39,6 +39,208 @@ _SEARCH_STOPWORDS = {
     "who",
     "with",
 }
+
+_GENERIC_SNAPSHOT_TYPES = frozenset(
+    {"lhb", "capital_flow", "sentiment", "events", "policy"}
+)
+_SECTOR_FACT_FIELDS = (
+    "sector_type",
+    "latest_hist",
+    "spot",
+    "benchmark",
+    "relative_strength",
+    "breadth",
+    "top_constituents",
+    "catalyst_samples",
+    "theme_news",
+    "policy_signals",
+    "regulatory_signals",
+    "signal_scorecard",
+    "catalyst_digest",
+)
+
+
+def _append_present_fields(
+    parts: list[str],
+    values: dict[str, Any],
+    fields: tuple[tuple[str, str], ...] | tuple[str, ...],
+) -> None:
+    for field in fields:
+        key, label = field if isinstance(field, tuple) else (field, field)
+        value = values.get(key)
+        if value:
+            parts.append(f"{label}: {value}")
+
+
+def _snapshot_header(
+    payload: dict[str, Any],
+    snapshot_type: str,
+    target: str,
+) -> list[str]:
+    return [
+        f"{snapshot_type} snapshot for {target}",
+        f"query: {payload.get('query', '')}",
+        f"snapshot_date: {payload.get('snapshot_date', '')}",
+    ]
+
+
+def _append_snapshot_metadata(parts: list[str], payload: dict[str, Any]) -> None:
+    _append_present_fields(parts, payload, ("field_sources", "source_trace"))
+    if payload.get("degraded"):
+        parts.append(f"degraded: {payload.get('degrade_reason')}")
+
+
+def _market_snapshot_text(payload: dict[str, Any]) -> str:
+    facts = payload.get("facts", {})
+    parts = _snapshot_header(
+        payload,
+        "market",
+        str(payload.get("symbol") or "unknown symbol"),
+    )
+    _append_present_fields(
+        parts,
+        {
+            "latest_bar": facts.get("market_hist", {}).get("latest_bar", {}),
+            "market_overview": facts.get("market_overview", {}),
+        },
+        ("latest_bar", "market_overview"),
+    )
+    _append_snapshot_metadata(parts, payload)
+    return "\n".join(parts)
+
+
+def _fundamental_snapshot_text(payload: dict[str, Any]) -> str:
+    parts = _snapshot_header(
+        payload,
+        "fundamental",
+        str(payload.get("symbol") or "unknown symbol"),
+    )
+    _append_present_fields(
+        parts,
+        payload.get("facts", {}),
+        (("info", "company_info"), ("financial_abstract", "financial_abstract")),
+    )
+    _append_snapshot_metadata(parts, payload)
+    return "\n".join(parts)
+
+
+def _notice_snapshot_text(payload: dict[str, Any]) -> str:
+    parts = _snapshot_header(
+        payload,
+        "notice",
+        str(payload.get("symbol") or "unknown symbol"),
+    )
+    _append_present_fields(
+        parts,
+        payload.get("facts", {}),
+        ("latest_notice", "recent_notices"),
+    )
+    _append_snapshot_metadata(parts, payload)
+    return "\n".join(parts)
+
+
+def _generic_snapshot_text(payload: dict[str, Any], snapshot_type: str) -> str:
+    target = (
+        payload.get("symbol")
+        or payload.get("sector")
+        or payload.get("theme")
+        or "unknown target"
+    )
+    parts = _snapshot_header(payload, snapshot_type, str(target))
+    facts = payload.get("facts", {})
+    if facts:
+        parts.append(str(facts))
+    _append_snapshot_metadata(parts, payload)
+    return "\n".join(parts)
+
+
+def _sector_snapshot_text(payload: dict[str, Any]) -> str:
+    parts = _snapshot_header(
+        payload,
+        "sector",
+        str(payload.get("sector") or "unknown sector"),
+    )
+    _append_present_fields(parts, payload.get("facts", {}), _SECTOR_FACT_FIELDS)
+    _append_snapshot_metadata(parts, payload)
+    return "\n".join(parts)
+
+
+def _logic_block_text(payload: dict[str, Any]) -> str:
+    parts = [
+        f"logic block for {payload.get('source_record_id') or 'unknown source'}",
+        f"block_type: {payload.get('block_type')}",
+        f"text: {payload.get('text', '')}",
+    ]
+    _append_present_fields(
+        parts,
+        payload,
+        ("normalized_claim", "symbols", "sectors", "risk_flags"),
+    )
+    return "\n".join(parts)
+
+
+def _distilled_dimension_text(payload: dict[str, Any]) -> str:
+    dimension_name = payload.get("dimension_name")
+    canonical_name = payload.get("canonical_dimension_name") or dimension_name
+    parts = [
+        f"distilled dimension: {dimension_name}",
+        f"canonical_dimension_name: {canonical_name}",
+        f"dimension_family: {payload.get('dimension_family') or ''}",
+        f"dimension_category: {payload.get('dimension_category')}",
+    ]
+    _append_present_fields(
+        parts,
+        payload,
+        (
+            "alias_hits",
+            "scenario_tags",
+            "methodology_tags",
+            "dimension_tags",
+            "supported_claim_block_ids",
+            "evidence_block_ids",
+        ),
+    )
+    return "\n".join(parts)
+
+
+def _review_finding_text(payload: dict[str, Any]) -> str:
+    parts = [
+        f"review finding for {payload.get('target_kind') or 'unknown_target'}",
+        f"finding_type: {payload.get('finding_type')}",
+        f"severity: {payload.get('severity')}",
+        f"verdict: {payload.get('verdict')}",
+        f"reason: {payload.get('reason', '')}",
+    ]
+    _append_present_fields(parts, payload, ("suggested_action",))
+    return "\n".join(parts)
+
+
+def _methodology_result_text(payload: dict[str, Any]) -> str:
+    parts = [
+        f"methodology result for {payload.get('symbol') or 'unknown_symbol'}",
+        f"methodology_type: {payload.get('methodology_type')}",
+    ]
+    _append_present_fields(
+        parts,
+        payload,
+        (
+            "peer_group_tags",
+            "assumption_tags",
+            "sensitivity_tags",
+            "valuation_band",
+            "methodology_result",
+        ),
+    )
+    return "\n".join(parts)
+
+
+def _generic_payload_text(payload: dict[str, Any]) -> str:
+    parts = [
+        str(payload[key])
+        for key in ("title", "content", "summary", "conclusion", "risk")
+        if payload.get(key)
+    ]
+    return "\n".join(parts or [str(payload)])
 
 
 class QdrantUnavailableError(RuntimeError):
@@ -252,196 +454,33 @@ class QdrantAdapter:
     def _payload_text(self, payload: dict[str, Any]) -> str:
         snapshot_type = payload.get("snapshot_type")
         if snapshot_type == "market":
-            facts = payload.get("facts", {})
-            latest_bar = facts.get("market_hist", {}).get("latest_bar", {})
-            overview = facts.get("market_overview", {})
-            parts = [
-                f"market snapshot for {payload.get('symbol') or 'unknown symbol'}",
-                f"query: {payload.get('query', '')}",
-                f"snapshot_date: {payload.get('snapshot_date', '')}",
-            ]
-            if latest_bar:
-                parts.append(f"latest_bar: {latest_bar}")
-            if overview:
-                parts.append(f"market_overview: {overview}")
-            if payload.get("field_sources"):
-                parts.append(f"field_sources: {payload.get('field_sources')}")
-            if payload.get("source_trace"):
-                parts.append(f"source_trace: {payload.get('source_trace')}")
-            if payload.get("degraded"):
-                parts.append(f"degraded: {payload.get('degrade_reason')}")
-            return "\n".join(parts)
+            return _market_snapshot_text(payload)
 
         if snapshot_type == "fundamental":
-            facts = payload.get("facts", {})
-            parts = [
-                f"fundamental snapshot for {payload.get('symbol') or 'unknown symbol'}",
-                f"query: {payload.get('query', '')}",
-                f"snapshot_date: {payload.get('snapshot_date', '')}",
-            ]
-            if facts.get("info"):
-                parts.append(f"company_info: {facts['info']}")
-            if facts.get("financial_abstract"):
-                parts.append(f"financial_abstract: {facts['financial_abstract']}")
-            if payload.get("field_sources"):
-                parts.append(f"field_sources: {payload.get('field_sources')}")
-            if payload.get("source_trace"):
-                parts.append(f"source_trace: {payload.get('source_trace')}")
-            if payload.get("degraded"):
-                parts.append(f"degraded: {payload.get('degrade_reason')}")
-            return "\n".join(parts)
+            return _fundamental_snapshot_text(payload)
 
         if snapshot_type == "notice":
-            facts = payload.get("facts", {})
-            parts = [
-                f"notice snapshot for {payload.get('symbol') or 'unknown symbol'}",
-                f"query: {payload.get('query', '')}",
-                f"snapshot_date: {payload.get('snapshot_date', '')}",
-            ]
-            if facts.get("latest_notice"):
-                parts.append(f"latest_notice: {facts['latest_notice']}")
-            if facts.get("recent_notices"):
-                parts.append(f"recent_notices: {facts['recent_notices']}")
-            if payload.get("field_sources"):
-                parts.append(f"field_sources: {payload.get('field_sources')}")
-            if payload.get("source_trace"):
-                parts.append(f"source_trace: {payload.get('source_trace')}")
-            if payload.get("degraded"):
-                parts.append(f"degraded: {payload.get('degrade_reason')}")
-            return "\n".join(parts)
+            return _notice_snapshot_text(payload)
 
-        if snapshot_type in {"lhb", "capital_flow", "sentiment", "events", "policy"}:
-            facts = payload.get("facts", {})
-            parts = [
-                f"{snapshot_type} snapshot for {payload.get('symbol') or payload.get('sector') or payload.get('theme') or 'unknown target'}",
-                f"query: {payload.get('query', '')}",
-                f"snapshot_date: {payload.get('snapshot_date', '')}",
-            ]
-            if facts:
-                parts.append(str(facts))
-            if payload.get("field_sources"):
-                parts.append(f"field_sources: {payload.get('field_sources')}")
-            if payload.get("source_trace"):
-                parts.append(f"source_trace: {payload.get('source_trace')}")
-            if payload.get("degraded"):
-                parts.append(f"degraded: {payload.get('degrade_reason')}")
-            return "\n".join(parts)
+        if snapshot_type in _GENERIC_SNAPSHOT_TYPES:
+            return _generic_snapshot_text(payload, str(snapshot_type))
 
         if snapshot_type == "sector":
-            facts = payload.get("facts", {})
-            parts = [
-                f"sector snapshot for {payload.get('sector') or 'unknown sector'}",
-                f"query: {payload.get('query', '')}",
-                f"snapshot_date: {payload.get('snapshot_date', '')}",
-            ]
-            if facts.get("sector_type"):
-                parts.append(f"sector_type: {facts['sector_type']}")
-            if facts.get("latest_hist"):
-                parts.append(f"latest_hist: {facts['latest_hist']}")
-            if facts.get("spot"):
-                parts.append(f"spot: {facts['spot']}")
-            if facts.get("benchmark"):
-                parts.append(f"benchmark: {facts['benchmark']}")
-            if facts.get("relative_strength"):
-                parts.append(f"relative_strength: {facts['relative_strength']}")
-            if facts.get("breadth"):
-                parts.append(f"breadth: {facts['breadth']}")
-            if facts.get("top_constituents"):
-                parts.append(f"top_constituents: {facts['top_constituents']}")
-            if facts.get("catalyst_samples"):
-                parts.append(f"catalyst_samples: {facts['catalyst_samples']}")
-            if facts.get("theme_news"):
-                parts.append(f"theme_news: {facts['theme_news']}")
-            if facts.get("policy_signals"):
-                parts.append(f"policy_signals: {facts['policy_signals']}")
-            if facts.get("regulatory_signals"):
-                parts.append(f"regulatory_signals: {facts['regulatory_signals']}")
-            if facts.get("signal_scorecard"):
-                parts.append(f"signal_scorecard: {facts['signal_scorecard']}")
-            if facts.get("catalyst_digest"):
-                parts.append(f"catalyst_digest: {facts['catalyst_digest']}")
-            if payload.get("field_sources"):
-                parts.append(f"field_sources: {payload.get('field_sources')}")
-            if payload.get("source_trace"):
-                parts.append(f"source_trace: {payload.get('source_trace')}")
-            if payload.get("degraded"):
-                parts.append(f"degraded: {payload.get('degrade_reason')}")
-            return "\n".join(parts)
+            return _sector_snapshot_text(payload)
 
         if payload.get("block_type"):
-            parts = [
-                f"logic block for {payload.get('source_record_id') or 'unknown source'}",
-                f"block_type: {payload.get('block_type')}",
-                f"text: {payload.get('text', '')}",
-            ]
-            if payload.get("normalized_claim"):
-                parts.append(f"normalized_claim: {payload['normalized_claim']}")
-            if payload.get("symbols"):
-                parts.append(f"symbols: {payload['symbols']}")
-            if payload.get("sectors"):
-                parts.append(f"sectors: {payload['sectors']}")
-            if payload.get("risk_flags"):
-                parts.append(f"risk_flags: {payload['risk_flags']}")
-            return "\n".join(parts)
+            return _logic_block_text(payload)
 
         if payload.get("dimension_name"):
-            parts = [
-                f"distilled dimension: {payload.get('dimension_name')}",
-                f"canonical_dimension_name: {payload.get('canonical_dimension_name') or payload.get('dimension_name')}",
-                f"dimension_family: {payload.get('dimension_family') or ''}",
-                f"dimension_category: {payload.get('dimension_category')}",
-            ]
-            if payload.get("alias_hits"):
-                parts.append(f"alias_hits: {payload['alias_hits']}")
-            if payload.get("scenario_tags"):
-                parts.append(f"scenario_tags: {payload['scenario_tags']}")
-            if payload.get("methodology_tags"):
-                parts.append(f"methodology_tags: {payload['methodology_tags']}")
-            if payload.get("dimension_tags"):
-                parts.append(f"dimension_tags: {payload['dimension_tags']}")
-            if payload.get("supported_claim_block_ids"):
-                parts.append(f"supported_claim_block_ids: {payload['supported_claim_block_ids']}")
-            if payload.get("evidence_block_ids"):
-                parts.append(f"evidence_block_ids: {payload['evidence_block_ids']}")
-            return "\n".join(parts)
+            return _distilled_dimension_text(payload)
 
         if payload.get("finding_type"):
-            parts = [
-                f"review finding for {payload.get('target_kind') or 'unknown_target'}",
-                f"finding_type: {payload.get('finding_type')}",
-                f"severity: {payload.get('severity')}",
-                f"verdict: {payload.get('verdict')}",
-                f"reason: {payload.get('reason', '')}",
-            ]
-            if payload.get("suggested_action"):
-                parts.append(f"suggested_action: {payload['suggested_action']}")
-            return "\n".join(parts)
+            return _review_finding_text(payload)
 
         if payload.get("methodology_type"):
-            parts = [
-                f"methodology result for {payload.get('symbol') or 'unknown_symbol'}",
-                f"methodology_type: {payload.get('methodology_type')}",
-            ]
-            if payload.get("peer_group_tags"):
-                parts.append(f"peer_group_tags: {payload.get('peer_group_tags')}")
-            if payload.get("assumption_tags"):
-                parts.append(f"assumption_tags: {payload.get('assumption_tags')}")
-            if payload.get("sensitivity_tags"):
-                parts.append(f"sensitivity_tags: {payload.get('sensitivity_tags')}")
-            if payload.get("valuation_band"):
-                parts.append(f"valuation_band: {payload.get('valuation_band')}")
-            if payload.get("methodology_result"):
-                parts.append(f"methodology_result: {payload.get('methodology_result')}")
-            return "\n".join(parts)
+            return _methodology_result_text(payload)
 
-        text_parts = []
-        for key in ("title", "content", "summary", "conclusion", "risk"):
-            value = payload.get(key)
-            if value:
-                text_parts.append(str(value))
-        if not text_parts:
-            text_parts.append(str(payload))
-        return "\n".join(text_parts)
+        return _generic_payload_text(payload)
 
     def _build_filter(self, filters: dict[str, Any]) -> models.Filter | None:
         allowed_keys = {

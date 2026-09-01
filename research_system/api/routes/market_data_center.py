@@ -31,7 +31,7 @@ class CollectionJobRequest(BaseModel):
     dimensions: list[str] | Literal["all"] = "all"
     mode: Literal["missing_or_stale", "force_all"] = "missing_or_stale"
     max_concurrency: int = Field(default=5, ge=1, le=5)
-    publish_when_complete: bool = True
+    publish_when_complete: bool = False
     asset_family: Literal["auto", "equity", "fund"] = "auto"
     top_n: Literal[10] = 10
 
@@ -67,6 +67,7 @@ class CollectionRetryRequest(BaseModel):
             )
         )
 
+
     @field_validator("dimensions")
     @classmethod
     def normalize_retry_dimensions(cls, value: list[str]) -> list[str]:
@@ -75,6 +76,13 @@ class CollectionRetryRequest(BaseModel):
                 str(item or "").strip() for item in value if str(item or "").strip()
             )
         )
+
+
+class CollectionFreezeConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_hash: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+    acknowledge_degraded: bool = False
 
 
 class ManualSnapshotRequest(BaseModel):
@@ -174,12 +182,16 @@ def _call(callable_, *args, **kwargs):
         ) from exc
 
 
+async def _call_service(callable_, *args, **kwargs):
+    return await run_in_threadpool(_call, callable_, *args, **kwargs)
+
+
 @router.get("/contract")
 async def get_contract(
     market: Annotated[str, Query(min_length=1, max_length=64)] = "CN_EQUITY",
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
-    return await run_in_threadpool(_call, service.get_contract, market=market)
+    return await _call_service(service.get_contract, market=market)
 
 
 @router.post("/instruments/resolve")
@@ -189,8 +201,7 @@ async def resolve_instrument(
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
     del principal
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.resolve_instrument,
         query=request.query,
         asset_family=request.asset_family,
@@ -206,8 +217,7 @@ async def get_coverage(
     cutoff_at: datetime | None = None,
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.get_coverage,
         symbol=symbol,
         market=market,
@@ -225,8 +235,7 @@ async def list_snapshots(
     offset: Annotated[int, Query(ge=0)] = 0,
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.list_snapshots,
         symbol=symbol,
         dimension_id=dimension_id,
@@ -238,7 +247,7 @@ async def list_snapshots(
 
 @router.get("/snapshots/{snapshot_id}")
 async def get_snapshot(snapshot_id: str, service=_MARKET_DATA_CENTER_DEPENDENCY) -> dict[str, Any]:
-    return await run_in_threadpool(_call, service.get_snapshot, snapshot_id)
+    return await _call_service(service.get_snapshot, snapshot_id)
 
 
 @router.post("/collection-jobs", status_code=status.HTTP_202_ACCEPTED)
@@ -248,8 +257,7 @@ async def create_collection_job(
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
     tenant_id, user_id, actor_id = _owner(principal)
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.create_collection_job,
         tenant_id=tenant_id,
         user_id=user_id,
@@ -270,8 +278,7 @@ async def list_collection_jobs(
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
     tenant_id, user_id, _ = _owner(principal)
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.list_collection_jobs,
         tenant_id=tenant_id,
         user_id=user_id,
@@ -291,8 +298,7 @@ async def get_collection_job(
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
     tenant_id, user_id, _ = _owner(principal)
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.get_collection_job,
         job_id,
         tenant_id=tenant_id,
@@ -308,8 +314,7 @@ async def retry_failed_collection_tasks(
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
     tenant_id, user_id, actor_id = _owner(principal)
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.retry_failed,
         job_id,
         tenant_id=tenant_id,
@@ -320,6 +325,44 @@ async def retry_failed_collection_tasks(
     )
 
 
+@router.post("/collection-jobs/{job_id}/confirm-freeze")
+async def confirm_collection_freeze(
+    job_id: str,
+    request: CollectionFreezeConfirmRequest,
+    principal: ApiPrincipal = _PRINCIPAL_DEPENDENCY,
+    service=_MARKET_DATA_CENTER_DEPENDENCY,
+) -> dict[str, Any]:
+    tenant_id, user_id, actor_id = _owner(principal)
+    return await _call_service(
+        service.confirm_collection_freeze,
+        job_id,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        actor_id=actor_id,
+        proposal_hash=request.proposal_hash,
+        acknowledge_degraded=request.acknowledge_degraded,
+    )
+
+
+@router.post(
+    "/collection-jobs/{job_id}/agent-recovery",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_collection_agent_recovery(
+    job_id: str,
+    principal: ApiPrincipal = _PRINCIPAL_DEPENDENCY,
+    service=_MARKET_DATA_CENTER_DEPENDENCY,
+) -> dict[str, Any]:
+    tenant_id, user_id, actor_id = _owner(principal)
+    return await _call_service(
+        service.start_collection_agent_recovery,
+        job_id,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        actor_id=actor_id,
+    )
+
+
 @router.post("/collection-jobs/{job_id}/cancel")
 async def cancel_collection_job(
     job_id: str,
@@ -327,8 +370,7 @@ async def cancel_collection_job(
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
     tenant_id, user_id, actor_id = _owner(principal)
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.cancel_collection_job,
         job_id,
         tenant_id=tenant_id,
@@ -344,8 +386,7 @@ async def create_manual_snapshot(
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
     tenant_id, user_id, actor_id = _owner(principal)
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.create_manual_snapshot,
         tenant_id=tenant_id,
         user_id=user_id,
@@ -362,8 +403,7 @@ async def revoke_snapshot(
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
     _, _, actor_id = _owner(principal)
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.revoke_snapshot,
         snapshot_id,
         actor_id=actor_id,
@@ -379,8 +419,7 @@ async def resolve_conflict(
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
     _, _, actor_id = _owner(principal)
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.resolve_conflict,
         conflict_id,
         actor_id=actor_id,
@@ -396,8 +435,7 @@ async def list_bundles(
     offset: Annotated[int, Query(ge=0)] = 0,
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.list_bundles,
         symbol=symbol,
         as_of_date=as_of_date,
@@ -408,7 +446,7 @@ async def list_bundles(
 
 @router.get("/bundles/{bundle_id}")
 async def get_bundle(bundle_id: str, service=_MARKET_DATA_CENTER_DEPENDENCY) -> dict[str, Any]:
-    return await run_in_threadpool(_call, service.get_bundle, bundle_id)
+    return await _call_service(service.get_bundle, bundle_id)
 
 
 @router.post("/bundles/publish", status_code=status.HTTP_201_CREATED)
@@ -418,8 +456,7 @@ async def publish_bundle(
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
     _, _, actor_id = _owner(principal)
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.publish_bundle,
         actor_id=actor_id,
         request=request.model_dump(mode="json"),
@@ -433,8 +470,7 @@ async def list_subscriptions(
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
     tenant_id, user_id, _ = _owner(principal)
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.list_subscriptions,
         tenant_id=tenant_id,
         user_id=user_id,
@@ -450,8 +486,7 @@ async def upsert_subscription(
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
     tenant_id, user_id, actor_id = _owner(principal)
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.upsert_subscription,
         symbol=symbol,
         tenant_id=tenant_id,
@@ -463,12 +498,12 @@ async def upsert_subscription(
 
 @router.get("/providers")
 async def list_providers(service=_MARKET_DATA_CENTER_DEPENDENCY) -> dict[str, Any]:
-    return await run_in_threadpool(_call, service.list_providers)
+    return await _call_service(service.list_providers)
 
 
 @router.post("/providers/{provider_id}/test")
 async def test_provider(provider_id: str, service=_MARKET_DATA_CENTER_DEPENDENCY) -> dict[str, Any]:
-    return await run_in_threadpool(_call, service.test_provider, provider_id)
+    return await _call_service(service.test_provider, provider_id)
 
 
 @router.post("/report-manifests", status_code=status.HTTP_201_CREATED)
@@ -478,8 +513,7 @@ async def create_report_manifest(
     service=_MARKET_DATA_CENTER_DEPENDENCY,
 ) -> dict[str, Any]:
     tenant_id, user_id, actor_id = _owner(principal)
-    return await run_in_threadpool(
-        _call,
+    return await _call_service(
         service.create_report_manifest,
         tenant_id=tenant_id,
         user_id=user_id,

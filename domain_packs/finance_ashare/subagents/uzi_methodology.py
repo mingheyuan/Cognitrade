@@ -21,7 +21,7 @@ from research_system.adapters.vendors.market_router import MarketRouter
 
 
 UZI_METHOD_VERSION = "3.9.4-adapted"
-UZI_SOURCE_COMMIT = "1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4"
+UZI_SOURCE_COMMIT = "b3665e85b8666477038e11157d8e8feb0e006b76"
 
 _PROFILES: dict[str, dict[str, Any]] = {
     "lite": {
@@ -799,8 +799,21 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
     if debt_ratio is not None and abs(debt_ratio) <= 1:
         debt_ratio *= 100
     pct_change = _first_number(market, ("pct_change", "change_pct", "涨跌幅"))
-    revenue_growth = _first_number(financial, ("revenue_growth", "revenue_yoy", "营收同比"))
-    revenue_growth_source = "financial_abstract" if revenue_growth is not None else None
+    revenue_growth = _first_number(
+        financial,
+        ("revenue_growth_yoy", "revenue_growth", "revenue_yoy", "营收同比"),
+    )
+    revenue_growth_source = (
+        str(financial.get("revenue_growth_source") or "financial_abstract")
+        if revenue_growth is not None
+        else None
+    )
+    revenue_growth_period = (
+        str(financial.get("revenue_growth_period") or "").strip() or None
+    )
+    revenue_growth_basis = (
+        str(financial.get("revenue_growth_basis") or "").strip() or None
+    )
     if revenue_growth is None:
         revenue_growth, revenue_growth_source = first_number_with_source(
             (
@@ -1138,6 +1151,9 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
         "revenue_growth": revenue_growth,
         "revenue_growth_latest": revenue_growth,
         "rev_growth_yoy": revenue_growth,
+        "revenue_growth_period": revenue_growth_period,
+        "revenue_growth_basis": revenue_growth_basis,
+        "revenue_growth_source": revenue_growth_source,
         "revenue_growth_3y_cagr": revenue_growth_3y_cagr,
         "rev_growth_3y": revenue_growth_3y_cagr,
         "rev_growth_3y_pct": revenue_growth_3y_cagr,
@@ -1216,6 +1232,9 @@ def build_features(snapshot_rows: list[dict[str, Any]], symbol: str) -> dict[str
             "revenue_growth": revenue_growth_source,
             "revenue_growth_latest": revenue_growth_source,
             "rev_growth_yoy": revenue_growth_source,
+            "revenue_growth_period": revenue_growth_source,
+            "revenue_growth_basis": revenue_growth_source,
+            "revenue_growth_source": revenue_growth_source,
             "profit_growth": profit_growth_source,
             "net_profit_growth_latest": profit_growth_source,
             "gross_margin": gross_margin_source,

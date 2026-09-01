@@ -47,6 +47,7 @@ import type {
 } from '../strategy-contracts'
 import type { RunStepsPayload } from '../research-contracts'
 import { errorMessageWithRequestId, localizeErrorMessage } from '../utils/error-message'
+import { asOptionalNumber, asRecord } from '../utils/value'
 import { AppSelect } from './AppSelect'
 
 type FundAnalysisDossierProps = {
@@ -96,12 +97,6 @@ const REPORT_PROFILES: Array<{ value: HoldingReportProfile; label: string; detai
   { value: 'deep', label: '深度', detail: '15–20 分钟 · 66 位 Agent 角色评审与多空辩论' },
 ]
 
-function asRecord(value: unknown): RecordValue {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as RecordValue
-    : {}
-}
-
 function records(value: unknown): RecordValue[] {
   return Array.isArray(value) ? value.map(asRecord).filter((row) => Object.keys(row).length > 0) : []
 }
@@ -111,15 +106,8 @@ function artifactContent(artifacts: Array<Record<string, unknown>>, type: string
   return asRecord(artifact?.content)
 }
 
-function numberValue(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (value == null || value === '') return null
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : null
-}
-
 function percent(value: unknown, signed = true): string {
-  const number = numberValue(value)
+  const number = asOptionalNumber(value)
   return number == null ? '—' : `${signed && number > 0 ? '+' : ''}${number.toFixed(2)}%`
 }
 
@@ -132,7 +120,7 @@ function disclosureStatus(value: unknown): string {
 }
 
 function numberText(value: unknown, digits = 2): string {
-  const number = numberValue(value)
+  const number = asOptionalNumber(value)
   return number == null ? '—' : number.toLocaleString('zh-CN', { maximumFractionDigits: digits })
 }
 
@@ -438,7 +426,7 @@ export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun,
             <article key={String(row.fund_code)}>
               <span>#{String(row.rank || '—')}</span>
               <div><strong>{String(row.fund_name || row.fund_code)}</strong><small>{String(row.fund_code)} · {String(row.comparison_group || row.fund_type || '未分组')}</small></div>
-              <div><strong>{numberText(row.score, 1)}</strong><small>覆盖 {percent((numberValue(row.score_coverage) || 0) * 100, false)}</small></div>
+              <div><strong>{numberText(row.score, 1)}</strong><small>覆盖 {percent((asOptionalNumber(row.score_coverage) || 0) * 100, false)}</small></div>
               <p>{String(row.reason || '未返回推荐理由')}</p>
               <p className="is-risk">{String(row.risk || '未返回风险摘要')}</p>
             </article>
@@ -478,7 +466,7 @@ export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun,
         <section>
           <header><Scale size={15} /><h3>选择规则</h3></header>
           <p>{String(policy.description || '后端未返回选择规则说明')}</p>
-          <div className="fund-policy-metrics"><span>最低证据覆盖<strong>{percent((numberValue(policy.minimum_score_coverage) || 0) * 100, false)}</strong></span><span>{isSingleFund ? '横向比较' : '最小可比样本'}<strong>{isSingleFund ? '不要求' : numberText(policy.minimum_comparable_sample, 0)}</strong></span></div>
+          <div className="fund-policy-metrics"><span>最低证据覆盖<strong>{percent((asOptionalNumber(policy.minimum_score_coverage) || 0) * 100, false)}</strong></span><span>{isSingleFund ? '横向比较' : '最小可比样本'}<strong>{isSingleFund ? '不要求' : numberText(policy.minimum_comparable_sample, 0)}</strong></span></div>
           <BusinessDataView value={policy.components || []} fieldKey="components" path="fund_analysis.selection_policy.components" compact />
           <small>{String(policy.non_imputation_rule || '缺失数据不补值。')}</small>
         </section>
@@ -552,12 +540,12 @@ function FundCandidateDossier({
   const targetFund = targetFundHoldings[0] || {}
   const targetFundSource = String(candidate.target_fund_source_ref || '')
   const allocationTotal = assetAllocation.reduce(
-    (total, row) => total + (numberValue(row.weight_pct) || 0),
+    (total, row) => total + (asOptionalNumber(row.weight_pct) || 0),
     0,
   )
   const gaps = Array.isArray(candidate.data_gap) ? candidate.data_gap.map(String) : []
   const isSingleFund = String(candidate.analysis_mode || '') === 'single_fund'
-  const usesSinceInceptionReturn = numberValue(returns.year_3) == null
+  const usesSinceInceptionReturn = asOptionalNumber(returns.year_3) == null
   const [reportProfile, setReportProfile] = useState<HoldingReportProfile | ''>('')
   const [selectedBatchId, setSelectedBatchId] = useState('')
   const [confirmStale, setConfirmStale] = useState(false)
@@ -649,7 +637,7 @@ function FundCandidateDossier({
         <span className="fund-rank">{isSingleFund ? '分析' : candidate.rank ? `#${candidate.rank}` : '—'}</span>
         <span><strong>{String(candidate.fund_name || candidate.fund_code)}</strong><small>{String(candidate.fund_code || '—')} · {String(candidate.fund_type || '类型未返回')}</small></span>
         <span><small>{isSingleFund ? '分析状态' : '综合分'}</small><strong>{isSingleFund ? candidate.quality_status === 'data_gap' ? '证据不足' : '已完成' : numberText(candidate.score, 1)}</strong></span>
-        <span><small>证据覆盖</small><strong>{percent((numberValue(candidate.score_coverage) || 0) * 100, false)}</strong></span>
+        <span><small>证据覆盖</small><strong>{percent((asOptionalNumber(candidate.score_coverage) || 0) * 100, false)}</strong></span>
         <span className={`quality-pill quality-pill--${String(candidate.quality_status || 'data_gap')}`}>{qualityLabel(candidate.quality_status)}</span>
         <ChevronDown size={16} />
       </summary>
@@ -673,7 +661,7 @@ function FundCandidateDossier({
           {signalError && <p className="fund-strategy-bridge-error"><AlertCircle size={12} />{signalError}</p>}
         </section>
         <div className="fund-return-grid">
-          {RETURN_FIELDS.map(([key, label]) => <article key={key}><span>{label}</span><strong className={(numberValue(returns[key]) || 0) >= 0 ? 'number-up' : 'number-down'}>{percent(returns[key])}</strong></article>)}
+          {RETURN_FIELDS.map(([key, label]) => <article key={key}><span>{label}</span><strong className={(asOptionalNumber(returns[key]) || 0) >= 0 ? 'number-up' : 'number-down'}>{percent(returns[key])}</strong></article>)}
         </div>
 
         <div className="fund-core-grid">
@@ -731,8 +719,8 @@ function FundCandidateDossier({
             <article key={String(row.component)}>
               <span>{String(row.component) === 'return_3y_annualized' && usesSinceInceptionReturn ? '成立以来年化收益' : SCORE_LABELS[String(row.component)] || String(row.component)}</span>
               <strong>{numberText(row.value, 2)}</strong>
-              <div><i style={{ width: `${Math.max(0, Math.min(100, numberValue(row.percentile) || 0))}%` }} /></div>
-              <small>同类百分位 {numberText(row.percentile, 1)} · 权重 {percent((numberValue(row.weight) || 0) * 100, false)}{String(row.component) === 'return_3y_annualized' && usesSinceInceptionReturn ? ` · ${String(risk.period_start || '成立')} 至 ${String(risk.period_end || '最新')}` : ''}</small>
+              <div><i style={{ width: `${Math.max(0, Math.min(100, asOptionalNumber(row.percentile) || 0))}%` }} /></div>
+              <small>同类百分位 {numberText(row.percentile, 1)} · 权重 {percent((asOptionalNumber(row.weight) || 0) * 100, false)}{String(row.component) === 'return_3y_annualized' && usesSinceInceptionReturn ? ` · ${String(risk.period_start || '成立')} 至 ${String(risk.period_end || '最新')}` : ''}</small>
             </article>
           ))}</div> : <p>没有足够可比数据形成评分拆解。</p>}
         </section>

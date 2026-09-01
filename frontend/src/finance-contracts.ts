@@ -1,4 +1,4 @@
-export type JsonRecord = Record<string, unknown>
+type JsonRecord = Record<string, unknown>
 
 export type MarketQuote = {
   symbol: string
@@ -35,7 +35,7 @@ export type PaperAccount = {
   }
 }
 
-export type PaperPosition = {
+type PaperPosition = {
   symbol: string
   name: string
   quantity: number

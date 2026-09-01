@@ -17,6 +17,7 @@ export function ReadinessSummary({ contract, coverage, fundJob }: { contract: Ma
   const totalSlots = portfolio?.total_slots || ((portfolio?.total_holdings || 10) * 22)
   const readySlots = portfolio?.ready_slots ?? Math.max(0, totalSlots - missingSlots)
   const portfolioReady = Boolean(fundJob && ready === expected && missingSlots === 0 && ['completed', 'succeeded'].includes(fundJob.status))
+  const portfolioFrozen = fundJob?.freeze_status === 'frozen'
   const reportGeneratable = coverage.report_ready || coverage.report_generatable
   return (
     <section className="mdc-readiness" aria-labelledby="mdc-readiness-title">
@@ -27,7 +28,7 @@ export function ReadinessSummary({ contract, coverage, fundJob }: { contract: Ma
         <div>
           <span className="mdc-eyebrow">UZI 3.9.4 DATA GATE</span>
           <h2 id="mdc-readiness-title">{coverage.symbol} · {coverage.as_of_date}</h2>
-          <p>{isFund ? `截止 ${coverage.cutoff_at || '市场本地日终'}，主指标按前十大股票的日级 Bundle 计算。` : `22 槽完整即可冻结为 Agent 输入；UZI 原生 medium 数据预检用于触发补数，最终仅由完整 Agent 工作流的 self-review 决定能否出报告。`}</p>
+          <p>{isFund ? `截止 ${coverage.cutoff_at || '市场本地日终'}，先核查前十大股票的日级快照；完整候选仍需用户确认才冻结 Bundle。` : '22 槽先按 UZI 原生逻辑采集落库，缺口可由 Agent 补采；门禁通过只形成发布候选，不会自动冻结 Bundle。'}</p>
         </div>
       </div>
       <div className="mdc-readiness-gates">
@@ -35,12 +36,12 @@ export function ReadinessSummary({ contract, coverage, fundJob }: { contract: Ma
           <article>
             {coverage.report_ready ? <CheckCircle2 size={18} /> : <CircleDashed size={18} />}
             <span>父持仓入口</span>
-            <StatusBadge label={coverage.report_ready ? `${parentReady}/${parentExpected} · Bundle 可用` : `${parentReady}/${parentExpected} · 未就绪`} tone={coverage.report_ready ? 'good' : 'warning'} />
+            <StatusBadge label={coverage.report_ready ? `${parentReady}/${parentExpected} · 数据可用` : `${parentReady}/${parentExpected} · 未就绪`} tone={coverage.report_ready ? 'good' : 'warning'} />
           </article>
           <article>
             {portfolioReady ? <FileLock2 size={18} /> : <ShieldAlert size={18} />}
-            <span>组合报告就绪</span>
-            <StatusBadge label={portfolioReady ? '可冻结' : `${ready}/${expected} 只股票`} tone={portfolioReady ? 'good' : 'danger'} />
+            <span>组合 Bundle</span>
+            <StatusBadge label={portfolioFrozen ? '已冻结' : portfolioReady ? '待确认冻结' : `${ready}/${expected} 只股票`} tone={portfolioFrozen ? 'good' : portfolioReady ? 'info' : 'danger'} />
           </article>
           <article>
             <Archive size={18} />

@@ -54,6 +54,8 @@ class _MarketDataCenter:
         self.read_calls: list[str] = []
         self.explicit_collection_calls: list[dict] = []
         self.manual_snapshot_calls: list[dict] = []
+        self.agent_recovery_calls: list[dict] = []
+        self.confirm_freeze_calls: list[dict] = []
         self.start_calls = 0
         self.closed = False
 
@@ -130,6 +132,22 @@ class _MarketDataCenter:
     def create_collection_job(self, **kwargs):
         self.explicit_collection_calls.append(dict(kwargs))
         return {"id": "job-explicit-1", "status": "queued"}
+
+    def start_collection_agent_recovery(self, job_id: str, **kwargs):
+        self.agent_recovery_calls.append({"job_id": job_id, **kwargs})
+        return {
+            "id": job_id,
+            "agent_recovery": {"status": "queued"},
+            "freeze_status": "awaiting_recovery",
+        }
+
+    def confirm_collection_freeze(self, job_id: str, **kwargs):
+        self.confirm_freeze_calls.append({"job_id": job_id, **kwargs})
+        return {
+            "id": job_id,
+            "publication_status": "published",
+            "freeze_status": "frozen",
+        }
 
     def create_manual_snapshot(self, **kwargs):
         self.manual_snapshot_calls.append(dict(kwargs))
@@ -273,7 +291,7 @@ class MarketDataApiAppIntegrationTests(unittest.TestCase):
                 "dimensions": ["0_basic"],
                 "mode": "missing_or_stale",
                 "max_concurrency": 5,
-                "publish_when_complete": True,
+                "publish_when_complete": False,
             },
         )
         self.assertEqual(created.status_code, 202, created.text)
@@ -301,6 +319,42 @@ class MarketDataApiAppIntegrationTests(unittest.TestCase):
         self.assertEqual(payload["as_of_date"], query_date)
         self.assertEqual(payload["status"], "partial")
         self.assertEqual(payload["limit"], 25)
+
+    def test_collection_agent_recovery_and_confirm_freeze_forward_owner_scope(
+        self,
+    ) -> None:
+        recovery = self.client.post(
+            "/api/v2/finance/market-data/collection-jobs/job-1/agent-recovery",
+            headers=auth_headers("ordinary-user-token"),
+        )
+        self.assertEqual(recovery.status_code, 202, recovery.text)
+        self.assertEqual(recovery.json()["agent_recovery"]["status"], "queued")
+        self.assertEqual(self.center.agent_recovery_calls[0]["job_id"], "job-1")
+        self.assertEqual(self.center.agent_recovery_calls[0]["user_id"], "api_token")
+
+        missing_proposal = self.client.post(
+            "/api/v2/finance/market-data/collection-jobs/job-1/confirm-freeze",
+            headers=auth_headers("ordinary-user-token"),
+            json={},
+        )
+        self.assertEqual(missing_proposal.status_code, 422, missing_proposal.text)
+        self.assertEqual(self.center.confirm_freeze_calls, [])
+
+        frozen = self.client.post(
+            "/api/v2/finance/market-data/collection-jobs/job-1/confirm-freeze",
+            headers=auth_headers("ordinary-user-token"),
+            json={
+                "proposal_hash": "a" * 64,
+                "acknowledge_degraded": True,
+            },
+        )
+        self.assertEqual(frozen.status_code, 200, frozen.text)
+        self.assertEqual(frozen.json()["freeze_status"], "frozen")
+        forwarded = self.center.confirm_freeze_calls[0]
+        self.assertEqual(forwarded["job_id"], "job-1")
+        self.assertEqual(forwarded["proposal_hash"], "a" * 64)
+        self.assertTrue(forwarded["acknowledge_degraded"])
+        self.assertEqual(forwarded["user_id"], "api_token")
 
     def test_collection_and_subscription_http_contract_rejects_concurrency_above_five(
         self,

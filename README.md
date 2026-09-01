@@ -10,7 +10,7 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 - Finance Workspace：证券解析与数据库优先的 Point-in-Time 行情数据中心；覆盖、快照/证据、采集任务、Bundle 修订、归档订阅和 provider 能力均可审计。
 - 策略工作台：`/strategies` 从零创建或复制系统模板，编辑、发布不可变版本、绑定基金、生成日报、预演四态信号、回测、验证和晋级；旧 `/methodology` 与 `/backtesting` 前端入口已删除。
 - 报告与信号：一天一份 point-in-time 基金报告，前十大持仓必须生成可复用的 canonical UZI 个股子报告；基金本体、持仓 UZI 与结构质量共同生成可配置复合信号，缺失数据不重权也不伪造中性值。Lite / Medium / Deep、持仓和日报只消费已冻结 Bundle/manifest，报告阶段不联网补数。
-- 基金回测：`/strategy-backtests/**` 是唯一公开回测入口，仅接受已发布的不可变策略版本；默认执行 `fund_only` 基金本体净值回测，`holdings_portfolio` 仅保留为高级穿透研究。相同输入的重复运行默认折叠，完整审计记录不删除。
+- 基金回测：`/strategy-backtests/**` 是唯一公开回测入口，仅接受已发布的不可变策略版本；默认执行最近 30 天的 `fund_only` 基金本体净值回测，`holdings_portfolio` 仅保留为高级穿透研究。“检查并启动回测”会内联预检，满足条件时在同一次操作中入队；历史区基于当前已加载的最近 200 次原始运行，默认展示最近 3 个逻辑回测，也可展开这些已加载的原始尝试；展示折叠不会删除审计记录。
 - 模拟交易：VeighNa PaperAccount 到价撮合，服务端现金/持仓账本、限价挂单、资金冻结、撤单、费用、T+1 和幂等订单；只有人工确认的 Verified 版本可晋级 Promoted 并通过策略链路下单。
 - DomainPack：`finance_ashare` 与 `legal_contract` 通过声明式能力、工具、Gate 和报告合同接入。
 - UZI 报告：研究工作台可从 ArtifactBoard 直接打开与上游 v3.9.4 分析及呈现层逐文件对齐的原生 HTML，或下载同源 PDF；旧 UZI 文件数据缓存不迁移、不回退、不作为新报告的事实源。
@@ -27,7 +27,7 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 已发布的不可变策略版本
   + point-in-time 基金日报 / canonical UZI 持仓报告
   -> 同版本四态信号（ALLOW_BUY / WATCH / AVOID / BLOCKED）
-  -> 回测预检
+  -> “检查并启动回测”内联预检
   -> Hikyuu 技术事件 + Cognitrade 确定性成交/费用账本
   -> 指标、基准、逐笔 lineage 与内容哈希
   -> 机器验证 + 人工确认 Verified
@@ -49,22 +49,32 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 检查无前视、lineage 完整性、确定性复跑、样本/信号覆盖、费用完整性和绩效阈值；
 机器通过后仍不能自动晋级。
 
+同一租户、用户与输入快照哈希的 `queued` / `running` 请求，在单个回测服务实例内
+会复用已有任务，防止连续点击产生并发副本；这不是跨进程唯一性保证。已完成任务仍可
+再次运行以验证确定性，失败或取消任务也可重试；这些运行及其父子关系都作为原始审计
+记录保留。
+
 完整差异、两种回测模式、费用/基准、数据库与 API 变化、升级步骤和能力边界见
 [《Cognitrade 1.0 → 2.0 中文升级报告》](./UPGRADE_REPORT_1.0_TO_2.0_CN.md)。
 UZI 对齐细节见 [《Cognitrade 2.0 中文版本说明》](./RELEASE_NOTES_2.0_CN.md)。
 
-## 2.0 数据中心：先采集并发布，再生成报告
+## 2.0 数据中心：先采集、补采、确认冻结，再生成报告
 
 正式研究数据已从 UZI 报告运行中抽离。SQLAlchemy 业务库是唯一事实源，
 数据准备和报告执行是两个独立阶段：
 
+当前生产基线固定为 UZI-Skill `3.9.4` / `b3665e85b8666477038e11157d8e8feb0e006b76`。
+新采集只写 `uzi-3.9.4-b3665e8-v1`；升级前的 `uzi-3.9.4-1b5cdcb-v1`
+Bundle 仍可只读物化和冻结 report manifest，但不会再被新任务写入。
+
 ```text
 显式采集 Job / 显式启用的归档订阅
   -> 统一证券身份解析
-  -> 原生 UZI 结果按日落库，PIT / 证据 / 字段契约独立审计
-  -> 股票：冻结 22 个原始 collector 结果槽（含显式 data_gap）
-  -> 基金：冻结 1 个 fund_top_holdings 父槽，展开 10 只 A 股 × 完整 22 槽
-  -> 发布不可变日级 Bundle
+  -> UZI 原生 provider 采集 22 维并按日写入可修订 Snapshot 草稿
+  -> UZI Stage 1：原生 provider → MX/DDGS → Playwright 自动兜底
+  -> 用户按需启动 UZI Agent：suggested-fix 缺口循环 → 三组定性 Agent evidence → 重审
+  -> 股票生成精确冻结候选；基金生成 1 个父槽 + 10 只 A 股 × 22 槽的组合候选
+  -> 用户核对 proposal hash 与缺口披露后，显式确认发布不可变日级 Bundle
   -> 冻结单股/组合 report manifest
   -> Lite / Medium / Deep / 持仓子报告 / 日报只读执行
 ```
@@ -88,7 +98,7 @@ collector（`6_fund_holders`、`similar_stocks`）”。`20_valuation_models`、
 股票可用性与报告门严格跟随 UZI：provider 返回的原生 `DimResult`
 决定该维是否有可用数据；`required_fields`、A/B 证据、PIT、过期与冲突
 只进入独立审计，不再把 UZI 认为有数据的维度改判为“不可用”。
-`report_generatable` 表示 22 个结果槽已冻结，可交给完整 Agent 恢复流程；
+`report_generatable` 表示 22 个结果槽均已有原生结果或明确缺口，可交给完整 Agent 恢复流程；
 `report_ready` 是 UZI Medium 数据阶段预检。最终是否能输出 HTML/PDF，仍由
 UZI 完整 Agent 流程结束后的原生 self-review 决定：有 critical 阻断，
 warning 允许出报告并披露。超时、未配置、无权限、解析失败或开放搜索
@@ -100,6 +110,13 @@ warning 允许出报告并披露。超时、未配置、无权限、解析失败
 这两个 opt-in 开关对股票和基金归档都生效。任务按标的 × 维度持久化
 checkpoint；基金父快照一旦成功落库，重试会复用它并只补尚未就绪的
 持仓股票槽，不会因某个子任务失败重采整个基金。
+人工 Job 无论股票还是基金都不会自动发布 Bundle：provider 采集完成后，用户可先按需
+启动 Agent 缺口补采，也可以直接审阅冻结候选；只有提交候选的精确
+`proposal_hash`（降级候选还需明确确认披露）后才会冻结。订阅 Job 的双 opt-in
+自动发布能力保持不变。Agent 补采只追加新 Snapshot，不改写既有行；已冻结 Job
+不能重试或补采，需要新建 Job 形成新修订。
+采集、Agent 与基金父任务的持久租约会定期续约，并以 owner token 阻止过期 worker
+覆盖新 worker；Bundle 发布、revision 分配与 Snapshot 撤销同样由数据库锁协调。
 兼容 `GET /api/v2/finance/market-data/{symbol}` 中的 `refresh=true` 不再刷新上游；
 `POST /api/v2/finance/market-data/report-manifests` 只冻结输入，不直接启动报告 run。
 公开证券搜索与报价 GET 同样只读数据库；`refresh=true` 不会采集。只有显式提交
@@ -110,8 +127,8 @@ checkpoint；基金父快照一旦成功落库，重试会复用它并只补尚�
 政策、事件、龙虎榜和舆情等带独立日期记录的来源会自动查询并裁剪到目标日 cutoff；
 能满足严格契约的结果按 B 级历史重建落库，查询过但没有可验证目标日记录，或仅提供
 当前状态的来源，则写入可审计 `data_gap`，自动排除评分并在报告中披露。只要 22 个槽
-都已有原生结果或明确缺口记录，就可发布 `quality=degraded` 的不可变 Bundle，
-再由 UZI Agent 尝试恢复并执行最终 self-review；`report_ready`、`report_generatable`
+都已有原生结果或明确缺口记录，就可形成 `quality=degraded` 的冻结候选；用户可先让
+UZI Agent 尝试恢复并重新生成候选，也可确认缺口披露后冻结；`report_ready`、`report_generatable`
 与 `audit_ready` 始终分别展示。
 
 基金的外部持仓获取只允许在上海时区当日的
@@ -382,13 +399,13 @@ workspace/                # 运行数据（生产由命名卷持久化）
 ## 验证
 
 ```bash
-.venv/bin/python -m unittest discover -s tests
+.venv/bin/pip install pytest
+.venv/bin/python -m pytest -q tests
 .venv/bin/python -m compileall -q research_system domain_packs scripts
 
 cd frontend
 npm run lint
-npm test -- --run
-npm run build
+npm test
 npm run build:pages
 ```
 

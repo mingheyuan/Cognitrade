@@ -66,7 +66,7 @@ export function formatDateTime(value?: string | null) {
   }).format(parsed)
 }
 
-export function formatDuration(milliseconds: number) {
+function formatDuration(milliseconds: number) {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return '—'
   const totalSeconds = Math.round(milliseconds / 1000)
   if (totalSeconds < 60) return `${totalSeconds} 秒`

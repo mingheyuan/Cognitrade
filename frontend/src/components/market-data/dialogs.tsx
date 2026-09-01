@@ -1,6 +1,6 @@
 import { AlertTriangle, FileLock2, ShieldAlert, X } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import type { DimensionDefinition, ExpandedFundHolding, ManualSnapshotInput, MarketDataConflict, ReportManifestResult, ResolvedAssetFamily, SnapshotDetail } from './types'
+import type { CollectionJob, DimensionDefinition, ExpandedFundHolding, ManualSnapshotInput, MarketDataConflict, ReportManifestResult, ResolvedAssetFamily, SnapshotDetail } from './types'
 
 function DialogFrame({ title, description, children, onClose, danger = false }: {
   title: string
@@ -177,6 +177,53 @@ export function RevokeSnapshotDialog({ snapshot, busy, onClose, onSubmit }: {
   )
 }
 
+export function ConfirmBundleFreezeDialog({ job, busy, onClose, onSubmit }: {
+  job: CollectionJob
+  busy: boolean
+  onClose: () => void
+  onSubmit: (acknowledgeDegraded: boolean) => Promise<unknown>
+}) {
+  const [confirmed, setConfirmed] = useState(false)
+  const candidate = job.publication_candidate
+  const scopes = candidate?.previews?.length ? candidate.previews : candidate?.scopes || []
+  const qualityGate = String(candidate?.quality_gate || 'strict').toLowerCase()
+  const degraded = Boolean(candidate?.degraded) || qualityGate.includes('degrad') || Boolean(candidate?.missing_dimensions?.length)
+  return (
+    <DialogFrame
+      title="确认冻结不可变 Bundle"
+      description="这是采集流程的提交边界：已落库快照会被固定为不可变 Bundle。后续补采不会修改这个版本，只能发布新的修订。"
+      onClose={onClose}
+      danger={degraded}
+    >
+      <form className="mdc-dialog-form" onSubmit={(event) => {
+        event.preventDefault()
+        if (!confirmed) return
+        void onSubmit(degraded).then(onClose).catch(() => undefined)
+      }}>
+        <div className="mdc-freeze-candidate-summary">
+          <span><strong>{job.asset_family === 'fund' ? '基金前十大持仓组合' : `${job.symbols.length} 只股票`}</strong><small>{job.start_date} — {job.end_date}</small></span>
+          <code>{candidate?.quality_gate || 'strict'}</code>
+        </div>
+        {scopes.length ? <ol className="mdc-freeze-scope-list" aria-label="将发布的 Bundle 范围">{scopes.slice(0, 12).map((scope, index) => (
+          <li key={`${scope.symbol || 'scope'}-${scope.as_of_date || index}`}>
+            <span>{scope.symbol || `范围 ${index + 1}`}</span>
+            <small>{scope.as_of_date || job.start_date}{scope.quality ? ` · ${scope.quality}` : ''}</small>
+            <strong>{scope.can_publish === false ? '不可发布' : '候选就绪'}</strong>
+          </li>
+        ))}</ol> : null}
+        {candidate?.missing_dimensions?.length ? (
+          <div className="mdc-freeze-degraded-warning" role="alert">
+            <AlertTriangle size={18} />
+            <span><strong>包含降级披露</strong><small>{candidate.missing_dimensions.length} 个维度缺口：{candidate.missing_dimensions.slice(0, 6).join('、')}{candidate.missing_dimensions.length > 6 ? '…' : ''}</small></span>
+          </div>
+        ) : null}
+        <label className="mdc-check-row mdc-freeze-confirmation"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>{degraded ? '我已阅读缺口与降级披露，仍确认冻结当前候选版本' : '我确认将当前采集草稿发布为不可变 Bundle'}</span></label>
+        <footer><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="submit" disabled={busy || !confirmed}>{busy ? '正在冻结 Bundle…' : '确认冻结 Bundle'}</button></footer>
+      </form>
+    </DialogFrame>
+  )
+}
+
 export function ReportLaunchDialog({ symbol, asOfDate, bundleId, assetFamily, holdings, busy, onClose, onSubmit, onLaunch }: {
   symbol: string
   asOfDate: string
@@ -198,7 +245,7 @@ export function ReportLaunchDialog({ symbol, asOfDate, bundleId, assetFamily, ho
   ], [])
   const isFund = assetFamily === 'fund'
   return (
-    <DialogFrame title={isFund ? '冻结前十大股票组合输入' : '冻结正式报告输入'} description={isFund ? '基金 Bundle 只负责证明前十大股票的选择与权重；基金代码不会被当成股票分析。后端将严格冻结 10 只股票 Bundle，再用同一 Manifest 启动组合报告。报告阶段外部数据调用数必须为 0。' : '先冻结不可变 Manifest，再用该 Manifest 的 ID 与 hash 精确启动报告；不会重新选择其他 Bundle，报告阶段外部数据调用数必须为 0。'} onClose={onClose}>
+    <DialogFrame title={isFund ? '创建前十大股票组合 Manifest' : '创建正式报告 Manifest'} description={isFund ? '基金 Bundle 负责证明前十大股票的选择与权重；基金代码不会被当成股票分析。后端会把已确认的 10 只股票 Bundle 绑定进同一不可变 Manifest。报告阶段外部数据调用数必须为 0。' : '从已确认冻结的 Bundle 创建不可变报告 Manifest，再用 Manifest ID 与 hash 精确启动报告；报告阶段外部数据调用数必须为 0。'} onClose={onClose}>
       <form className="mdc-dialog-form" onSubmit={(event) => {
         event.preventDefault()
         if (frozen) return
@@ -216,7 +263,7 @@ export function ReportLaunchDialog({ symbol, asOfDate, bundleId, assetFamily, ho
         <footer>
           <button className="secondary-button" type="button" onClick={onClose}>{frozen ? '稍后生成' : '取消'}</button>
           {!frozen ? (
-            <button className="primary-button" type="submit" disabled={busy}>{busy ? '正在冻结输入…' : isFund ? `冻结十大持仓 · ${profile.toUpperCase()}` : `冻结 ${profile.toUpperCase()} 输入`}</button>
+            <button className="primary-button" type="submit" disabled={busy}>{busy ? '正在创建 Manifest…' : isFund ? `创建十大持仓 · ${profile.toUpperCase()} Manifest` : `创建 ${profile.toUpperCase()} Manifest`}</button>
           ) : (
             <button className="primary-button" type="button" disabled={launching} onClick={() => {
               setLaunching(true)

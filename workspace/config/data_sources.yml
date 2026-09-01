@@ -1,7 +1,7 @@
 catalog:
   upstream: UZI-Skill
   version: 3.9.4
-  commit: 1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4
+  commit: b3665e85b8666477038e11157d8e8feb0e006b76
   source_count: 73
   metadata_registry: research_system/adapters/vendors/uzi_source_catalog.py
   semantics: catalogue entries are candidates; every run reports actual availability in source_trace

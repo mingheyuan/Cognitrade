@@ -115,7 +115,9 @@ class MarketDataCenterService:
         self.database = database
         self.settings = settings
         self.registry = registry
-        self.collection = collection or MarketDataCollectionCoordinator(database, registry=registry)
+        self.collection = collection or MarketDataCollectionCoordinator(
+            database, registry=registry, settings=settings
+        )
         self.fund_registry = FUND_TOP_HOLDINGS_REGISTRY
         self.fund_collection = fund_collection or FundHoldingCollectionCoordinator(
             database,
@@ -391,6 +393,12 @@ class MarketDataCenterService:
         request: Mapping[str, Any],
     ) -> dict[str, Any]:
         try:
+            if bool(request.get("publish_when_complete", False)):
+                raise MarketDataServiceError(
+                    "manual_auto_publish_not_allowed",
+                    "人工采集任务必须在采集完成后显式确认冻结",
+                    status_code=422,
+                )
             asset_family = str(request.get("asset_family") or "auto").strip().lower()
             identities = [
                 self._resolve_collection_identity(symbol, asset_family=asset_family)
@@ -463,6 +471,7 @@ class MarketDataCenterService:
                     equity_dimensions="all",
                     mode=str(request.get("mode") or "missing_or_stale"),
                     max_concurrency=concurrency,
+                    publish_when_complete=False,
                 )
             return self.collection.create_job(
                 tenant_id=tenant_id,
@@ -474,7 +483,7 @@ class MarketDataCenterService:
                 dimensions=request.get("dimensions", "all"),
                 mode=str(request.get("mode") or "missing_or_stale"),
                 max_concurrency=concurrency,
-                publish_when_complete=bool(request.get("publish_when_complete", True)),
+                publish_when_complete=False,
             )
         except CollectionJobError as exc:
             raise MarketDataServiceError(exc.code, exc.message, status_code=exc.status_code) from exc
@@ -635,9 +644,10 @@ class MarketDataCenterService:
             {
                 "parent_bundle_id": checkpoint.get("parent_bundle_id"),
                 "parent_bundle_hash": checkpoint.get("parent_bundle_hash"),
+                "agent_recovery": checkpoint.get("agent_recovery"),
             }
             if job.job_type == FUND_HOLDING_JOB_TYPE
-            else {}
+            else {"agent_recovery": checkpoint.get("agent_recovery")}
         )
         task_summary = summarize_tasks(tasks)
         task_summary["by_error_code"] = []
@@ -664,6 +674,8 @@ class MarketDataCenterService:
             "scoped_retry_supported": True,
             "progress": dict(job.progress_json or {}),
             "checkpoint": compact_checkpoint,
+            "agent_recovery": checkpoint.get("agent_recovery"),
+            **_collection_publication_fields(job, checkpoint),
             "cancel_requested": bool(job.cancel_requested),
             "error_summary": job.error_summary,
             "created_at": _iso(job.created_at),
@@ -740,6 +752,54 @@ class MarketDataCenterService:
             )
         except CollectionJobError as exc:
             raise MarketDataServiceError(exc.code, exc.message, status_code=exc.status_code) from exc
+
+    def confirm_collection_freeze(
+        self,
+        job_id: str,
+        *,
+        tenant_id: str,
+        user_id: str,
+        actor_id: str,
+        proposal_hash: str,
+        acknowledge_degraded: bool = False,
+    ) -> dict[str, Any]:
+        try:
+            coordinator = self._coordinator_for_job(
+                job_id, tenant_id=tenant_id, user_id=user_id
+            )
+            return coordinator.confirm_freeze(
+                job_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                actor_id=actor_id,
+                proposal_hash=proposal_hash,
+                acknowledge_degraded=acknowledge_degraded,
+            )
+        except CollectionJobError as exc:
+            raise MarketDataServiceError(exc.code, exc.message, status_code=exc.status_code) from exc
+
+    def start_collection_agent_recovery(
+        self,
+        job_id: str,
+        *,
+        tenant_id: str,
+        user_id: str,
+        actor_id: str,
+    ) -> dict[str, Any]:
+        try:
+            coordinator = self._coordinator_for_job(
+                job_id, tenant_id=tenant_id, user_id=user_id
+            )
+            return coordinator.start_agent_recovery(
+                job_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                actor_id=actor_id,
+            )
+        except CollectionJobError as exc:
+            raise MarketDataServiceError(
+                exc.code, exc.message, status_code=exc.status_code
+            ) from exc
 
     def cancel_collection_job(
         self, job_id: str, *, tenant_id: str, user_id: str, actor_id: str
@@ -1865,6 +1925,49 @@ def _field_sources(raw: Any, evidence: list[dict[str, Any]]) -> dict[str, Any]:
     if evidence:
         return {"$": [item.get("provider") for item in evidence if item.get("provider")]}
     return {}
+
+
+def _collection_publication_fields(
+    job: MarketDataCollectionJob,
+    checkpoint: Mapping[str, Any],
+) -> dict[str, Any]:
+    publication = dict(checkpoint.get("publication") or {})
+    candidate = checkpoint.get("publication_candidate")
+    recovery = dict(checkpoint.get("agent_recovery") or {})
+    if publication.get("status") == "published":
+        return {
+            "publication_status": "published",
+            "freeze_status": "frozen",
+            "can_confirm_freeze": False,
+            "publication_candidate": candidate,
+        }
+    if recovery.get("status") in {"queued", "running"}:
+        return {
+            "publication_status": "recovering",
+            "freeze_status": "awaiting_recovery",
+            "can_confirm_freeze": False,
+            "publication_candidate": None,
+        }
+    if job.status not in {"succeeded", "partial", "failed", "cancelled"}:
+        return {
+            "publication_status": "collecting",
+            "freeze_status": "collecting",
+            "can_confirm_freeze": False,
+            "publication_candidate": candidate,
+        }
+    if candidate:
+        return {
+            "publication_status": "pending_confirmation",
+            "freeze_status": "ready_degraded" if candidate.get("degraded") else "ready",
+            "can_confirm_freeze": True,
+            "publication_candidate": candidate,
+        }
+    return {
+        "publication_status": "blocked",
+        "freeze_status": "blocked",
+        "can_confirm_freeze": False,
+        "publication_candidate": None,
+    }
 
 
 __all__ = ["MarketDataCenterService", "MarketDataServiceError"]

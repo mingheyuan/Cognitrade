@@ -66,7 +66,7 @@ export type ResearchRequest = {
   clarification_status?: 'not_needed' | 'pending' | 'resolved'
 }
 
-export type ProgressState = {
+type ProgressState = {
   current_phase?: string | null
   active_agent?: string | null
   latest_event?: string | null
@@ -110,7 +110,7 @@ export type ResearchReport = {
   [key: string]: unknown
 }
 
-export type ResearchResult = {
+type ResearchResult = {
   intent?: ResearchIntent
   report?: ResearchReport
   [key: string]: unknown
@@ -270,7 +270,7 @@ export type ApiErrorBody = {
   detail?: string | Array<Record<string, unknown>>
 }
 
-export type AgentOSDashboardProvenance = {
+type AgentOSDashboardProvenance = {
   artifact_id?: string
   artifact_type?: string
   artifact_version?: number
@@ -293,7 +293,7 @@ export type AgentOSDashboardItem = {
   provenance: AgentOSDashboardProvenance
 }
 
-export type AgentOSDashboardResource = {
+type AgentOSDashboardResource = {
   source: 'artifacts' | 'memory' | 'manifest'
   artifact_type?: string
   layer?: string

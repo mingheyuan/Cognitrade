@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { estimateOrder } from '../utils/paper-order'
+import { estimateOrder } from './paper-order'
 
 describe('paper order estimate', () => {
   it('includes slippage and all buy-side fees in occupied cash', () => {

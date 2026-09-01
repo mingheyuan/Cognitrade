@@ -260,13 +260,29 @@ export function useMarketDataCenter(
     const silent = Boolean(options.silent)
     if (!silent) setLoadingKey('jobs', true)
     try {
-      setJobs(await api.listJobs({
+      const page = await api.listJobs({
         symbol: urlState.symbol,
         asset_family: resolvedAssetFamily || undefined,
         as_of_date: urlState.as_of_date,
         limit: 50,
         offset: 0,
-      }, signal))
+      }, signal)
+      setJobs(page)
+      setJobDetails((current) => {
+        let changed = false
+        const next = { ...current }
+        for (const summary of page.items) {
+          const detail = current[summary.job_id]
+          if (!detail) continue
+          changed = true
+          next[summary.job_id] = {
+            ...detail,
+            ...summary,
+            tasks: detail.tasks,
+          }
+        }
+        return changed ? next : current
+      })
     } catch (loadError) {
       if (!signal?.aborted) setError(displayError(loadError))
     } finally {
@@ -285,7 +301,10 @@ export function useMarketDataCenter(
     }
   }, [api])
 
-  const hasActiveJobs = jobs.items.some((job) => isActiveCollectionJob(job.status))
+  const hasActiveJobs = jobs.items.some((job) => (
+    isActiveCollectionJob(job.status)
+    || ['queued', 'pending', 'running', 'processing'].includes(String(job.agent_recovery?.status || '').toLowerCase())
+  ))
 
   useEffect(() => {
     if (urlState.tab !== 'jobs' || !hasActiveJobs) return
@@ -427,8 +446,8 @@ export function useMarketDataCenter(
     coverage?.report_ready || coverage?.report_generatable,
   )
   const canFreezeReport = Boolean((resolvedAssetFamily === 'equity'
-    ? coverageCanGenerate
-    : coverage?.report_ready && (latestFundJob?.parent_bundle_id
+    ? coverageCanGenerate && coverage?.latest_bundle
+    : coverage?.report_ready && (latestFundJob?.freeze_status === 'frozen' && latestFundJob?.parent_bundle_id
       && latestFundJob.expanded_holdings.length === 10
       && latestFundMissingSlots === 0
       && ['completed', 'succeeded'].includes(latestFundJob.status))))
@@ -438,14 +457,23 @@ export function useMarketDataCenter(
     if (!(coverage?.report_ready || (resolvedAssetFamily === 'equity' && coverage?.report_generatable))) return resolvedAssetFamily === 'fund'
       ? '基金持仓披露槽尚未完成'
       : '仍有动态契约槽未就绪、过期或存在冲突'
-    if (resolvedAssetFamily === 'equity') return ''
+    if (resolvedAssetFamily === 'equity') return coverage?.latest_bundle ? '' : '采集数据仍是草稿，请在采集任务中确认冻结 Bundle'
     if (!latestFundJob) return '尚未创建该日期的基金前十大持仓采集任务'
-    if (!latestFundJob.parent_bundle_id) return '基金持仓父 Bundle 尚未冻结'
-    if (latestFundJob.expanded_holdings.length !== 10) return `持仓只冻结了 ${latestFundJob.expanded_holdings.length}/10 只股票`
+    if (latestFundJob.freeze_status !== 'frozen' || !latestFundJob.parent_bundle_id) return '组合数据仍是草稿，请在采集任务中确认冻结 Bundle'
+    if (latestFundJob.expanded_holdings.length !== 10) return `持仓只落库了 ${latestFundJob.expanded_holdings.length}/10 只股票`
     if (latestFundMissingSlots) return `前十大股票仍缺 ${latestFundMissingSlots} 个 UZI 原生槽位`
     if (!['completed', 'succeeded'].includes(latestFundJob.status)) return '组合采集任务尚未完成最终校验'
     return ''
-  }, [coverage?.report_generatable, coverage?.report_ready, latestFundJob, latestFundMissingSlots, resolvedAssetFamily, resolvedInstrument])
+  }, [coverage?.latest_bundle, coverage?.report_generatable, coverage?.report_ready, latestFundJob, latestFundMissingSlots, resolvedAssetFamily, resolvedInstrument])
+
+  const refreshAfterCollectionAction = useCallback(async (jobId: string) => {
+    await Promise.all([
+      loadJobs(),
+      loadJobDetail(jobId),
+      loadCoverage(),
+      loadBundles(),
+    ])
+  }, [loadBundles, loadCoverage, loadJobDetail, loadJobs])
 
   return {
     urlState,
@@ -502,11 +530,12 @@ export function useMarketDataCenter(
           symbols: identities.map((identity) => identity.symbol),
           asset_family: family,
           top_n: 10,
+          publish_when_complete: false,
         })
       },
       (job) => job.asset_family === 'fund'
-        ? `基金任务 ${job.job_id} 已创建；将先冻结一个持仓披露槽，再展开前十大股票子任务。`
-        : `采集任务 ${job.job_id} 已创建；数据源调用只会发生在该显式任务中。`,
+        ? `基金任务 ${job.job_id} 已创建；持仓与股票快照会先落库为草稿，完成后等待你确认冻结。`
+        : `采集任务 ${job.job_id} 已创建；数据会先落库为草稿，不会自动冻结 Bundle。`,
       loadJobs,
     ),
     retryFailed: (jobId: string, scope?: { symbols?: string[]; dimensions?: string[] }) => runAction(
@@ -515,6 +544,16 @@ export function useMarketDataCenter(
         ? `${scope.symbols[0]} 的可重试失败槽已单独入队。`
         : '已仅重新入队失败槽位。',
       loadJobs,
+    ),
+    runAgentRecovery: (jobId: string) => runAction(
+      () => api.runAgentRecovery(jobId),
+      () => 'Agent 缺口补采已启动；原有合格快照会继续复用。',
+      () => refreshAfterCollectionAction(jobId),
+    ),
+    confirmJobFreeze: (jobId: string, acknowledgeDegraded: boolean, proposalHash: string) => runAction(
+      () => api.confirmFreeze(jobId, proposalHash, acknowledgeDegraded),
+      () => '已按你的确认发布不可变 Bundle；现在可以创建报告 Manifest。',
+      () => refreshAfterCollectionAction(jobId),
     ),
     cancelJob: (jobId: string) => runAction(
       () => api.cancelJob(jobId),

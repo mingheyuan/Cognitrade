@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Callable, Iterable
 
-from research_system.strategies.backtesting.instruments import AssetType, TradableInstrument
+from research_system.strategies.backtesting.instruments import (
+    AssetType,
+    TradableInstrument,
+)
+from research_system.strategies.backtesting.result_store import json_content_hash
 from research_system.strategies.errors import StrategyDomainError
 
 
@@ -78,7 +80,9 @@ class MarketDataGateway:
         if not bars:
             code = "fund_nav_history_unavailable" if instrument.asset_type == AssetType.OTC_FUND else "market_history_unavailable"
             raise StrategyDomainError(code, f"{instrument.name} 在请求区间没有可审计行情", status_code=409)
-        digest = _hash({"instrument": instrument.payload(), "bars": bars, "as_of_date": as_of_date})
+        digest = json_content_hash(
+            {"instrument": instrument.payload(), "bars": bars, "as_of_date": as_of_date}
+        )
         degraded: list[str] = []
         if instrument.asset_type == AssetType.OTC_FUND and any(
             row.get("purchase_open") is None or row.get("redemption_open") is None for row in bars
@@ -295,14 +299,6 @@ class MarketDataGateway:
             status_code=409,
             details={"provider_attempts": diagnostics},
         )
-
-
-def _hash(payload: Any) -> str:
-    return hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode(
-            "utf-8"
-        )
-    ).hexdigest()
 
 
 def _date(value: Any) -> date | None:

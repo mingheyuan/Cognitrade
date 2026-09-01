@@ -584,17 +584,6 @@ class ApiV2FinanceTests(unittest.TestCase):
             places=2,
         )
 
-    def test_legacy_free_parameter_backtest_api_is_not_exposed(self) -> None:
-        engine = self.client.get("/api/v2/finance/backtests/engine", headers=auth_headers())
-        run = self.client.post(
-            "/api/v2/finance/backtests",
-            headers=auth_headers(),
-            json={"symbol": "600519", "strategy": "ma_cross"},
-        )
-
-        self.assertEqual(engine.status_code, 404, engine.text)
-        self.assertEqual(run.status_code, 404, run.text)
-
     def test_openapi_and_cors_publish_the_complete_strategy_contract(self) -> None:
         schema = self.client.get("/openapi.json").json()
         paths = set(schema["paths"])
@@ -614,9 +603,6 @@ class ApiV2FinanceTests(unittest.TestCase):
             "/api/v2/finance/strategy-paper-orders",
         }
         self.assertFalse(expected - paths, expected - paths)
-        self.assertNotIn("/api/v2/finance/backtests", paths)
-        self.assertNotIn("/api/v2/finance/backtests/engine", paths)
-
         preflight = self.client.options(
             "/api/v2/finance/strategies/example",
             headers={

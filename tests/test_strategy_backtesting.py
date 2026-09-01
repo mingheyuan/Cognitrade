@@ -8,15 +8,25 @@ from tempfile import TemporaryDirectory
 from threading import Event
 from typing import Any
 
-from research_system.strategies.backtesting.adapters import ExchangeExecutionAdapter, OTCExecutionAdapter
+from research_system.strategies.backtesting.adapters import (
+    ExchangeExecutionAdapter,
+    OTCExecutionAdapter,
+)
 from research_system.strategies.backtesting.instruments import InstrumentResolver
 from research_system.strategies.backtesting.market_data_gateway import MarketDataGateway
-from research_system.strategies.backtesting.portfolio_ledger import run_holdings_portfolio, run_otc_single_asset
+from research_system.strategies.backtesting.portfolio_ledger import (
+    run_holdings_portfolio,
+    run_otc_single_asset,
+)
 from research_system.strategies.backtesting.service import StrategyBacktestService
 from research_system.strategies.contracts import BacktestMode
 from research_system.strategies.database import StrategyDatabase
 from research_system.strategies.errors import StrategyConflict, StrategyDomainError
-from research_system.strategies.models import BacktestRun, DailyReportNode, DailyReportSet
+from research_system.strategies.models import (
+    BacktestRun,
+    DailyReportNode,
+    DailyReportSet,
+)
 from research_system.strategies.service import OwnerScope, StrategyService
 from research_system.strategies.signals import SignalEngineService
 from research_system.strategies.verification import StrategyVerificationService
@@ -227,7 +237,7 @@ class StrategyBacktestTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail("backtest did not finish")
 
-    def test_fund_only_is_deterministic_and_every_trade_has_signal_lineage(self) -> None:
+    def test_fund_only_retry_is_deterministic_and_preserves_trade_lineage(self) -> None:
         request = {
             "strategy_version_id": self.version["id"],
             "fund_code": "510300",
@@ -237,8 +247,9 @@ class StrategyBacktestTests(unittest.TestCase):
             "initial_cash": 1_000_000,
         }
         first = self._wait(self.backtests.create(self.owner, **request)["id"])
-        second = self._wait(self.backtests.create(self.owner, **request)["id"])
+        second = self._wait(self.backtests.retry(self.owner, first["id"])["id"])
         self.assertEqual(first["status"], "completed")
+        self.assertEqual(second["parent_backtest_run_id"], first["id"])
         self.assertEqual(first["result_content_hash"], second["result_content_hash"])
         self.assertGreater(first["result"]["metrics"]["trade_count"], 0)
         self.assertTrue(all(trade["signal_id"] for trade in first["result"]["trades"]))
@@ -257,6 +268,25 @@ class StrategyBacktestTests(unittest.TestCase):
             first["result"]["benchmarks"]["fund_buy_and_hold"]["equity_curve"][-1]["return_pct"],
             first["result"]["benchmarks"]["fund_buy_and_hold"]["return_pct"],
         )
+
+    def test_fund_only_includes_requested_hs300_benchmark(self) -> None:
+        completed = self._wait(
+            self.backtests.create(
+                self.owner,
+                strategy_version_id=self.version["id"],
+                fund_code="510300",
+                mode=BacktestMode.FUND_ONLY,
+                start_date=date(2026, 8, 4),
+                end_date=date(2026, 8, 10),
+                initial_cash=1_000_000,
+                benchmark={"hs300": True},
+            )["id"]
+        )
+
+        hs300 = completed["result"]["benchmarks"]["hs300"]
+        self.assertEqual(hs300["status"], "available")
+        self.assertEqual(hs300["symbol"], "000300")
+        self.assertEqual(len(hs300["equity_curve"]), 5)
 
     def test_backtest_history_can_be_scoped_before_it_reaches_the_frontend(self) -> None:
         common = {
@@ -467,6 +497,112 @@ class StrategyBacktestTests(unittest.TestCase):
             core.release.set()
             completed = self._wait_with(service, created["id"])
             self.assertEqual(completed["status"], "cancelled")
+        finally:
+            core.release.set()
+            service.close()
+
+    def test_active_duplicate_is_reused_except_after_cancellation_request(self) -> None:
+        core = BlockingSignalCore()
+        service = StrategyBacktestService(
+            self.database,
+            market_data_gateway=MarketDataGateway(series_loader=_series_loader),
+            object_store_root=Path(self.temporary.name) / "deduplicated-objects",
+            signal_core=core,
+            max_workers=1,
+            recover=False,
+        )
+        request = {
+            "strategy_version_id": self.version["id"],
+            "fund_code": "510300",
+            "mode": BacktestMode.FUND_ONLY,
+            "start_date": date(2026, 8, 4),
+            "end_date": date(2026, 8, 10),
+            "initial_cash": 1_000_000,
+        }
+        try:
+            first = service.create(self.owner, **request)
+            self.assertEqual(first["report_policy"], "existing_only")
+            self.assertTrue(core.started.wait(2))
+
+            duplicate = service.create(self.owner, **request)
+            self.assertEqual(duplicate["id"], first["id"])
+
+            service.cancel(self.owner, first["id"])
+            replacement = service.create(self.owner, **request)
+            self.assertNotEqual(replacement["id"], first["id"])
+
+            core.release.set()
+            self.assertEqual(self._wait_with(service, first["id"])["status"], "cancelled")
+            self.assertEqual(self._wait_with(service, replacement["id"])["status"], "completed")
+
+            replay = service.create(self.owner, **request)
+            self.assertNotEqual(replay["id"], replacement["id"])
+            self.assertEqual(self._wait_with(service, replay["id"])["status"], "completed")
+        finally:
+            core.release.set()
+            service.close()
+
+    def test_retry_only_reuses_active_child_with_the_same_parent(self) -> None:
+        core = BlockingSignalCore()
+        service = StrategyBacktestService(
+            self.database,
+            market_data_gateway=MarketDataGateway(series_loader=_series_loader),
+            object_store_root=Path(self.temporary.name) / "retry-lineage-objects",
+            signal_core=core,
+            max_workers=1,
+            recover=False,
+        )
+        request = {
+            "strategy_version_id": self.version["id"],
+            "fund_code": "510300",
+            "mode": BacktestMode.FUND_ONLY,
+            "start_date": date(2026, 8, 4),
+            "end_date": date(2026, 8, 10),
+            "initial_cash": 1_000_000,
+        }
+        try:
+            ordinary_active = service.create(self.owner, **request)
+            self.assertTrue(core.started.wait(2))
+            with self.database.session() as session:
+                active_row = session.get(BacktestRun, ordinary_active["id"])
+                failed = BacktestRun(
+                    tenant_id=active_row.tenant_id,
+                    user_id=active_row.user_id,
+                    strategy_id=active_row.strategy_id,
+                    strategy_version_id=active_row.strategy_version_id,
+                    strategy_content_hash=active_row.strategy_content_hash,
+                    fund_code=active_row.fund_code,
+                    fund_name=active_row.fund_name,
+                    mode=active_row.mode,
+                    start_date=active_row.start_date,
+                    end_date=active_row.end_date,
+                    initial_cash=active_row.initial_cash,
+                    benchmark_json=dict(active_row.benchmark_json or {}),
+                    request_json=dict(active_row.request_json or {}),
+                    input_snapshot_hash=active_row.input_snapshot_hash,
+                    engine_version=active_row.engine_version,
+                    status="failed",
+                    error_summary="synthetic failed attempt",
+                    completed_at=datetime.now(UTC),
+                )
+                session.add(failed)
+                session.flush()
+                failed_id = failed.id
+
+            retry = service.retry(self.owner, failed_id)
+            self.assertNotEqual(retry["id"], ordinary_active["id"])
+            self.assertEqual(retry["parent_backtest_run_id"], failed_id)
+
+            duplicate_retry = service.retry(self.owner, failed_id)
+            self.assertEqual(duplicate_retry["id"], retry["id"])
+            self.assertEqual(duplicate_retry["parent_backtest_run_id"], failed_id)
+
+            core.release.set()
+            self.assertEqual(
+                self._wait_with(service, ordinary_active["id"])["status"],
+                "completed",
+            )
+            self.assertEqual(self._wait_with(service, retry["id"])["status"], "completed")
         finally:
             core.release.set()
             service.close()

@@ -10,7 +10,17 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-CONTRACT_VERSION = "uzi-3.9.4-1b5cdcb-v1"
+CONTRACT_VERSION = "uzi-3.9.4-b3665e8-v1"
+LEGACY_UZI_CONTRACT_VERSIONS = frozenset({"uzi-3.9.4-1b5cdcb-v1"})
+SUPPORTED_UZI_CONTRACT_VERSIONS = frozenset(
+    {CONTRACT_VERSION, *LEGACY_UZI_CONTRACT_VERSIONS}
+)
+
+
+def is_supported_uzi_contract_version(value: object) -> bool:
+    """Return whether an immutable UZI v3.9.4 contract remains readable."""
+
+    return str(value or "") in SUPPORTED_UZI_CONTRACT_VERSIONS
 
 
 class EvidenceGrade(str, Enum):
@@ -330,6 +340,8 @@ class MaterializedBundle(BaseModel):
 
 __all__ = [
     "CONTRACT_VERSION",
+    "LEGACY_UZI_CONTRACT_VERSIONS",
+    "SUPPORTED_UZI_CONTRACT_VERSIONS",
     "BundleStatus",
     "CollectionStatus",
     "ConflictStatus",
@@ -345,5 +357,6 @@ __all__ = [
     "canonical_hash",
     "canonical_json",
     "cutoff_at_for_date",
+    "is_supported_uzi_contract_version",
     "require_aware_utc",
 ]

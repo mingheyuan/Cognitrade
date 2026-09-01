@@ -4,14 +4,16 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
-from starlette.concurrency import run_in_threadpool
 
-from research_system.api.dependencies import ApiPrincipal, get_strategies, require_principal
+from research_system.api.dependencies import (
+    ApiPrincipal,
+    get_strategies,
+    require_principal,
+)
 from research_system.api.errors import ApiError
+from research_system.api.route_support import call_strategy_service as _call
 from research_system.strategies.contracts import BacktestMode
-from research_system.strategies.errors import StrategyDomainError
-from research_system.strategies.service import StrategyService, owner_scope
-
+from research_system.strategies.service import StrategyService
 
 router = APIRouter(prefix="/finance", tags=["strategy workspace"])
 
@@ -321,23 +323,5 @@ async def promote_strategy_version(
         version_id=version_id,
         **payload.model_dump(),
     )
-
-
-async def _call(operation, principal: ApiPrincipal, *args, **kwargs):
-    scope = owner_scope(
-        tenant_id=principal.tenant_id,
-        user_id=principal.user_id,
-        actor_id=principal.actor_id,
-    )
-    try:
-        return await run_in_threadpool(operation, scope, *args, **kwargs)
-    except StrategyDomainError as exc:
-        raise ApiError(
-            status_code=exc.status_code,
-            code=exc.code,
-            message=exc.message,
-            details=exc.details,
-        ) from exc
-
 
 __all__ = ["router"]

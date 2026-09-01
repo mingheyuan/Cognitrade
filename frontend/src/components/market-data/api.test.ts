@@ -103,6 +103,9 @@ describe('MarketDataCenterApi', () => {
         id: 'fund-job-1', job_type: 'fund_holding_expansion', asset_family: 'fund', status: 'partial',
         symbols: ['020464'], dimensions: ['fund_top_holdings'], start_date: '2026-08-20', end_date: '2026-08-20',
         max_concurrency: 5, publish_when_complete: true, created_at: '2026-08-20T08:00:00Z',
+        freeze_status: 'awaiting_recovery', can_confirm_freeze: false,
+        publication_candidate: { can_publish: false, quality_gate: 'blocked', missing_dimensions: ['12_capital_flow'], scopes: [{ symbol: '600001.SH', can_publish: false }] },
+        agent_recovery: { status: 'failed', attempted: ['12_capital_flow'], succeeded: [], failed: ['12_capital_flow'] },
         progress: { completed: 1, total: 1, child_complete: 3, child_total: 10, by_status: { partial: 1 } },
         task_summary: { total: 1, by_status: { partial: 1 }, active: 0, succeeded: 0, skipped: 0, retryable_failed: 1, blocked_failed: 0, by_error_code: [], by_dimension: [] },
         portfolio_summary: { total_holdings: 10, ready_holdings: 3, dimensions_per_holding: 22, total_slots: 220, ready_slots: 91, missing_slots: 129, retryable_slots: 80, blocked_slots: 49, active_slots: 0, attempt: 2, current_child_job_ids: ['child-2'], by_error_code: [{ key: 'strict_contract_gap', count: 49, retryable_count: 0, blocked_count: 49, active_count: 0 }], by_dimension: [] },
@@ -119,6 +122,9 @@ describe('MarketDataCenterApi', () => {
     expect(page.items[0].tasks?.[0]).toMatchObject({ task_id: 'task-1', attempt: 1, max_attempts: 3, retryable: true })
     expect(page.items[0].task_summary).toMatchObject({ retryable_failed: 1, blocked_failed: 0 })
     expect(page.items[0].portfolio_summary).toMatchObject({ ready_slots: 91, retryable_slots: 80, blocked_slots: 49 })
+    expect(page.items[0]).toMatchObject({ freeze_status: 'awaiting_recovery', can_confirm_freeze: false })
+    expect(page.items[0].publication_candidate).toMatchObject({ can_publish: false, quality_gate: 'blocked', missing_dimensions: ['12_capital_flow'] })
+    expect(page.items[0].agent_recovery).toMatchObject({ status: 'failed', attempted: 1, succeeded: 0, failed: 1 })
     expect(requestedUrl).toContain('symbol=020464')
     expect(requestedUrl).toContain('asset_family=fund')
     expect(requestedUrl).toContain('as_of_date=2026-08-20')
@@ -141,6 +147,31 @@ describe('MarketDataCenterApi', () => {
     await api.retryFailed('fund-job-1', { symbols: ['600001.SH'], dimensions: ['0_basic'] })
 
     expect(JSON.parse(requestBody)).toEqual({ symbols: ['600001.SH'], dimensions: ['0_basic'] })
+  })
+
+  it('uses separate Agent recovery and user-confirmed Bundle freeze commands', async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      calls.push({ url, init })
+      return json({ job: {
+        id: 'job-1', asset_family: 'equity', status: 'succeeded', symbols: ['600519.SH'], dimensions: ['0_basic'],
+        start_date: '2026-08-20', end_date: '2026-08-20', max_concurrency: 5, publish_when_complete: false,
+        freeze_status: url.endsWith('/confirm-freeze') ? 'frozen' : 'awaiting_confirmation', can_confirm_freeze: !url.endsWith('/confirm-freeze'),
+        progress: { total: 1, by_status: { succeeded: 1 } }, created_at: '2026-08-20T08:00:00Z',
+      } })
+    }))
+    const api = new MarketDataCenterApi({ baseUrl: 'http://127.0.0.1:8000/api/v1', token: '' })
+
+    const recovered = await api.runAgentRecovery('job-1')
+    const frozen = await api.confirmFreeze('job-1', 'a'.repeat(64), true)
+
+    expect(calls[0].url).toContain('/collection-jobs/job-1/agent-recovery')
+    expect(calls[0].init?.method).toBe('POST')
+    expect(calls[1].url).toContain('/collection-jobs/job-1/confirm-freeze')
+    expect(JSON.parse(String(calls[1].init?.body))).toEqual({ proposal_hash: 'a'.repeat(64), acknowledge_degraded: true })
+    expect(recovered.freeze_status).toBe('awaiting_confirmation')
+    expect(frozen.freeze_status).toBe('frozen')
   })
 
   it('sends strict manual evidence and strips subscription response-only fields', async () => {

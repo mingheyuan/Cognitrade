@@ -4,7 +4,8 @@ export type EvidenceGrade = 'A' | 'B' | 'C' | null
 export type MarketDataTab = 'coverage' | 'evidence' | 'jobs' | 'bundles' | 'archive'
 export type AssetFamily = 'auto' | 'equity' | 'fund'
 export type ResolvedAssetFamily = Exclude<AssetFamily, 'auto'>
-export type InstrumentAssetType = 'stock' | 'exchange_fund' | 'otc_fund' | 'index'
+export type CollectionFreezeStatus = 'collecting' | 'awaiting_recovery' | 'awaiting_confirmation' | 'frozen' | 'not_ready'
+type InstrumentAssetType = 'stock' | 'exchange_fund' | 'otc_fund' | 'index'
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
@@ -73,7 +74,7 @@ export interface DimensionCoverage {
   audit_errors?: string[]
 }
 
-export interface CoverageCounts {
+interface CoverageCounts {
   available: number
   verified_empty: number
   data_gap: number
@@ -82,7 +83,7 @@ export interface CoverageCounts {
   degraded: number
 }
 
-export interface BundleReference {
+interface BundleReference {
   bundle_id: string
   status?: string
   manifest_hash?: string | null
@@ -113,7 +114,7 @@ export interface MarketDataCoverage {
   audit_ready?: boolean
 }
 
-export interface UziDataPrecheck {
+interface UziDataPrecheck {
     coverage_pct?: number
     passed_checks?: number
     total_checks?: number
@@ -125,7 +126,7 @@ export interface UziDataPrecheck {
     issues?: Array<{ severity: string; check: string; dimension?: string; message?: string }>
 }
 
-export interface EvidenceRecord {
+interface EvidenceRecord {
   evidence_id: string
   provider?: string | null
   source_url?: string | null
@@ -215,7 +216,7 @@ export interface CollectionTask {
   degraded_count?: number
 }
 
-export interface CollectionResolutionSummary {
+interface CollectionResolutionSummary {
   total: number
   strict: number
   degraded: number
@@ -233,7 +234,7 @@ export interface CollectionDiagnosticBucket {
   sample_message?: string | null
 }
 
-export interface CollectionTaskSummary {
+interface CollectionTaskSummary {
   total: number
   by_status: Record<string, number>
   active: number
@@ -278,6 +279,38 @@ export interface ExpandedFundHolding {
   missing_dimensions?: string[]
 }
 
+export interface PublicationCandidateScope {
+  symbol?: string
+  market?: string
+  as_of_date?: string
+  cutoff_at?: string
+  can_publish?: boolean
+  quality?: string
+  missing_dimensions?: string[]
+  bundle_id?: string | null
+}
+
+export interface CollectionPublicationCandidate {
+  can_publish?: boolean
+  quality_gate?: string
+  proposal_hash?: string
+  degraded?: boolean
+  bundle_count?: number
+  missing_dimensions: string[]
+  scopes: PublicationCandidateScope[]
+  previews: PublicationCandidateScope[]
+}
+
+export interface CollectionAgentRecovery {
+  status: string
+  attempted: number
+  succeeded: number
+  failed: number
+  started_at?: string | null
+  completed_at?: string | null
+  message?: string | null
+}
+
 export interface CollectionJob {
   job_id: string
   parent_job_id?: string | null
@@ -292,6 +325,10 @@ export interface CollectionJob {
   end_date: string
   max_concurrency: number
   publish_when_complete: boolean
+  freeze_status?: CollectionFreezeStatus
+  can_confirm_freeze?: boolean
+  publication_candidate?: CollectionPublicationCandidate
+  agent_recovery?: CollectionAgentRecovery
   scoped_retry_supported?: boolean
   progress: CollectionProgress
   requested_by?: string | null

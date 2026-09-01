@@ -1,25 +1,33 @@
 from __future__ import annotations
 
 import contextlib
+import json
+import os
 from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-import json
-import os
 from threading import RLock
 from typing import Any
 
 from research_system.runtime.agent_os import AgentOS
-from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
 from research_system.runtime.core.id_utils import generate_ulid
+from research_system.runtime.core.time_utils import parse_utc_datetime
 from research_system.runtime.presentation.display import (
     localize_runtime_error,
     localize_runtime_event,
     runtime_status_message,
 )
+from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
 from research_system.schemas.core_runtime import MainAgentState
-from research_system.schemas.execution_runtime import ExecutionRunResult, ExecutionRunSnapshot
-from research_system.schemas.protocol import ProgressState, RequestEnvelope, ResponseEnvelope
+from research_system.schemas.execution_runtime import (
+    ExecutionRunResult,
+    ExecutionRunSnapshot,
+)
+from research_system.schemas.protocol import (
+    ProgressState,
+    RequestEnvelope,
+    ResponseEnvelope,
+)
 
 
 class AgentOSRunService:
@@ -251,7 +259,7 @@ class AgentOSRunService:
         now = datetime.now(timezone.utc)
         existing = read_json(lease_path)
         if isinstance(existing, dict):
-            expires_at = self._parse_lease_time(existing.get("expires_at"))
+            expires_at = parse_utc_datetime(existing.get("expires_at"))
             if expires_at is not None and expires_at > now:
                 return False
             with contextlib.suppress(FileNotFoundError):
@@ -286,16 +294,6 @@ class AgentOSRunService:
         lease = read_json(lease_path)
         if isinstance(lease, dict) and lease.get("worker_id") == self._worker_id:
             lease_path.unlink(missing_ok=True)
-
-    @staticmethod
-    def _parse_lease_time(value: object) -> datetime | None:
-        try:
-            parsed = datetime.fromisoformat(str(value or ""))
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
 
     def _decorate_history_row(
         self,

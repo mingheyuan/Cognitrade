@@ -11,7 +11,7 @@ from domain_packs.finance_ashare.subagents.uzi_panel_metadata import UZI_PANEL_M
 
 
 UZI_PANEL_VERSION = "3.9.4-adapted"
-UZI_PANEL_SOURCE_COMMIT = "1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4"
+UZI_PANEL_SOURCE_COMMIT = "b3665e85b8666477038e11157d8e8feb0e006b76"
 
 
 PANEL_REGISTRY: tuple[dict[str, object], ...] = (

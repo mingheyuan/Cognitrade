@@ -1025,7 +1025,7 @@ def _execute_stock_method(
                 not workflow_features.get("moat_known")
                 and workflow_features.get("moat_total") is None
             ):
-                # UZI 1b5cdcb preserves a missing moat as None, while this
+                # UZI 3.9.4 preserves a missing moat as None, while this
                 # older internal screen still performs one direct comparison.
                 # Keep raw/features truthful and normalize only its reader copy.
                 workflow_features["moat_total"] = 0

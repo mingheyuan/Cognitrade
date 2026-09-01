@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -81,6 +82,47 @@ class AgentOSTests(unittest.TestCase):
             )
             self.assertIn("main_agent_route_decided", event_types)
             self.assertIn("main_agent_synthesis_fallback", event_types)
+
+    def test_large_market_data_slots_are_artifact_backed_not_graph_embedded(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            agent_os = AgentOS(self._settings(repository_root, root))
+            marker = "large-market-data-marker-" + ("x" * 100_000)
+            request = RequestEnvelope(
+                intent="stock_check",
+                user_query="分析 600519",
+                slots={
+                    "symbols": ["600519"],
+                    "snapshots": [{"facts": {"payload": marker}}],
+                    "market_data_bundle": {"payload": marker},
+                    "report_data_manifest": {"items": [{"payload": marker}]},
+                    "source_refs": [{"type": "test", "id": marker}],
+                },
+                constraints={"research_profile": "lite", "data_source_mode": "bundle_only"},
+            )
+            decision = RequestIntakeDecision(
+                status="accepted",
+                request_kind="domain_task",
+                recommended_mode="graph",
+                intent="stock_check",
+                domain_id="finance_ashare",
+                confidence=1.0,
+            )
+
+            graph = agent_os._build_initial_graph(request=request, decision=decision)
+            serialized = json.dumps(graph.model_dump(mode="json"), ensure_ascii=False)
+
+            self.assertNotIn(marker, serialized)
+            self.assertEqual(
+                graph.metadata["artifact_backed_intent_input_keys"],
+                [
+                    "market_data_bundle",
+                    "report_data_manifest",
+                    "snapshots",
+                    "source_refs",
+                ],
+            )
 
     def test_public_api_runs_and_inspects_an_installed_non_finance_pack(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]

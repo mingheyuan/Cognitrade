@@ -69,8 +69,16 @@ _DATE_FIELDS = (
     "trade_date",
     "point_at",
     "report_date",
+    "period",
     "报告日期",
     "公告日期",
+    "日期",
+    "交易日期",
+    "报告期",
+    "统计截止日",
+    "股东户数统计截止日",
+    "解禁日期",
+    "解禁时间",
 )
 
 
@@ -175,18 +183,59 @@ def _project_dimension(
         projected = {"recent_reports": rows, "report_count": len(rows)}
     elif dimension == "12_capital_flow":
         aliases = {
-            "money_flow": ("money_flow", "main_flow", "recent_flows"),
+            "money_flow": (
+                "money_flow",
+                "main_flow",
+                "recent_flows",
+                "main_fund_flow_20d",
+            ),
             "northbound": ("northbound", "hsgt"),
-            "margin": ("margin", "margin_detail"),
-            "shareholder_counts": ("shareholder_counts", "holder_counts"),
-            "institutions": ("institutions", "institution_holders"),
-            "events": ("events",),
+            "margin": ("margin", "margin_detail", "margin_recent"),
+            "shareholder_counts": (
+                "shareholder_counts",
+                "holder_counts",
+                "holder_count_history",
+            ),
         }
         projected = {}
         for target, candidates in aliases.items():
-            value = next((raw.get(key) for key in candidates if raw.get(key) is not None), [])
-            rows = _bounded_items(_items(value), start=start, end=as_of_date)
-            projected[target] = rows
+            value = next(
+                (raw.get(key) for key in candidates if raw.get(key) is not None),
+                [],
+            )
+            projected[target] = _bounded_items(
+                _items(value), start=start, end=as_of_date
+            )
+
+        institutions = next(
+            (
+                raw.get(key)
+                for key in (
+                    "institutions",
+                    "institution_holders",
+                    "institutional_history",
+                )
+                if raw.get(key) is not None
+            ),
+            [],
+        )
+        if isinstance(institutions, Mapping) and institutions.get("quarters"):
+            institutions = _institutional_history_rows(institutions)
+        projected["institutions"] = _bounded_items(
+            _items(institutions), start=start, end=as_of_date
+        )
+        projected["events"] = _bounded_items(
+            _items(
+                raw.get("events"),
+                raw.get("block_trades_recent"),
+                raw.get("block_trades"),
+                raw.get("unlock_recent"),
+                raw.get("unlock"),
+                raw.get("unlock_schedule"),
+            ),
+            start=start,
+            end=as_of_date,
+        )
     elif dimension == "13_policy":
         rows = _bounded_items(
             _items(raw.get("policies"), raw.get("snippets")),
@@ -297,7 +346,46 @@ def _record_date(value: Any) -> date | None:
                 return date.fromisoformat(match.group("date"))
             except ValueError:
                 continue
+        text = str(candidate or "").strip().upper()
+        compact = re.match(r"^(?P<year>20\d{2})(?P<month>\d{2})(?P<day>\d{2})$", text)
+        if compact:
+            try:
+                return date(
+                    int(compact.group("year")),
+                    int(compact.group("month")),
+                    int(compact.group("day")),
+                )
+            except ValueError:
+                continue
+        quarter = re.match(r"^(?P<year>20\d{2}|\d{2})Q(?P<quarter>[1-4])$", text)
+        if quarter:
+            year = int(quarter.group("year"))
+            year = 2000 + year if year < 100 else year
+            quarter_number = int(quarter.group("quarter"))
+            month_day = ((3, 31), (6, 30), (9, 30), (12, 31))[quarter_number - 1]
+            return date(year, *month_day)
     return None
+
+
+def _institutional_history_rows(value: Mapping[str, Any]) -> list[dict[str, Any]]:
+    quarters = list(value.get("quarters") or [])
+    series = {
+        "fund": list(value.get("fund") or []),
+        "qfii": list(value.get("qfii") or []),
+        "social_security": list(
+            value.get("social_security") or value.get("shehui") or []
+        ),
+    }
+    return [
+        {
+            "period": period,
+            **{
+                key: rows[index] if index < len(rows) else None
+                for key, rows in series.items()
+            },
+        }
+        for index, period in enumerate(quarters)
+    ]
 
 
 def _looks_like_notice(value: Any) -> bool:

@@ -18,6 +18,7 @@ import { useCognitrade } from '../CognitradeContext'
 import { BusinessDataView } from '../artifacts/BusinessDataView'
 import { MethodDeliveryDossier } from '../artifacts/MethodDeliveryDossier'
 import type { ResearchIntent } from '../research-contracts'
+import { asRecord } from '../utils/value'
 import { AppSelect } from './AppSelect'
 
 type UziMethodsProps = {
@@ -419,10 +420,6 @@ function GapList({ gaps }: { gaps: string[] }) {
 
 function updateHolding(setter: React.Dispatch<React.SetStateAction<HoldingDraft[]>>, index: number, field: keyof HoldingDraft, value: string) {
   setter((rows) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, [field]: value } : row))
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 }
 
 function optionalNumber(value: unknown): number | null {

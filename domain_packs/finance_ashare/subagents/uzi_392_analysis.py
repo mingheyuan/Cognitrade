@@ -228,7 +228,7 @@ def _apply_scoring_exclusions(
 def _deep_methods_compatible_raw(raw: dict[str, Any]) -> dict[str, Any]:
     """Recover a nullable optional mapping for UZI's deep-method reader.
 
-    Upstream commit 1b5cdcb sanitizes nullable feature values at each modeling
+    UZI 3.9.4 sanitizes nullable feature values at each modeling
     boundary, but ``build_competitive_analysis`` can still call ``.get`` on a
     present ``14_moat.data.scores=None`` value. Normalize only the computation
     copy so the canonical raw evidence and native gate result remain unchanged.

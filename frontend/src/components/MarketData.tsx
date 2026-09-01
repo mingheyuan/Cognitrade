@@ -84,8 +84,8 @@ export function MarketData({ state, setState, onResearch }: MarketDataProps) {
           <span className="mdc-eyebrow">POINT-IN-TIME · {controller.resolvedAssetFamily === 'fund' ? 'FUND HOLDINGS ENTRY' : 'DATABASE SOURCE OF TRUTH'}</span>
           <h1>行情数据中心</h1>
           <p>{controller.resolvedAssetFamily === 'fund'
-            ? '基金本身只占一个持仓披露槽，用于严格展开前十大股票；每只股票仍按完整动态契约采集，正式报告冻结的是这 10 只股票的组合输入。'
-            : '先显式采集并发布不可变 Bundle，再生成报告。读取页面不会触发外部数据源；正式报告只消费冻结输入。'}</p>
+            ? '基金本身只占一个持仓披露槽，用于严格展开前十大股票；持仓与股票数据先落库，缺口由 Agent 补采，只有用户确认后才冻结组合 Bundle。'
+            : '先按 UZI 原生逻辑显式采集，缺口可由 Agent 补采；数据默认只落库为草稿，只有用户确认后才发布不可变 Bundle。'}</p>
         </div>
         <div className="mdc-hero-principles" aria-label="数据中心原则">
           <span><Database size={15} />数据库唯一事实源</span>
@@ -190,6 +190,8 @@ export function MarketData({ state, setState, onResearch }: MarketDataProps) {
             onRefresh={controller.refreshJobs}
             onLoadDetail={controller.loadJobDetail}
             onRetry={controller.retryFailed}
+            onAgentRecovery={controller.runAgentRecovery}
+            onConfirmFreeze={controller.confirmJobFreeze}
             onCancel={controller.cancelJob}
           />
         ) : null}
@@ -199,10 +201,7 @@ export function MarketData({ state, setState, onResearch }: MarketDataProps) {
             bundles={controller.bundles}
             selected={controller.selectedBundle}
             loading={controller.loading.bundles}
-            actionLoading={controller.loading.action}
-            canPublish={Boolean(controller.coverage?.report_ready)}
             onRefresh={controller.refreshBundles}
-            onPublish={controller.publishBundle}
             onSelect={controller.selectBundle}
           />
         ) : null}

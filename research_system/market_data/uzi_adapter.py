@@ -222,7 +222,7 @@ class UziSnapshotAdapter:
             published_at=published_at,
             observed_at=observed_at,
             ingested_at=datetime.now(timezone.utc),
-            source_version="uzi-3.9.4-1b5cdcb",
+            source_version="uzi-3.9.4-b3665e8",
             source_priority=int(source.get("chain_position") or 0) + 10,
             origin="provider",
             query_manifest=query_manifest,

@@ -424,6 +424,8 @@ capabilities:
     implementation: subagents.runtime:collect_snapshot
     consumes:
       - artifact_type: normalized_query
+      - artifact_type: user_request
+        required: false
     produces:
       - artifact_type: snapshot
         required: false
@@ -1111,7 +1113,7 @@ metadata:
     uzi_source_mapping: migration/uzi_source_mapping.yaml
     uzi_source_mapping_schema: migration/uzi_source_mapping.schema.json
     uzi_source_mapping_schema_version: "3"
-    source_commit: 1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4
+    source_commit: b3665e85b8666477038e11157d8e8feb0e006b76
     methodology_version: 3.9.4-source-parity
   dashboard_views:
     overview:

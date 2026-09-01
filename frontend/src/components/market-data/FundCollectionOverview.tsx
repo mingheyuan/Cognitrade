@@ -1,11 +1,7 @@
 import {
   AlertTriangle,
-  CheckCircle2,
   ChevronDown,
   CircleDashed,
-  Database,
-  FileCheck2,
-  Layers3,
   RotateCcw,
 } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useState } from 'react'
@@ -126,7 +122,7 @@ export function FundCollectionProgress({ job, childJobs = [] }: { job: Collectio
       <div className="mdc-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={value} aria-label="基金十大持仓股票契约槽完整度">
         <span style={{ width: `${value}%` }} />
       </div>
-      <div className="mdc-progress-breakdown"><span>持仓 {job.expanded_holdings.length}/10 已冻结</span><span>合格 {portfolio.ready_slots}/{portfolio.total_slots} 槽</span><span>缺口 {portfolio.missing_slots} 槽</span></div>
+      <div className="mdc-progress-breakdown"><span>持仓 {job.expanded_holdings.length}/10 已落库</span><span>合格 {portfolio.ready_slots}/{portfolio.total_slots} 槽</span><span>缺口 {portfolio.missing_slots} 槽</span></div>
     </div>
   )
 }
@@ -148,8 +144,11 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
   const total = portfolio.total_holdings
   const ready = portfolio.ready_holdings
   const missingSlots = portfolio.missing_slots
-  const complete = total === 10 && ready === total && ['completed', 'succeeded'].includes(job.status)
-  const parentFrozen = Boolean(job.parent_bundle_id && holdings.length === 10)
+  const collectionReady = total === 10 && ready === total && ['completed', 'succeeded'].includes(job.status)
+  const bundleFrozen = job.freeze_status === 'frozen'
+  const agentRecoveryActive = ['queued', 'pending', 'running', 'processing', 'cancelling'].includes(
+    String(job.agent_recovery?.status || '').toLowerCase(),
+  )
   const detailedChildren = useMemo(
     () => childJobs.map((child) => jobDetails[child.job_id] || child),
     [childJobs, jobDetails],
@@ -248,28 +247,10 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
         <div>
           <span className="mdc-eyebrow">FUND → EQUITY PORTFOLIO</span>
           <h3 id={`fund-workflow-${job.job_id}`}>前十大持仓采集链路</h3>
-          <p>基金只冻结持仓入口；报告完整度取决于十只股票的全部数据槽。</p>
+          <p>基金持仓与十只股票快照先落库为草稿；报告只消费用户确认冻结后的组合 Bundle。</p>
         </div>
-        <StatusBadge label={complete ? '组合已就绪' : `${ready}/${total} 只就绪`} tone={complete ? 'good' : 'warning'} />
+        <StatusBadge label={bundleFrozen ? '组合 Bundle 已冻结' : collectionReady ? '待确认冻结' : `${ready}/${total} 只就绪`} tone={bundleFrozen ? 'good' : collectionReady ? 'info' : 'warning'} />
       </header>
-
-      <div className="mdc-fund-stages" aria-label="基金采集阶段">
-        <article className={parentFrozen ? 'is-complete' : 'is-pending'}>
-          <span>{parentFrozen ? <CheckCircle2 size={16} /> : <CircleDashed size={16} />}</span>
-          <div><small>阶段 1</small><strong>冻结持仓披露</strong><p>{parentFrozen ? '父 Bundle 已保存' : '等待基金持仓披露槽'}</p></div>
-          <b>{holdings.length}/10</b>
-        </article>
-        <article className={ready === total && total ? 'is-complete' : 'is-warning'}>
-          <span>{ready === total && total ? <CheckCircle2 size={16} /> : <Database size={16} />}</span>
-          <div><small>阶段 2</small><strong>补齐股票数据</strong><p>{missingSlots ? `仍有 ${missingSlots} 个 UZI 原生缺口` : '十只股票的采集槽均已落库'}</p></div>
-          <b>{ready}/{total}</b>
-        </article>
-        <article className={complete ? 'is-complete' : 'is-pending'}>
-          <span>{complete ? <FileCheck2 size={16} /> : <Layers3 size={16} />}</span>
-          <div><small>阶段 3</small><strong>发布组合输入</strong><p>{complete ? '可冻结 Lite / Medium / Deep 报告' : '等待十只股票全部发布 Bundle'}</p></div>
-          <b>{complete ? 'READY' : 'WAIT'}</b>
-        </article>
-      </div>
 
       {holdings.length ? (
         <div className="mdc-table-scroll mdc-fund-holdings-table">
@@ -310,7 +291,7 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
                       <section className="mdc-holding-detail" aria-label={`${holding.name || holding.symbol} 维度采集明细`}>
                         <header>
                           <div><strong>{holding.name || holding.symbol} · 逐维采集状态</strong><small>{tasks.length}/22 个维度已载入；运行中每 3 秒刷新</small></div>
-                          {job.scoped_retry_supported && retryableTasks.length > 0 && !activeTasks.length ? <button className="secondary-button" type="button" disabled={actionLoading || Boolean(pendingRetryKey)} onClick={() => void retryHoldingDimensions(
+                          {job.scoped_retry_supported && !bundleFrozen && !agentRecoveryActive && retryableTasks.length > 0 && !activeTasks.length ? <button className="secondary-button" type="button" disabled={actionLoading || Boolean(pendingRetryKey)} onClick={() => void retryHoldingDimensions(
                             holding.symbol,
                             retryableTasks.map((task) => task.dimension_id),
                           )}><RotateCcw size={13} />{pendingRetryKey.startsWith(`${holding.symbol}:`) ? '正在提交…' : `重试该股票 ${retryableTasks.length} 个失败槽`}</button> : null}
@@ -331,7 +312,7 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
                               {failure && task.error_message ? <small className="mdc-holding-task-diagnostic" title={task.error_message}>{task.error_message}</small> : null}
                               <footer>
                                 <small>Attempt {task.attempt}{task.max_attempts ? ` / ${task.max_attempts}` : ''}{taskRetryable ? ' · 可重试' : ''}</small>
-                                {job.scoped_retry_supported && taskRetryable ? <button type="button" disabled={actionLoading || Boolean(pendingRetryKey)} aria-label={`重试 ${holding.symbol} ${task.dimension_id}`} onClick={() => void retryHoldingDimensions(holding.symbol, [task.dimension_id])}><RotateCcw size={10} />{pendingRetryKey === `${holding.symbol}:${task.dimension_id}` ? '正在提交…' : '重试此维度'}</button> : null}
+                                {job.scoped_retry_supported && !bundleFrozen && !agentRecoveryActive && taskRetryable ? <button type="button" disabled={actionLoading || Boolean(pendingRetryKey)} aria-label={`重试 ${holding.symbol} ${task.dimension_id}`} onClick={() => void retryHoldingDimensions(holding.symbol, [task.dimension_id])}><RotateCcw size={10} />{pendingRetryKey === `${holding.symbol}:${task.dimension_id}` ? '正在提交…' : '重试此维度'}</button> : null}
                               </footer>
                             </article>
                           })}</div>
@@ -344,7 +325,7 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
             })}</tbody>
           </table>
         </div>
-      ) : <p className="mdc-fund-waiting">持仓披露槽完成后，这里会展示冻结的十只股票及逐票缺口。</p>}
+      ) : <p className="mdc-fund-waiting">持仓披露槽完成后，这里会展示已落库的十只股票及逐票缺口。</p>}
 
       <section className="mdc-fund-child-jobs" aria-label="股票采集子任务">
         <header><div><strong>股票采集子任务</strong><small>按缺失维度分批执行，失败恢复不会重采基金持仓</small></div><span>{childJobs.length || job.child_collection_job_ids.length} 个批次</span></header>
@@ -367,7 +348,7 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
         <DiagnosticBuckets title="按数据维度" buckets={portfolio.by_dimension} />
       </div> : null}
 
-      {!complete ? (
+      {!collectionReady ? (
         <div className={`mdc-fund-recovery ${portfolio.retryable_slots ? 'is-retryable' : portfolio.active_slots || !portfolio.blocked_slots ? 'is-active' : 'is-blocked'}`} role={portfolio.blocked_slots && !portfolio.retryable_slots && !portfolio.active_slots ? 'alert' : 'status'}>
           {portfolio.active_slots || !portfolio.blocked_slots ? <CircleDashed size={18} aria-hidden="true" /> : <AlertTriangle size={18} aria-hidden="true" />}
           <div>
@@ -379,14 +360,14 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
                   ? '当前缺口不能靠重复采集解决'
                   : '等待股票子任务启动或同步状态'}</strong>
             <p>{portfolio.active_slots
-              ? '运行完成后会按 UZI 原生口径重新计算；已冻结的基金持仓与可用快照不会重采。'
+              ? '运行完成后会按 UZI 原生口径重新计算；已落库的基金持仓与可用快照不会重采。'
               : portfolio.retryable_slots
-                ? `仅重新查询可重试的数据源缺口；已冻结持仓和 ${portfolio.ready_slots} 个合格槽继续复用。当前恢复轮次 ${Math.max(1, portfolio.attempt)}。`
+                ? `仅重新查询可重试的数据源缺口；已落库持仓和 ${portfolio.ready_slots} 个合格槽继续复用。当前恢复轮次 ${Math.max(1, portfolio.attempt)}。`
                 : portfolio.blocked_slots
                   ? '阻断槽仅表示 UZI 原生关键数据缺失或采集失败；扩展证据与字段审计不会阻断。'
                   : '父任务已创建，正在等待股票采集批次写入最新进度。'}</p>
           </div>
-          {portfolio.retryable_slots && !portfolio.active_slots ? <button className="primary-button" type="button" disabled={actionLoading} onClick={() => void onRetry(job.job_id).catch(() => undefined)}><RotateCcw size={15} />{actionLoading ? '正在提交…' : `重试 ${portfolio.retryable_slots} 个可重试槽`}</button> : null}
+          {portfolio.retryable_slots && !portfolio.active_slots && !bundleFrozen && !agentRecoveryActive ? <button className="primary-button" type="button" disabled={actionLoading} onClick={() => void onRetry(job.job_id).catch(() => undefined)}><RotateCcw size={15} />{actionLoading ? '正在提交…' : `重试 ${portfolio.retryable_slots} 个可重试槽`}</button> : null}
         </div>
       ) : null}
     </section>

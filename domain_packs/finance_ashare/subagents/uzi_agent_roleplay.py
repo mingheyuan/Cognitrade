@@ -9,26 +9,28 @@ validated overrides are written into the panel Artifact.
 
 from __future__ import annotations
 
+import json
+import logging
+import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
-import json
-import logging
 from pathlib import Path
-import re
 from threading import Event, get_ident
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
 import yaml
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from domain_packs.finance_ashare.subagents.uzi_llm_support import (
+    parse_uzi_structured,
+    resolve_uzi_llm_worker_count,
+)
 from domain_packs.finance_ashare.subagents.uzi_panel_profiles import get_profile
-from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_structured
 
-
-LATEST_UZI_SOURCE_COMMIT = "1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4"
+LATEST_UZI_SOURCE_COMMIT = "b3665e85b8666477038e11157d8e8feb0e006b76"
 _LOGGER = logging.getLogger("uvicorn.error")
 _ROLEPLAY_STAGE_CACHE_SCHEMA_VERSION = "uzi-3.9.4-roleplay-stage-v1"
 PERSONAS_DIR = (
@@ -214,7 +216,11 @@ def apply_deep_agent_roleplay(
                 continue
         pending_batches.append((label, group_votes, user_prompt, cache_path))
     with ThreadPoolExecutor(
-        max_workers=_configured_workers(llm_provider, len(pending_batches), ceiling=5),
+        max_workers=resolve_uzi_llm_worker_count(
+            llm_provider,
+            len(pending_batches),
+            ceiling=5,
+        ),
         thread_name_prefix="uzi-roleplay",
     ) as pool:
         futures = {
@@ -362,16 +368,6 @@ def _system_prompt(snapshot_json: str) -> str:
         f"UZI_SOURCE_COMMIT={LATEST_UZI_SOURCE_COMMIT}\n"
         f"FROZEN_FEATURE_SNAPSHOT={snapshot_json}"
     )
-
-
-def _configured_workers(provider: Any, task_count: int, *, ceiling: int) -> int:
-    settings = getattr(provider, "settings", None)
-    configured = getattr(settings, "uzi_llm_max_concurrency", ceiling)
-    try:
-        limit = int(configured)
-    except (TypeError, ValueError):
-        limit = ceiling
-    return max(1, min(task_count or 1, ceiling, max(limit, 1)))
 
 
 def _roleplay_stage_cache_path(

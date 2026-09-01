@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -61,6 +62,102 @@ class MarketDataRepository:
             raise KeyError(f"market-data snapshot not found: {snapshot_id}")
         return snapshot
 
+    def lock_snapshot_for_update(self, snapshot_id: str) -> MarketDataSnapshot:
+        """Lock and refresh one Snapshot before revocation or publication.
+
+        PostgreSQL provides row-level ``FOR UPDATE`` locks. SQLite ignores that
+        clause, so a no-op UPDATE is used there to acquire its transaction-wide
+        writer lock before reading the row. Both paths keep the lock until the
+        caller's transaction ends.
+        """
+
+        if self.session.get_bind().dialect.name == "sqlite":
+            self.session.execute(
+                update(MarketDataSnapshot)
+                .where(MarketDataSnapshot.id == snapshot_id)
+                .values(revoked_at=MarketDataSnapshot.revoked_at)
+                .execution_options(synchronize_session=False)
+            )
+        snapshot = self.session.scalar(
+            select(MarketDataSnapshot)
+            .where(MarketDataSnapshot.id == snapshot_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if snapshot is None:
+            raise KeyError(f"market-data snapshot not found: {snapshot_id}")
+        return snapshot
+
+    def lock_snapshot_scope_for_publication(
+        self,
+        *,
+        symbol: str,
+        market: str,
+        as_of_date: date,
+        contract_version: str,
+    ) -> None:
+        """Serialize Bundle publication for one immutable revision scope."""
+
+        filters = (
+            MarketDataSnapshot.symbol == symbol.strip().upper(),
+            MarketDataSnapshot.market == market.strip().upper(),
+            MarketDataSnapshot.as_of_date == as_of_date,
+            MarketDataSnapshot.contract_version == contract_version,
+        )
+        if self.session.get_bind().dialect.name == "sqlite":
+            first_snapshot_id = (
+                select(MarketDataSnapshot.id)
+                .where(*filters)
+                .order_by(MarketDataSnapshot.id)
+                .limit(1)
+                .scalar_subquery()
+            )
+            self.session.execute(
+                update(MarketDataSnapshot)
+                .where(MarketDataSnapshot.id == first_snapshot_id)
+                .values(revoked_at=MarketDataSnapshot.revoked_at)
+                .execution_options(synchronize_session=False)
+            )
+            return
+        # Lock in a deterministic order so concurrent publishers and revokers
+        # cannot take the same Snapshot rows in opposite order.
+        list(
+            self.session.scalars(
+                select(MarketDataSnapshot)
+                .where(*filters)
+                .order_by(MarketDataSnapshot.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )
+
+    def lock_snapshots_for_update(
+        self, snapshot_ids: Iterable[str]
+    ) -> list[MarketDataSnapshot]:
+        """Lock selected candidate rows and return freshly loaded state."""
+
+        ids = sorted({str(snapshot_id) for snapshot_id in snapshot_ids if snapshot_id})
+        if not ids:
+            return []
+        if self.session.get_bind().dialect.name == "sqlite":
+            # Publication already owns SQLite's writer lock after locking the
+            # scope. Keep this fallback for direct callers of this helper.
+            self.session.execute(
+                update(MarketDataSnapshot)
+                .where(MarketDataSnapshot.id == ids[0])
+                .values(revoked_at=MarketDataSnapshot.revoked_at)
+                .execution_options(synchronize_session=False)
+            )
+        return list(
+            self.session.scalars(
+                select(MarketDataSnapshot)
+                .where(MarketDataSnapshot.id.in_(ids))
+                .order_by(MarketDataSnapshot.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+        )
+
     def find_snapshot_by_hash(self, content_hash: str) -> MarketDataSnapshot | None:
         return self.session.scalar(
             select(MarketDataSnapshot).where(MarketDataSnapshot.content_hash == content_hash)
@@ -78,6 +175,7 @@ class MarketDataRepository:
         market: str | None = None,
         dimension: str | None = None,
         as_of_date: date | None = None,
+        cutoff_at: datetime | None = None,
         status: str | None = None,
         include_revoked: bool = False,
         limit: int = 100,
@@ -92,6 +190,9 @@ class MarketDataRepository:
             statement = statement.where(MarketDataSnapshot.dimension == dimension)
         if as_of_date:
             statement = statement.where(MarketDataSnapshot.as_of_date == as_of_date)
+        if cutoff_at is not None:
+            cutoff = require_aware_utc(cutoff_at, field_name="cutoff_at")
+            statement = statement.where(MarketDataSnapshot.published_at <= cutoff)
         if status:
             statement = statement.where(MarketDataSnapshot.status == status)
         if not include_revoked:
@@ -164,7 +265,7 @@ class MarketDataRepository:
         superseded_by_id: str | None = None,
         revoked_at: datetime | None = None,
     ) -> MarketDataSnapshot:
-        snapshot = self.require_snapshot(snapshot_id)
+        snapshot = self.lock_snapshot_for_update(snapshot_id)
         if snapshot.revoked_at is not None:
             return snapshot
         if not reason.strip():

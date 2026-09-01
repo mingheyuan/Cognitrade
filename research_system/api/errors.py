@@ -21,6 +21,32 @@ logger = logging.getLogger(__name__)
 
 _CHINESE_TEXT = re.compile(r"[\u3400-\u9fff]")
 
+_VALIDATION_MESSAGES = {
+    "missing": "缺少必填字段",
+    "extra_forbidden": "不允许提供该字段",
+    "json_invalid": "JSON 格式无效",
+    "string_type": "字段值必须是字符串",
+    "string_unicode": "字段值必须是字符串",
+    "string_pattern_mismatch": "字段格式不符合要求",
+    "int_type": "字段值必须是整数",
+    "int_parsing": "字段值必须是整数",
+    "float_type": "字段值必须是数字",
+    "float_parsing": "字段值必须是数字",
+    "bool_type": "字段值必须是布尔值",
+    "list_type": "字段值必须是数组",
+    "dict_type": "字段值必须是对象",
+}
+_CONTEXTUAL_VALIDATION_MESSAGES = {
+    "string_too_short": ("min_length", "字符串长度不能少于 {} 个字符"),
+    "string_too_long": ("max_length", "字符串长度不能超过 {} 个字符"),
+    "literal_error": ("expected", "字段值必须是以下选项之一：{}"),
+    "greater_than_equal": ("ge", "字段值必须大于或等于 {}"),
+    "greater_than": ("gt", "字段值必须大于 {}"),
+    "less_than_equal": ("le", "字段值必须小于或等于 {}"),
+    "less_than": ("lt", "字段值必须小于 {}"),
+}
+_CONTEXT_DEFAULTS = {"expected": "允许值"}
+
 
 class ApiError(Exception):
     def __init__(
@@ -228,41 +254,13 @@ def _default_error_message(*, code: str, status_code: int) -> str:
 
 def _validation_error_message(error: dict[str, Any]) -> str:
     error_type = str(error.get("type") or "validation_error")
-    context = error.get("ctx") if isinstance(error.get("ctx"), dict) else {}
-    if error_type == "missing":
-        return "缺少必填字段"
-    if error_type == "extra_forbidden":
-        return "不允许提供该字段"
-    if error_type == "json_invalid":
-        return "JSON 格式无效"
-    if error_type in {"string_type", "string_unicode"}:
-        return "字段值必须是字符串"
-    if error_type == "string_too_short":
-        return f"字符串长度不能少于 {context.get('min_length')} 个字符"
-    if error_type == "string_too_long":
-        return f"字符串长度不能超过 {context.get('max_length')} 个字符"
-    if error_type == "string_pattern_mismatch":
-        return "字段格式不符合要求"
-    if error_type in {"int_type", "int_parsing"}:
-        return "字段值必须是整数"
-    if error_type in {"float_type", "float_parsing"}:
-        return "字段值必须是数字"
-    if error_type == "bool_type":
-        return "字段值必须是布尔值"
-    if error_type == "list_type":
-        return "字段值必须是数组"
-    if error_type == "dict_type":
-        return "字段值必须是对象"
-    if error_type == "literal_error":
-        return f"字段值必须是以下选项之一：{context.get('expected', '允许值')}"
-    if error_type == "greater_than_equal":
-        return f"字段值必须大于或等于 {context.get('ge')}"
-    if error_type == "greater_than":
-        return f"字段值必须大于 {context.get('gt')}"
-    if error_type == "less_than_equal":
-        return f"字段值必须小于或等于 {context.get('le')}"
-    if error_type == "less_than":
-        return f"字段值必须小于 {context.get('lt')}"
+    if message := _VALIDATION_MESSAGES.get(error_type):
+        return message
+    contextual = _CONTEXTUAL_VALIDATION_MESSAGES.get(error_type)
+    if contextual is not None:
+        context = error.get("ctx") if isinstance(error.get("ctx"), dict) else {}
+        context_key, template = contextual
+        return template.format(context.get(context_key, _CONTEXT_DEFAULTS.get(context_key)))
     return "字段值无效"
 
 

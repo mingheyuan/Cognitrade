@@ -3316,37 +3316,11 @@ def _bundle_result(
             for snapshot in recovery_snapshots
             if isinstance(snapshot, dict) and isinstance(snapshot.get("facts"), dict)
         )
-        strict_recovery = (
-            recover_suggested_fixes_until_exhausted(
-                recovery_snapshots,
-                query=query,
-                symbols=recovery_symbols,
-                profile=selected_profile,
-                settings=settings,
-                cancellation=cancellation,
-            )
-            if has_native_payload
-            else {
-                "schema_version": "uzi-3.9.4-suggested-fix-loop-v1",
-                "profile": selected_profile,
-                "stage_order": [],
-                "attempted": 0,
-                "succeeded": 0,
-                "failed": 0,
-                "attempts": [],
-                "cycles": [],
-                "critical_cleared": False,
-                "exhausted": True,
-                "exhausted_reason": "native_uzi_payload_unavailable",
-                "round_limit": None,
-            }
-        )
         if has_native_payload:
-            # Exact UZI 3.9.4 Stage 1 order: integrity/suggested-fix worklist,
-            # six-dimension MX→DDGS empty-field autofill, then the
-            # profile-scoped Playwright fallback.  Agent task2.5 evidence is
-            # collected afterwards in three parallel groups and frozen for
-            # the analysis node.
+            # UZI 3.9.4 first completes Stage 1's six-dimension MX→DDGS and
+            # profile-scoped Playwright autofill.  The Agent then exhausts the
+            # integrity suggested-fix worklist before the three parallel
+            # task2.5 evidence groups are frozen for the analysis node.
             qualitative_recovery = recover_qualitative_snapshots(
                 recovery_snapshots,
                 query=query,
@@ -3360,6 +3334,14 @@ def _bundle_result(
                 symbols=recovery_symbols,
                 profile=selected_profile,
                 settings=settings,
+            )
+            strict_recovery = recover_suggested_fixes_until_exhausted(
+                recovery_snapshots,
+                query=query,
+                symbols=recovery_symbols,
+                profile=selected_profile,
+                settings=settings,
+                cancellation=cancellation,
             )
             qualitative_agent_evidence = collect_qualitative_agent_evidence(
                 recovery_snapshots,
@@ -3383,6 +3365,14 @@ def _bundle_result(
             qualitative_recovery = dict(stage_disabled)
             playwright_recovery = dict(stage_disabled)
             qualitative_agent_evidence = dict(stage_disabled)
+            strict_recovery = {
+                **stage_disabled,
+                "schema_version": "uzi-3.9.4-suggested-fix-loop-v1",
+                "critical_cleared": False,
+                "exhausted": True,
+                "exhausted_reason": "native_uzi_payload_unavailable",
+                "round_limit": None,
+            }
     elif selected_profile == "workspace_market_data":
         # Non-UZI workspaces (for example the standalone market-data view)
         # share the collector but must not silently enter an analysis profile.
@@ -3521,8 +3511,8 @@ def _recovery_summary(
     return {
         "schema_version": "uzi-3.9.4-agent-os-v1",
         "stage_order": [
-            "primary_providers", "integrity_check", "suggested_fix_loop",
-            "mx_api", "ddgs", "playwright", "qualitative_agent_evidence",
+            "primary_providers", "integrity_check", "mx_api", "ddgs",
+            "playwright", "suggested_fix_loop", "qualitative_agent_evidence",
             "integrity_recheck",
         ],
         "order": ["mx_api", "ddgs", "playwright"],

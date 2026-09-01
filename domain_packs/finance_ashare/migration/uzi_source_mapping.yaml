@@ -1,7 +1,7 @@
 schema_version: "3"
 source:
   repository: https://github.com/wbh604/UZI-Skill
-  commit: 1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4
+  commit: b3665e85b8666477038e11157d8e8feb0e006b76
   version: 3.9.4
   license: MIT
   license_sha256: 78bebb5232741327c31b0da4f5bbd570dc59ab3c3230582a4d1b4650238a7d58
@@ -71,7 +71,7 @@ vendored_methodology_resources:
     upstream_tests: pinned_checkout_ci_surface
 
 defaults: &defaults
-  source_commit: 1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4
+  source_commit: b3665e85b8666477038e11157d8e8feb0e006b76
   migration_status: source_parity
   result_equivalence: exact
   invocation_acceptance: tests.test_uzi_392_vendor_runtime.Uzi392VendorRuntimeTests.test_all_22_fetcher_dispatches_preserve_upstream_results_and_call_contracts

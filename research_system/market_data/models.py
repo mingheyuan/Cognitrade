@@ -249,7 +249,7 @@ class MarketDataCollectionJob(Base):
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     max_concurrency: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
-    publish_when_complete: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    publish_when_complete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     request_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     progress_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     checkpoint_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
@@ -333,7 +333,7 @@ class MarketDataBundle(Base):
     __table_args__ = (
         UniqueConstraint("manifest_hash", name="uq_market_data_bundle_manifest_hash"),
         UniqueConstraint(
-            "symbol", "market", "as_of_date", "cutoff_at", "contract_version", "revision",
+            "symbol", "market", "as_of_date", "contract_version", "revision",
             name="uq_market_data_bundle_revision",
         ),
         Index(

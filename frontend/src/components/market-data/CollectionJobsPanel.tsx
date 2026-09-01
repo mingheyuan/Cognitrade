@@ -1,9 +1,10 @@
-import { Ban, CalendarRange, ChevronDown, Play, RefreshCw, RotateCcw } from 'lucide-react'
+import { Ban, Bot, CalendarRange, CheckCircle2, ChevronDown, CircleDashed, Database, LockKeyhole, Play, RefreshCw, RotateCcw } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { collectionJobDurations, formatDateTime, isActiveCollectionJob, jobStatusMeta } from './status'
 import { EmptyState, LoadingState, StatusBadge } from './shared'
 import { CollectionJobProgress } from './CollectionJobProgress'
 import { FundCollectionOverview, FundCollectionProgress } from './FundCollectionOverview'
+import { ConfirmBundleFreezeDialog } from './dialogs'
 import type { CollectionJobInput, MarketDataContract, MarketDataUrlState, PageResult, CollectionJob } from './types'
 
 function JobDetails({ className, initiallyOpen, onOpen, children }: { className: string; initiallyOpen: boolean; onOpen?: () => void; children: ReactNode }) {
@@ -15,7 +16,51 @@ function JobDetails({ className, initiallyOpen, onOpen, children }: { className:
   }}>{children}</details>
 }
 
-export function CollectionJobsPanel({ contract, urlState, jobs, jobDetails, loading, actionLoading, onCreate, onRefresh, onLoadDetail, onRetry, onCancel }: {
+function recoveryIsActive(job: CollectionJob) {
+  return ['queued', 'pending', 'running', 'processing'].includes(String(job.agent_recovery?.status || '').toLowerCase())
+}
+
+function freezeStatusMeta(job: CollectionJob) {
+  if (job.freeze_status === 'frozen') return { label: 'Bundle 已冻结', tone: 'good' as const }
+  if (job.freeze_status === 'awaiting_confirmation') return { label: '待确认冻结', tone: 'info' as const }
+  if (job.freeze_status === 'awaiting_recovery') return { label: '待 Agent 补采', tone: 'warning' as const }
+  if (job.freeze_status === 'not_ready') return { label: '候选未就绪', tone: 'danger' as const }
+  return { label: '采集草稿', tone: 'muted' as const }
+}
+
+function CollectionLifecycle({ job }: { job: CollectionJob }) {
+  const collecting = isActiveCollectionJob(job.status)
+  const recoveryActive = recoveryIsActive(job)
+  const nativeSettled = !collecting && !['draft', 'unknown'].includes(String(job.status).toLowerCase())
+  const recoveryStatus = String(job.agent_recovery?.status || '').toLowerCase()
+  const recoverySettled = ['succeeded', 'completed', 'partial', 'not_needed', 'skipped'].includes(recoveryStatus)
+  const recoveryNotNeeded = !job.agent_recovery
+    && Boolean(job.publication_candidate)
+    && !job.publication_candidate?.degraded
+  const frozen = job.freeze_status === 'frozen'
+  const candidateReady = job.can_confirm_freeze || job.freeze_status === 'awaiting_confirmation'
+  return (
+    <div className="mdc-collection-lifecycle" aria-label="采集、补采与冻结阶段">
+      <article className={nativeSettled ? 'is-complete' : collecting ? 'is-active' : 'is-pending'}>
+        <span>{nativeSettled ? <CheckCircle2 size={16} /> : <Database size={16} />}</span>
+        <div><small>阶段 1</small><strong>UZI 原生采集</strong><p>{nativeSettled ? '采集结果已落库为草稿' : collecting ? '按原生 22 维 provider 路由采集中' : '等待采集任务启动'}</p></div>
+        <b>{nativeSettled ? 'DONE' : collecting ? 'RUN' : 'WAIT'}</b>
+      </article>
+      <article className={recoverySettled || recoveryNotNeeded ? 'is-complete' : recoveryActive ? 'is-active' : job.freeze_status === 'awaiting_recovery' || job.freeze_status === 'not_ready' || job.publication_candidate?.degraded ? 'is-warning' : 'is-pending'}>
+        <span>{recoverySettled || recoveryNotNeeded ? <CheckCircle2 size={16} /> : recoveryActive ? <CircleDashed size={16} /> : <Bot size={16} />}</span>
+        <div><small>阶段 2</small><strong>Agent 缺口补采</strong><p>{recoveryActive ? 'Agent 正在逐缺口恢复' : recoverySettled ? `${job.agent_recovery?.succeeded || 0} 项已恢复，候选已重算` : recoveryNotNeeded ? 'UZI 原生检查无待补缺口' : '原生采集后按需显式启动'}</p></div>
+        <b>{recoverySettled ? 'DONE' : recoveryNotNeeded ? 'SKIP' : recoveryActive ? 'RUN' : 'WAIT'}</b>
+      </article>
+      <article className={frozen ? 'is-complete' : candidateReady ? 'is-ready' : 'is-pending'}>
+        <span>{frozen ? <CheckCircle2 size={16} /> : <LockKeyhole size={16} />}</span>
+        <div><small>阶段 3</small><strong>用户确认冻结 Bundle</strong><p>{frozen ? '不可变版本已发布' : candidateReady ? '发布候选已就绪，等待你的确认' : '不会自动发布 Bundle'}</p></div>
+        <b>{frozen ? 'FROZEN' : candidateReady ? 'READY' : 'WAIT'}</b>
+      </article>
+    </div>
+  )
+}
+
+export function CollectionJobsPanel({ contract, urlState, jobs, jobDetails, loading, actionLoading, onCreate, onRefresh, onLoadDetail, onRetry, onAgentRecovery, onConfirmFreeze, onCancel }: {
   contract: MarketDataContract
   urlState: MarketDataUrlState
   jobs: PageResult<CollectionJob>
@@ -26,6 +71,8 @@ export function CollectionJobsPanel({ contract, urlState, jobs, jobDetails, load
   onRefresh: () => Promise<unknown>
   onLoadDetail: (jobId: string) => Promise<CollectionJob | null>
   onRetry: (jobId: string, scope?: { symbols?: string[]; dimensions?: string[] }) => Promise<unknown>
+  onAgentRecovery: (jobId: string) => Promise<unknown>
+  onConfirmFreeze: (jobId: string, acknowledgeDegraded: boolean, proposalHash: string) => Promise<unknown>
   onCancel: (jobId: string) => Promise<unknown>
 }) {
   const [symbols, setSymbols] = useState(urlState.symbol)
@@ -34,7 +81,7 @@ export function CollectionJobsPanel({ contract, urlState, jobs, jobDetails, load
   const [mode, setMode] = useState<CollectionJobInput['mode']>('missing_or_stale')
   const [scope, setScope] = useState<'all' | 'current'>('all')
   const [concurrency, setConcurrency] = useState(5)
-  const [publish, setPublish] = useState(true)
+  const [freezeTarget, setFreezeTarget] = useState<CollectionJob | null>(null)
   const isFund = contract.asset_family === 'fund'
   const hasActiveJobs = jobs.items.some((job) => isActiveCollectionJob(job.status))
   const parentIds = new Set(jobs.items.filter((job) => !job.parent_job_id).map((job) => job.job_id))
@@ -52,7 +99,7 @@ export function CollectionJobsPanel({ contract, urlState, jobs, jobDetails, load
       dimensions: scope === 'all' ? 'all' : [urlState.dimension].filter(Boolean),
       mode,
       max_concurrency: concurrency,
-      publish_when_complete: publish,
+      publish_when_complete: false,
     }).catch(() => undefined)
   }
   return (
@@ -62,17 +109,17 @@ export function CollectionJobsPanel({ contract, urlState, jobs, jobDetails, load
           <div><span className="mdc-eyebrow">EXPLICIT COLLECTION</span><h2>新建采集任务</h2></div>
           <CalendarRange size={20} />
         </header>
-        <p className="mdc-form-note">{isFund ? '基金只作为前十大股票入口：先冻结一个持仓披露槽，再展开 10 只股票的完整采集子任务。' : '只有提交此表单才会调用外部数据源。打开页面、读取覆盖率和生成报告都不会自动采集。'}</p>
+        <p className="mdc-form-note">{isFund ? '基金只作为前十大股票入口：持仓披露与 10 只股票先采集落库，缺口可由 Agent 补采；只有你确认后才冻结 Bundle。' : '只有提交此表单才会调用外部数据源。采集结果先落库为草稿，缺口可由 Agent 补采；不会自动冻结 Bundle。'}</p>
         <label>{isFund ? '基金代码（一次一只）' : '股票代码（逗号或空格分隔；不可混入基金）'}<textarea value={symbols} onChange={(event) => setSymbols(event.target.value)} rows={3} required /></label>
         <div className="mdc-form-grid">
-          <label>{isFund ? '冻结日期' : '开始日期'}<input type="date" value={startDate} onChange={(event) => { setStartDate(event.target.value); if (isFund) setEndDate(event.target.value) }} required /></label>
+          <label>{isFund ? '数据日期' : '开始日期'}<input type="date" value={startDate} onChange={(event) => { setStartDate(event.target.value); if (isFund) setEndDate(event.target.value) }} required /></label>
           <label>结束日期<input type="date" value={endDate} min={startDate} disabled={isFund} onChange={(event) => setEndDate(event.target.value)} required /></label>
           <label>采集模式<select value={mode} onChange={(event) => setMode(event.target.value as CollectionJobInput['mode'])}><option value="missing_or_stale">仅补缺 / 过期</option><option value="force_all">强制重新查询</option></select></label>
           <label>维度范围<select value={scope} disabled={isFund} onChange={(event) => setScope(event.target.value as 'all' | 'current')}><option value="all">{isFund ? `基金持仓入口 ${contract.expected_dimension_count} 槽` : `契约全部 ${contract.expected_dimension_count} 槽`}</option>{!isFund && <option value="current">当前槽位</option>}</select></label>
           <label>采集并发<input type="number" min={1} max={5} value={concurrency} onChange={(event) => setConcurrency(Math.max(1, Math.min(5, Number(event.target.value) || 1)))} /></label>
           {isFund ? <label>展开股票数<input type="number" value={10} readOnly aria-label="固定展开前十大股票" /></label> : null}
         </div>
-        <label className="mdc-check-row"><input type="checkbox" checked={publish} onChange={(event) => setPublish(event.target.checked)} /><span>22 个采集槽均已落库后自动发布不可变 Bundle（发布过程不联网）</span></label>
+        <div className="mdc-draft-policy"><Database size={15} /><span><strong>默认保存为采集草稿</strong><small>UZI 原生采集 → Agent 缺口补采 → 用户确认冻结 Bundle</small></span></div>
         <button className="primary-button" type="submit" disabled={actionLoading || !symbols.trim()}><Play size={15} />{actionLoading ? '正在提交…' : '创建显式采集任务'}</button>
       </form>
 
@@ -107,6 +154,25 @@ export function CollectionJobsPanel({ contract, urlState, jobs, jobDetails, load
               ?? job.resolution_summary?.degraded
               ?? 0
             const durations = collectionJobDurations(job)
+            const freezeMeta = freezeStatusMeta(detailedJob)
+            const agentRecoveryActive = recoveryIsActive(detailedJob)
+            const recoveryStatus = String(detailedJob.agent_recovery?.status || '').toLowerCase()
+            const fullUziScope = job.asset_family === 'fund'
+              || detailedJob.dimensions === 'all'
+              || (Array.isArray(detailedJob.dimensions) && detailedJob.dimensions.length === contract.expected_dimension_count)
+            const canRunAgentRecovery = !active
+              && !agentRecoveryActive
+              && detailedJob.freeze_status !== 'frozen'
+              && fullUziScope
+              && (Boolean(detailedJob.publication_candidate?.degraded)
+                || ['awaiting_recovery', 'not_ready'].includes(detailedJob.freeze_status || '')
+                || ['failed', 'partial', 'cancelled'].includes(recoveryStatus))
+            const canConfirmFreeze = !active
+              && !agentRecoveryActive
+              && detailedJob.freeze_status !== 'frozen'
+              && /^[0-9a-f]{64}$/i.test(detailedJob.publication_candidate?.proposal_hash || '')
+              && (detailedJob.can_confirm_freeze
+                || (detailedJob.freeze_status === 'awaiting_confirmation' && detailedJob.publication_candidate?.can_publish !== false))
             return (
               <JobDetails
                 key={job.job_id}
@@ -115,13 +181,14 @@ export function CollectionJobsPanel({ contract, urlState, jobs, jobDetails, load
                 onOpen={job.asset_family === 'equity' ? () => { void onLoadDetail(job.job_id) } : undefined}
               >
                 <summary>
-                  <span><StatusBadge label={status.label} tone={status.tone} />{retryableTaskCount > 0 ? <span className="mdc-retry-available"><RotateCcw size={11} />可重试 {retryableTaskCount}</span> : null}{blockedTaskCount > 0 ? <span className="mdc-blocked-count">阻断 {blockedTaskCount}</span> : null}{degradedCount > 0 ? <span className="mdc-blocked-count">降级披露 {degradedCount}</span> : null}<code>{job.job_id}</code></span>
+                  <span><StatusBadge label={status.label} tone={status.tone} /><StatusBadge label={freezeMeta.label} tone={freezeMeta.tone} />{retryableTaskCount > 0 ? <span className="mdc-retry-available"><RotateCcw size={11} />可重试 {retryableTaskCount}</span> : null}{blockedTaskCount > 0 ? <span className="mdc-blocked-count">阻断 {blockedTaskCount}</span> : null}{degradedCount > 0 ? <span className="mdc-blocked-count">降级披露 {degradedCount}</span> : null}<code>{job.job_id}</code></span>
                   <span><strong>{job.asset_family === 'fund' ? `基金 ${job.symbols.join('、')} · 前十大持仓` : job.symbols.join('、')}</strong><small>{job.start_date} — {job.end_date} · 并发 {job.max_concurrency}</small></span>
                   {job.asset_family === 'fund' ? <FundCollectionProgress job={job} childJobs={childJobs} /> : <CollectionJobProgress progress={job.progress} />}
                   <ChevronDown size={16} />
                 </summary>
                 <div className="mdc-job-card-body">
-                  <div className="mdc-job-meta"><span>模式 {job.mode}</span><span>创建 {formatDateTime(job.created_at)}</span><span>排队 {durations.queue}</span><span>运行 {durations.run}</span><span>自动发布 {job.publish_when_complete ? '开启' : '关闭'}</span></div>
+                  <div className="mdc-job-meta"><span>模式 {job.mode}</span><span>创建 {formatDateTime(job.created_at)}</span><span>排队 {durations.queue}</span><span>运行 {durations.run}</span><span>Bundle 发布：需用户确认</span></div>
+                  <CollectionLifecycle job={detailedJob} />
                   {job.asset_family === 'fund' ? (
                     <FundCollectionOverview
                       job={job}
@@ -138,8 +205,10 @@ export function CollectionJobsPanel({ contract, urlState, jobs, jobDetails, load
                     <div className="mdc-table-scroll"><table className="mdc-table"><thead><tr><th>证券</th><th>槽位</th><th>状态</th><th>Attempt</th><th>说明</th></tr></thead><tbody>{detailedJob.tasks.map((task) => <tr key={task.task_id}><td>{task.symbol}</td><td><code>{task.dimension_id}</code></td><td>{task.resolution_status === 'audit_only' ? 'UZI 可用' : task.resolution_status === 'degraded' ? '降级披露' : jobStatusMeta(task.status).label}</td><td>{task.attempt}{task.max_attempts ? ` / ${task.max_attempts}` : ''}</td><td>{task.resolution_status === 'audit_only' ? '扩展契约仅作审计，不再阻断' : task.resolution_status === 'degraded' ? '历史不可恢复，已排除评分' : task.error_message || '—'}</td></tr>)}</tbody></table></div>
                   )}
                   <div className="mdc-panel-actions">
-                    {job.asset_family !== 'fund' && retryableTaskCount > 0 && <button className="secondary-button" type="button" disabled={actionLoading} onClick={() => void onRetry(job.job_id).catch(() => undefined)}><RotateCcw size={14} />重试 {retryableTaskCount} 个可重试槽</button>}
-                    {active && <button className="mdc-danger-button" type="button" disabled={actionLoading} onClick={() => void onCancel(job.job_id).catch(() => undefined)}><Ban size={14} />取消任务</button>}
+                    {job.asset_family !== 'fund' && detailedJob.freeze_status !== 'frozen' && retryableTaskCount > 0 && <button className="secondary-button" type="button" disabled={actionLoading || agentRecoveryActive} onClick={() => void onRetry(job.job_id).catch(() => undefined)}><RotateCcw size={14} />重试 {retryableTaskCount} 个可重试槽</button>}
+                    {canRunAgentRecovery && <button className="secondary-button" type="button" disabled={actionLoading} onClick={() => void onAgentRecovery(job.job_id).catch(() => undefined)}><Bot size={14} />{detailedJob.agent_recovery ? '重新执行 Agent 补采' : '启动 Agent 缺口补采'}</button>}
+                    {canConfirmFreeze && <button className="primary-button" type="button" disabled={actionLoading} onClick={() => setFreezeTarget(detailedJob)}><LockKeyhole size={14} />确认冻结 Bundle</button>}
+                    {(active || agentRecoveryActive) && <button className="mdc-danger-button" type="button" disabled={actionLoading} onClick={() => void onCancel(job.job_id).catch(() => undefined)}><Ban size={14} />{agentRecoveryActive ? '取消 Agent 补采' : '取消任务'}</button>}
                   </div>
                 </div>
               </JobDetails>
@@ -147,6 +216,7 @@ export function CollectionJobsPanel({ contract, urlState, jobs, jobDetails, load
           })}
         </div>
       </section>
+      {freezeTarget ? <ConfirmBundleFreezeDialog job={freezeTarget} busy={actionLoading} onClose={() => setFreezeTarget(null)} onSubmit={(acknowledgeDegraded) => onConfirmFreeze(freezeTarget.job_id, acknowledgeDegraded, freezeTarget.publication_candidate?.proposal_hash || '')} /> : null}
     </div>
   )
 }

@@ -4,6 +4,7 @@ from importlib import import_module
 from typing import Any
 
 from research_system.adapters.vendors.akshare_utils import normalize_value
+from research_system.adapters.vendors.tushare_utils import frame_records, tushare_code
 
 
 class TuShareFundamentalAdapter:
@@ -17,7 +18,7 @@ class TuShareFundamentalAdapter:
     def get_fundamental_snapshot(self, *, symbol: str) -> dict[str, Any]:
         ts = import_module("tushare")
         pro = ts.pro_api(self.token)
-        ts_code = self._ts_code(symbol)
+        ts_code = tushare_code(symbol)
         frames: dict[str, Any] = {}
         unavailable: list[str] = []
         calls = {
@@ -45,9 +46,9 @@ class TuShareFundamentalAdapter:
             if unavailable:
                 raise PermissionError("tushare token has no accessible fundamental interfaces")
             raise ValueError(f"no fundamental data returned for symbol {symbol}")
-        income = self._records(frames["income"])
-        balance = self._records(frames["balance"])
-        cash_flow = self._records(frames["cash_flow"])
+        income = frame_records(frames["income"])
+        balance = frame_records(frames["balance"])
+        cash_flow = frame_records(frames["cash_flow"])
         return {
             "symbol": symbol,
             "info": self._first_record(frames["basic"]),
@@ -71,18 +72,3 @@ class TuShareFundamentalAdapter:
         if frame is None or getattr(frame, "empty", True):
             return {}
         return {str(key): normalize_value(value) for key, value in frame.iloc[0].to_dict().items()}
-
-    @staticmethod
-    def _records(frame) -> list[dict[str, Any]]:
-        if frame is None or getattr(frame, "empty", True):
-            return []
-        return [
-            {str(key): normalize_value(value) for key, value in row.items()}
-            for row in frame.to_dict("records")
-        ]
-
-    @staticmethod
-    def _ts_code(symbol: str) -> str:
-        raw = str(symbol).lower().replace("sh", "").replace("sz", "").replace("bj", "").replace(".", "")[-6:]
-        exchange = "BJ" if raw.startswith(("4", "8")) else "SH" if raw.startswith(("5", "6", "9")) else "SZ"
-        return f"{raw}.{exchange}"

@@ -99,7 +99,7 @@ def sample_uzi_artifacts() -> list[dict]:
         },
     }
     native = {
-        "source_commit": "1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4",
+        "source_commit": "b3665e85b8666477038e11157d8e8feb0e006b76",
         "methodology_version": "3.9.4-source-parity", "profile": "deep",
         "critical_count": 0, "warning_count": 1, "report_allowed": True, "quality_status": "available",
         "recovery_history": [],

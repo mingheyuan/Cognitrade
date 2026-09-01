@@ -47,6 +47,17 @@ from research_system.schemas.turn_runtime import TurnConfig
 from research_system.services.memory.layers import LayeredMemoryStore
 
 
+_ARTIFACT_BACKED_INTENT_INPUT_KEYS = frozenset(
+    {
+        "market_data_bundle",
+        "report_data_manifest",
+        "snapshots",
+        "source_refs",
+        "user_request",
+    }
+)
+
+
 class _AgentOSGraphRunnerAdapter:
     """Adapt the existing Graph request implementation to GraphExecutor."""
 
@@ -1301,6 +1312,16 @@ class AgentOS:
             else:
                 required = [contract.artifact_type for contract in manifest.report_contracts]
                 required_outputs_source = "manifest_report_contract"
+        artifact_backed_keys = sorted(
+            key
+            for key in _ARTIFACT_BACKED_INTENT_INPUT_KEYS
+            if key in request.slots
+        )
+        planning_slots = {
+            key: value
+            for key, value in dict(request.slots).items()
+            if key not in _ARTIFACT_BACKED_INTENT_INPUT_KEYS
+        }
         planning_request = CapabilityPlanningRequest(
             domain_id=domain_id,
             objective=request.user_query,
@@ -1319,9 +1340,10 @@ class AgentOS:
                 "request_id": request.request_id,
                 "intent_inputs": {
                     "intent": request.intent,
-                    **dict(request.slots),
+                    **planning_slots,
                     **dict(request.constraints),
                 },
+                "artifact_backed_intent_input_keys": artifact_backed_keys,
                 "request_constraints": dict(request.constraints),
                 "required_outputs_source": required_outputs_source,
                 "chat_dispatch": (

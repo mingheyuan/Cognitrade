@@ -520,6 +520,7 @@ def _next_fomc(dt: datetime) -> datetime:
 
 def build_thesis_tracker(features: dict, raw_data: dict, direction: str = "long") -> dict:
     """Running thesis scorecard — pillars, current status, trend."""
+    features = sanitize_features(features)
     dims = raw_data.get("dimensions", {}) or {}
     fin = (dims.get("1_financials") or {}).get("data") or {}
     kline = (dims.get("2_kline") or {}).get("data") or {}

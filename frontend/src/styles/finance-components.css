@@ -201,7 +201,7 @@
 
 
 .paper-quote-source {
-  margin-top: 13px;
+  margin: 0 11px 11px;
   padding-top: 11px;
   border-top: 1px solid var(--border);
 }
@@ -281,10 +281,6 @@
 .paper-quote-audit dd {
   color: var(--text-soft);
   text-align: right;
-}
-
-.paper-quote-source {
-  margin: 0 11px 11px;
 }
 
 .paper-match-disclosure {
@@ -806,6 +802,9 @@
 .fund-holdings-section > header,
 .fund-gap-section > header,
 .fund-audit-grid > section > header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   color: var(--mint);
 }
 
@@ -818,17 +817,6 @@
   margin: 0;
   color: var(--text);
   font-size: 12px;
-}
-
-.fund-recommendation-board > header > div,
-.fund-score-section > header,
-.fund-detail-grid > section > header,
-.fund-holdings-section > header,
-.fund-gap-section > header,
-.fund-audit-grid > section > header {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
 }
 
 .fund-recommendation-board > header > span,
@@ -1887,11 +1875,6 @@
 
 .fund-audit-grid .artifact-structured-view {
   padding: 0 11px 9px;
-}
-
-.source-coverage-dot.is-available {
-  background: var(--mint);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--mint) 10%, transparent);
 }
 
 @media (max-width: 1240px) {

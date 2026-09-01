@@ -18,7 +18,7 @@ from threading import RLock
 from typing import Any, Protocol, runtime_checkable
 from zoneinfo import ZoneInfo
 
-from research_system.market_data.contracts import CONTRACT_VERSION
+from research_system.market_data.contracts import is_supported_uzi_contract_version
 from research_system.schemas.protocol import RequestEnvelope
 
 FORMAL_REPORT_INTENTS = frozenset(
@@ -299,8 +299,8 @@ class DatabaseReportInputGateway:
 
         from research_system.market_data.bundles import BundleMaterializer
         from research_system.market_data.contracts import (
-            CONTRACT_VERSION,
             canonical_hash,
+            is_supported_uzi_contract_version,
         )
         from research_system.market_data.repository import MarketDataRepository
 
@@ -329,7 +329,7 @@ class DatabaseReportInputGateway:
                     "report_manifest_invalidated",
                     "冻结的报告输入已失效",
                 )
-            if manifest.contract_version != CONTRACT_VERSION:
+            if not is_supported_uzi_contract_version(manifest.contract_version):
                 raise ReportInputError(
                     "report_manifest_contract_mismatch",
                     "冻结的报告输入契约版本已不受当前运行时支持",
@@ -494,6 +494,7 @@ class DatabaseReportInputGateway:
         from research_system.market_data.bundles import BundleMaterializer
         from research_system.market_data.contracts import (
             CONTRACT_VERSION,
+            LEGACY_UZI_CONTRACT_VERSIONS,
             canonical_hash,
         )
         from research_system.market_data.models import (
@@ -528,13 +529,20 @@ class DatabaseReportInputGateway:
                     default_market=self.default_market,
                 )
                 bundle = None
-                for candidate in _symbol_candidates(symbol, market):
-                    bundle = repository.latest_bundle(
-                        symbol=candidate,
-                        market=market,
-                        as_of_date=as_of_date,
-                        contract_version=CONTRACT_VERSION,
-                    )
+                supported_versions = (
+                    CONTRACT_VERSION,
+                    *sorted(LEGACY_UZI_CONTRACT_VERSIONS),
+                )
+                for contract_version in supported_versions:
+                    for candidate in _symbol_candidates(symbol, market):
+                        bundle = repository.latest_bundle(
+                            symbol=candidate,
+                            market=market,
+                            as_of_date=as_of_date,
+                            contract_version=contract_version,
+                        )
+                        if bundle is not None:
+                            break
                     if bundle is not None:
                         break
                 if bundle is None:
@@ -1309,7 +1317,7 @@ def _validate_manifest_item(item: Mapping[str, Any], all_rows: Sequence[Mapping[
     bundle_contract = str(bundle.get("contract_version") or "").strip()
     if not bundle_contract or bundle_contract != str(item.get("contract_version") or "").strip():
         raise ReportInputError("bundle_contract_mismatch", f"{symbol} Bundle 契约与报告 manifest 不一致")
-    uses_uzi_gate = bundle_contract == CONTRACT_VERSION
+    uses_uzi_gate = is_supported_uzi_contract_version(bundle_contract)
     # UZI's data-integrity output is recovery input, not the final publication
     # gate.  A structurally complete Bundle may contain explicit provider gaps;
     # the native full Agent workflow repairs them and only final self_review

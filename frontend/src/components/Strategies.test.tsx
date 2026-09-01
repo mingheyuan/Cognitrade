@@ -79,6 +79,8 @@ describe('Strategies', () => {
   let reportJobs: ReportJob[] = []
   let verificationRequests: Array<Record<string, unknown>> = []
   let assignmentUpdates: Array<Record<string, unknown>> = []
+  let backtestCreates: Array<Record<string, unknown>> = []
+  let backtestActions: string[] = []
   let backtestPreflight: Record<string, unknown>
 
   beforeEach(() => {
@@ -87,6 +89,8 @@ describe('Strategies', () => {
     reportJobs = []
     verificationRequests = []
     assignmentUpdates = []
+    backtestCreates = []
+    backtestActions = []
     backtestPreflight = {
       ready: false,
       strategy_content_hash: 'a'.repeat(64),
@@ -179,6 +183,15 @@ describe('Strategies', () => {
           created_at: '2026-08-15T00:00:00Z', completed_at: '2026-08-15T00:02:00Z',
         })
       }
+      const backtestAction = url.pathname.match(/\/finance\/strategy-backtests\/([^/]+)\/(retry|cancel)$/)
+      if (backtestAction && init?.method === 'POST') {
+        backtestActions.push(`${backtestAction[2]}:${decodeURIComponent(backtestAction[1])}`)
+        return json(strategyBacktests.find((row) => row.id === backtestAction[1]) || {})
+      }
+      if (url.pathname.endsWith('/finance/strategy-backtests') && init?.method === 'POST') {
+        backtestCreates.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        return json({ id: 'bt-created', status: 'queued' }, 202)
+      }
       if (url.pathname.endsWith('/finance/strategy-backtests')) return json({ backtests: strategyBacktests })
       if (url.pathname.endsWith('/finance/strategy-verifications') && init?.method === 'POST') {
         verificationRequests.push(JSON.parse(String(init.body)) as Record<string, unknown>)
@@ -205,17 +218,45 @@ describe('Strategies', () => {
     expect(screen.getByText('基金 · 110011')).toBeInTheDocument()
   })
 
-  it('opens holdings-portfolio backtesting without free strategy overrides', async () => {
+  it('launches holdings-portfolio backtesting after inline preflight without free overrides', async () => {
+    backtestPreflight = {
+      ready: true,
+      strategy_content_hash: 'a'.repeat(64),
+      signal_count: 1,
+      available_report_count: 6,
+      trading_day_count: 6,
+      missing_report_dates: [],
+    }
     window.history.replaceState({}, '', '/strategies?tab=backtests&strategy_id=s1&fund_code=110011&strategy_version_id=v1&mode=holdings_portfolio')
     render(<Strategies />)
 
     expect(await screen.findByText('基金回测预检')).toBeInTheDocument()
     expect(screen.getByLabelText('策略版本')).toHaveValue('v1')
     expect(screen.getByLabelText('目标基金')).toHaveValue('110011')
-    expect(screen.getByLabelText('模式')).toHaveValue('holdings_portfolio')
+    expect(screen.getByLabelText('回测模式')).toHaveValue('holdings_portfolio')
     expect(screen.queryByLabelText('快均线')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('买入阈值')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('股票佣金率')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('开始日期'), { target: { value: '2026-08-07' } })
+    fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-14' } })
+    fireEvent.click(screen.getByRole('button', { name: '检查并启动回测' }))
+
+    await waitFor(() => expect(backtestCreates).toHaveLength(1))
+    expect(backtestCreates[0]).toEqual({
+      strategy_version_id: 'v1',
+      fund_code: '110011',
+      mode: 'holdings_portfolio',
+      start_date: '2026-08-07',
+      end_date: '2026-08-14',
+      initial_cash: 1_000_000,
+      benchmark: {
+        fund_buy_and_hold: false,
+        initial_disclosed_weights_static: true,
+        hs300: true,
+        category_index: false,
+      },
+      report_policy: 'existing_only',
+    })
   })
 
   it('defaults new bindings to the fund itself', async () => {
@@ -232,13 +273,15 @@ describe('Strategies', () => {
     strategyBacktests = [
       {
         id: 'bt-new', strategy_id: 's1', strategy_version_id: 'v1', strategy_content_hash: 'a'.repeat(64),
-        input_snapshot_hash: 'same-input', fund_code: '110011', fund_name: '测试权益基金', mode: 'fund_only',
-        start_date: '2026-08-07', end_date: '2026-08-14', initial_cash: 1_000_000, status: 'completed',
+        input_snapshot_hash: 'execution-snapshot-new', fund_code: '110011', fund_name: '测试权益基金', mode: 'fund_only',
+        benchmark: { fund_buy_and_hold: true, category_index: true },
+        start_date: '2026-08-07', end_date: '2026-08-14', initial_cash: 1_000_000, status: 'running',
         metrics: {}, error_summary: 'latest-run', created_at: '2026-08-16T00:00:00Z',
       },
       {
         id: 'bt-old', strategy_id: 's1', strategy_version_id: 'v1', strategy_content_hash: 'a'.repeat(64),
-        input_snapshot_hash: 'same-input', fund_code: '110011', fund_name: '测试权益基金', mode: 'fund_only',
+        input_snapshot_hash: 'execution-snapshot-old', fund_code: '110011', fund_name: '测试权益基金', mode: 'fund_only',
+        benchmark: { category_index: true, fund_buy_and_hold: true },
         start_date: '2026-08-07', end_date: '2026-08-14', initial_cash: 1_000_000, status: 'failed',
         metrics: {}, error_summary: 'older-run', created_at: '2026-08-15T00:00:00Z',
       },
@@ -260,6 +303,14 @@ describe('Strategies', () => {
     const listUrl = new URL(String(listCall?.[0]))
     expect(listUrl.searchParams.get('strategy_id')).toBe('s1')
     expect(listUrl.searchParams.get('limit')).toBe('200')
+
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(backtestActions).toContain('cancel:bt-new'))
+    expect(screen.getByText(/基于策略最近 200 次原始运行/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '展开已加载的原始运行（另 1 次）' }))
+    expect(await screen.findByText(/older-run/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    await waitFor(() => expect(backtestActions).toContain('retry:bt-old'))
   })
 
   it('shows persisted progress on a running report task card', async () => {
@@ -282,13 +333,23 @@ describe('Strategies', () => {
   })
 
   it('shows report backfill progress beside the backtest preflight', async () => {
+    backtestPreflight = {
+      ready: false,
+      strategy_content_hash: 'a'.repeat(64),
+      signal_count: 6,
+      available_report_count: 0,
+      trading_day_count: 6,
+      missing_report_dates: ['2026-08-07', '2026-08-10', '2026-08-11', '2026-08-12', '2026-08-13', '2026-08-14'],
+    }
     window.history.replaceState({}, '', '/strategies?tab=backtests&strategy_id=s1&fund_code=110011&strategy_version_id=v1&mode=holdings_portfolio')
     render(<Strategies />)
 
     fireEvent.change(await screen.findByLabelText('开始日期'), { target: { value: '2026-08-07' } })
     fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-14' } })
-    fireEvent.click(screen.getByRole('button', { name: '执行预检' }))
-    expect(await screen.findByText(/0 个基金信号 · 0\/6 个日报交易日/)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('报告获取策略'), { target: { value: 'require_complete' } })
+    fireEvent.click(screen.getByRole('button', { name: '检查并启动回测' }))
+    expect(await screen.findByText(/6 个基金信号 · 0\/6 个日报交易日/)).toBeInTheDocument()
+    expect(backtestCreates).toHaveLength(0)
 
     fireEvent.click(screen.getByRole('button', { name: '估算补跑成本' }))
     await waitFor(() => expect(screen.getByRole('button', { name: '确认补跑' })).toBeEnabled())
@@ -334,9 +395,10 @@ describe('Strategies', () => {
     fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-14' } })
     expect(screen.getByText('本次回测固定使用 v2')).toBeInTheDocument()
     expect(screen.getByLabelText('策略版本')).toHaveTextContent('v2 · 最新')
-    fireEvent.click(screen.getByRole('button', { name: '执行预检' }))
+    fireEvent.click(screen.getByRole('button', { name: '检查并启动回测' }))
 
     expect(await screen.findByText('0 个基金信号 · 6/6 个日报交易日')).toBeInTheDocument()
+    expect(backtestCreates).toHaveLength(0)
     expect(screen.getByText(/不会重新运行持仓 UZI 分析/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '生成 v2 信号' }))
 

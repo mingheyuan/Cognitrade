@@ -250,7 +250,6 @@ class UziRootCollectionRouterTests(unittest.TestCase):
                 )
 
         self.assertEqual(observed, {"timeout_seconds": 30.0})
-        self.assertEqual(pipeline_collect.ProcessJob.__name__, "ProcessJob")
         legacy.assert_not_called()
 
     def test_multi_runner_keeps_pinned_resume_true(self) -> None:

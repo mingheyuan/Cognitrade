@@ -143,7 +143,15 @@ def extract_features(raw: dict, dims: dict) -> dict:
     f["roe_trend_up"] = _last(roe_hist) > _avg(roe_hist[:-1]) if len(roe_hist) >= 3 else False
 
     f["revenue_latest_yi"] = _last(rev_hist)
-    f["revenue_growth_latest"] = _pct_change(rev_hist, 1)
+    explicit_revenue_yoy = fin.get("revenue_growth_yoy")
+    f["revenue_growth_latest"] = (
+        _f(explicit_revenue_yoy)
+        if explicit_revenue_yoy is not None
+        else _pct_change(rev_hist, 1)
+    )
+    f["revenue_growth_period"] = fin.get("revenue_growth_period")
+    f["revenue_growth_basis"] = fin.get("revenue_growth_basis")
+    f["revenue_growth_source"] = fin.get("revenue_growth_source")
     f["revenue_growth_3y_cagr"] = ((_last(rev_hist) / _f(rev_hist[-4])) ** (1/3) - 1) * 100 if len(rev_hist) >= 4 and _f(rev_hist[-4]) > 0 else 0
 
     f["net_profit_latest_yi"] = _last(np_hist)

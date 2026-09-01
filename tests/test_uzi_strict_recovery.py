@@ -1,17 +1,74 @@
 from __future__ import annotations
 
-from pathlib import Path
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from domain_packs.finance_ashare.tools.uzi_data_recovery import (
     _apply_qualitative_action,
     recover_suggested_fixes_until_exhausted,
+    recover_uzi_draft_snapshots,
 )
 from research_system.runtime.platform.settings import Settings
 
 
 class UziStrictRecoveryTests(unittest.TestCase):
+    def test_draft_agent_recovery_follows_native_stage_then_agent_order(self) -> None:
+        order: list[str] = []
+
+        def stage(name: str):
+            def run(*_args, **_kwargs):
+                order.append(name)
+                return {"attempted": 0, "succeeded": 0, "failed": 0}
+
+            return run
+
+        settings = Settings.from_env(Path(__file__).resolve().parents[1])
+        with (
+            patch(
+                "domain_packs.finance_ashare.tools.uzi_data_recovery.assess_integrity",
+                return_value={"critical_missing": False},
+            ),
+            patch(
+                "domain_packs.finance_ashare.tools.uzi_data_recovery.recover_qualitative_snapshots",
+                side_effect=stage("mx_ddgs"),
+            ),
+            patch(
+                "domain_packs.finance_ashare.tools.uzi_data_recovery.recover_playwright_snapshots",
+                side_effect=stage("playwright"),
+            ),
+            patch(
+                "domain_packs.finance_ashare.tools.uzi_data_recovery.recover_suggested_fixes_until_exhausted",
+                side_effect=stage("suggested_fix"),
+            ),
+            patch(
+                "domain_packs.finance_ashare.tools.uzi_data_recovery.collect_qualitative_agent_evidence",
+                side_effect=stage("agent_evidence"),
+            ),
+        ):
+            result = recover_uzi_draft_snapshots(
+                [],
+                query="测试",
+                symbols=["600519"],
+                profile="deep",
+                settings=settings,
+            )
+
+        self.assertEqual(
+            order,
+            ["mx_ddgs", "playwright", "suggested_fix", "agent_evidence"],
+        )
+        self.assertEqual(
+            result["stage_order"],
+            [
+                "qualitative_mx_ddgs",
+                "playwright_fallback",
+                "suggested_fix_loop",
+                "qualitative_agent_evidence",
+                "integrity_recompute",
+            ],
+        )
+
     def test_suggested_fix_loop_continues_beyond_three_actions_without_round_limit(self) -> None:
         progress = {"executed": 0}
         actions = [f"ws: '真实来源 {index}'" for index in range(5)]
@@ -78,6 +135,48 @@ class UziStrictRecoveryTests(unittest.TestCase):
         self.assertFalse(applied)
         self.assertNotIn("price", snapshot["facts"])
         self.assertEqual(snapshot["facts"]["_uzi_raw_result"]["data"], {})
+
+    def test_suggested_fix_loop_does_not_stop_before_enrichment_actions(self) -> None:
+        progress = {"executed": False}
+
+        def integrity(_snapshots, _symbols):
+            task = {
+                "dim": "12_capital_flow",
+                "field": "_entire_dim",
+                "severity": "enrichment",
+                "suggested_actions": ["browser: https://example.test/capital-flow"],
+            }
+            return {
+                "symbols": [{
+                    "symbol": "600519",
+                    "critical_missing": False,
+                    "coverage_pct": 100,
+                    "recovery_tasks": [] if progress["executed"] else [task],
+                }],
+                "critical_missing": False,
+                "coverage_pct": 100,
+            }
+
+        def execute(*_args, **_kwargs):
+            progress["executed"] = True
+            return {"stage": "playwright", "status": "available", "source_id": "test"}
+
+        settings = Settings.from_env(Path(__file__).resolve().parents[1])
+        with patch(
+            "domain_packs.finance_ashare.tools.uzi_data_recovery._exact_integrity",
+            side_effect=integrity,
+        ), patch(
+            "domain_packs.finance_ashare.tools.uzi_data_recovery._execute_recovery_action",
+            side_effect=execute,
+        ):
+            result = recover_suggested_fixes_until_exhausted(
+                [], query="测试", symbols=["600519"], profile="deep", settings=settings,
+            )
+
+        self.assertTrue(progress["executed"])
+        self.assertEqual(result["attempted"], 1)
+        self.assertEqual(result["attempts"][0]["dim"], "12_capital_flow")
+        self.assertEqual(result["exhausted_reason"], "all_recovery_tasks_cleared")
 
     def test_qualitative_recovery_is_explicitly_disclosed(self) -> None:
         snapshot = {

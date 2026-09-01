@@ -21,6 +21,7 @@ Output shape (matches report viz expectations):
 from __future__ import annotations
 
 import json
+import math
 import sys
 import traceback
 from datetime import datetime
@@ -44,9 +45,33 @@ def _to_float_or_none(v) -> float | None:
     try:
         if v in (None, "", "--", "-"):
             return None
-        return float(str(v).replace(",", "").replace("%", ""))
+        parsed = float(str(v).replace(",", "").replace("%", ""))
+        return parsed if math.isfinite(parsed) else None
     except (ValueError, TypeError):
         return None
+
+
+_REVENUE_GROWTH_COLUMNS = (
+    "主营业务收入增长率(%)",
+    "营业总收入同比增长(%)",
+    "营业收入同比增长率(%)",
+    "营业收入增长率(%)",
+)
+
+
+def _latest_reported_revenue_growth(df, date_col: str) -> tuple[float | None, str | None, str | None]:
+    """Return the newest explicit report-period revenue YoY and its provenance."""
+    if df is None or df.empty or date_col not in df.columns:
+        return None, None, None
+    available = [column for column in _REVENUE_GROWTH_COLUMNS if column in df.columns]
+    if not available:
+        return None, None, None
+    for _, row in df.sort_values(date_col, ascending=False).iterrows():
+        for column in available:
+            value = _to_float_or_none(row.get(column))
+            if value is not None:
+                return value, str(row.get(date_col))[:10], column
+    return None, None, None
 
 
 def _mx_search_table(result: dict) -> tuple[dict, dict]:
@@ -278,6 +303,17 @@ def _fetch_a_share(ti) -> dict:
 
             last = df_ind.iloc[-1]
             last_annual = df_annual.iloc[-1]
+            revenue_yoy, revenue_yoy_period, revenue_yoy_column = _latest_reported_revenue_growth(
+                df_ind, date_col
+            )
+            if revenue_yoy is not None:
+                out["revenue_growth_yoy"] = round(revenue_yoy, 2)
+                out["revenue_growth"] = f"{revenue_yoy:+.1f}%"
+                out["revenue_growth_period"] = revenue_yoy_period
+                out["revenue_growth_basis"] = "reported_yoy"
+                out["revenue_growth_source"] = (
+                    f"akshare.stock_financial_analysis_indicator:{revenue_yoy_column}"
+                )
             # Financial health
             health = {}
             for src_key, dst_key, source_row in [
@@ -375,9 +411,14 @@ def _fetch_a_share(ti) -> dict:
     # ─── 3. 营收增速 summary
     try:
         rh = out.get("revenue_history") or []
-        if len(rh) >= 2 and rh[-2]:
+        if "revenue_growth_yoy" not in out and len(rh) >= 2 and rh[-2]:
             growth = (rh[-1] - rh[-2]) / rh[-2] * 100
+            out["revenue_growth_yoy"] = round(growth, 2)
             out["revenue_growth"] = f"{growth:+.1f}%"
+            years = out.get("financial_years") or []
+            out["revenue_growth_period"] = str(years[-1]) if years else None
+            out["revenue_growth_basis"] = "annual_yoy"
+            out["revenue_growth_source"] = "derived:revenue_history"
     except Exception:
         pass
 
@@ -541,10 +582,17 @@ def _fetch_hk(ti) -> dict:
         out["net_margin"] = _last_pct("NET_PROFIT_RATIO")
         out["gross_margin"] = _last_pct("GROSS_PROFIT_RATIO")
 
-        # 营收增速（最后一年 YoY）
-        try:
-            out["revenue_growth"] = f"{float(last.get('OPERATE_INCOME_YOY', 0)):.1f}%"
-        except (TypeError, ValueError):
+        # 营收增速（最后一年官方 YoY）
+        revenue_yoy = _to_float_or_none(last.get("OPERATE_INCOME_YOY"))
+        if revenue_yoy is not None:
+            out["revenue_growth_yoy"] = round(revenue_yoy, 2)
+            out["revenue_growth"] = f"{revenue_yoy:+.1f}%"
+            out["revenue_growth_period"] = str(last.get("REPORT_DATE"))[:10]
+            out["revenue_growth_basis"] = "reported_yoy"
+            out["revenue_growth_source"] = (
+                "akshare.stock_financial_hk_analysis_indicator_em:OPERATE_INCOME_YOY"
+            )
+        else:
             out["revenue_growth"] = "—"
         try:
             out["profit_growth"] = f"{float(last.get('HOLDER_PROFIT_YOY', 0)):.1f}%"

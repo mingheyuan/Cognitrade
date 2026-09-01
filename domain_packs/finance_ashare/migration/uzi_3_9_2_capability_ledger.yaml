@@ -1,7 +1,7 @@
 schema_version: "2"
 upstream:
   repository: https://github.com/wbh604/UZI-Skill
-  commit: 1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4
+  commit: b3665e85b8666477038e11157d8e8feb0e006b76
   version: 3.9.4
   vendored_root: domain_packs/finance_ashare/vendor/uzi_3_9_2
   runtime_boundary: in_process_vendored_pure_capability
@@ -353,11 +353,11 @@ native_report:
   status: source_parity
   template: domain_packs/finance_ashare/vendor/uzi_3_9_2/assets/report-template.html
   presentation_version: 3.9.4
-  presentation_commit: 1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4
+  presentation_commit: b3665e85b8666477038e11157d8e8feb0e006b76
   template_sha256: 1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8
   renderer_helpers:
     lib/report/dim_viz.py: 032dd9e0429f8d5e4ffd030dcc33c6360817b4ac81f6983479b4f82adef29304
-    lib/report/institutional.py: 9ad59fbd24e82f0d937c62676fc21e04875578e2b063f0b371301e27a7cc4bff
+    lib/report/institutional.py: 899a02316dcc110a2f8ce20cfd6de59579ec51f3e3b160861e98fd5651f59525
     lib/report/panel_cards.py: 28dfdb0b9ba226cc92236b0f31e7032c22fe624c2069b140410429923c82e828
     lib/report/svg_primitives.py: 2b13c6fdc9bfc1a5182a39c74d75d8c14ce1d52c26b7e88ae32975d1b547f93e
   html_pdf_same_source: true

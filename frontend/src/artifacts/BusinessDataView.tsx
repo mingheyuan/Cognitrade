@@ -17,6 +17,7 @@ import {
   isSensitiveBusinessKey,
 } from './labels'
 import { localizeErrorMessage } from '../utils/error-message'
+import { asRecord } from '../utils/value'
 
 type BusinessDataViewProps = {
   value: unknown
@@ -41,12 +42,6 @@ const HISTORY_FIELD_MARKERS = [
 ]
 const DATE_KEYS = ['date', 'datetime', 'timestamp', 'time', 'report_date', 'period_end', 'year']
 const CHART_COLORS = ['#70e0bd', '#e6bb63', '#8d7ff0', '#6fb6ff', '#ef8a8a', '#78d27d', '#dc8feb', '#a9b7c0']
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
-}
 
 function isPrimitive(value: unknown): boolean {
   return value == null || ['string', 'number', 'boolean'].includes(typeof value)

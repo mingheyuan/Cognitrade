@@ -23,6 +23,17 @@ _SEMAPHORE_LOCK = Lock()
 _SEMAPHORES: dict[int, BoundedSemaphore] = {}
 
 
+def resolve_uzi_llm_worker_count(provider: Any, task_count: int, *, ceiling: int) -> int:
+    """Bound one parallel UZI stage by tasks, stage policy, and provider settings."""
+    settings = getattr(provider, "settings", None)
+    configured = getattr(settings, "uzi_llm_max_concurrency", ceiling)
+    try:
+        limit = int(configured)
+    except (TypeError, ValueError):
+        limit = ceiling
+    return max(1, min(task_count or 1, ceiling, max(limit, 1)))
+
+
 def resolve_uzi_llm_request_timeout(
     provider: Any,
     *,
@@ -217,4 +228,5 @@ __all__ = [
     "DEFAULT_UZI_LLM_TRANSIENT_RETRIES",
     "parse_uzi_structured",
     "resolve_uzi_llm_request_timeout",
+    "resolve_uzi_llm_worker_count",
 ]

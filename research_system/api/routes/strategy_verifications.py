@@ -4,17 +4,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, ConfigDict, Field
-from starlette.concurrency import run_in_threadpool
 
 from research_system.api.dependencies import (
     ApiPrincipal,
     get_strategy_verification,
     require_principal,
 )
-from research_system.api.errors import ApiError
-from research_system.strategies.errors import StrategyDomainError
-from research_system.strategies.service import owner_scope
-
+from research_system.api.route_support import call_strategy_service as _call
 
 router = APIRouter(prefix="/finance", tags=["strategy governance"])
 
@@ -65,23 +61,5 @@ async def confirm_strategy_verification(
     service=Depends(get_strategy_verification),
 ) -> dict[str, Any]:
     return await _call(service.confirm, principal, verification_id)
-
-
-async def _call(operation, principal: ApiPrincipal, *args, **kwargs):
-    scope = owner_scope(
-        tenant_id=principal.tenant_id,
-        user_id=principal.user_id,
-        actor_id=principal.actor_id,
-    )
-    try:
-        return await run_in_threadpool(operation, scope, *args, **kwargs)
-    except StrategyDomainError as exc:
-        raise ApiError(
-            status_code=exc.status_code,
-            code=exc.code,
-            message=exc.message,
-            details=exc.details,
-        ) from exc
-
 
 __all__ = ["router"]

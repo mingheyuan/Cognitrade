@@ -1,34 +1,51 @@
 from __future__ import annotations
 
-from contextlib import contextmanager, suppress
-from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
-from time import monotonic
+from collections.abc import Callable
+from contextlib import contextmanager, suppress
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import RLock, get_ident
-from typing import Any, Callable, Protocol
+from time import monotonic
+from typing import Any, Protocol
 
-from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.core.approvals import HumanApprovalStore
 from research_system.runtime.core.artifact_board import ArtifactBoard
-from research_system.runtime.core.tool_registry import CoreToolContext, build_core_tool_registry
+
+# TurnContext and the Core provider/tool loop live in focused runtime modules.
+# They remain re-exported here for the existing public import path.
+from research_system.runtime.core.core_loop import CoreLoopExecutor
+from research_system.runtime.core.id_utils import generate_ulid
+from research_system.runtime.core.time_utils import parse_utc_datetime
+from research_system.runtime.core.tool_registry import (
+    CoreToolContext,
+    build_core_tool_registry,
+)
 from research_system.runtime.event_store import append_canonical_event
 from research_system.runtime.follow_up import FollowUpRuntime
 from research_system.runtime.hooks import HookRuntime, LifecycleInput, StopHookInput
 from research_system.runtime.presentation.display import runtime_status_message
 from research_system.runtime.roles import ChildTurnRuntime, RoleRegistry
-from research_system.runtime.storage.jsonl import append_jsonl, read_json, read_jsonl, write_json
+from research_system.runtime.storage.jsonl import (
+    append_jsonl,
+    read_json,
+    read_jsonl,
+    write_json,
+)
 from research_system.runtime.storage.runs.run_store import RunStore
 from research_system.runtime.turn_context import TurnContext, TurnStepExecutor, TurnTask
+from research_system.schemas.artifacts import (
+    ArtifactDraft,
+    ArtifactProducer,
+    ArtifactRecord,
+)
 from research_system.schemas.core_runtime import (
     MainAgentRunResult,
     MainAgentState,
     RequestIntakeDecision,
 )
-from research_system.schemas.artifacts import ArtifactDraft, ArtifactProducer, ArtifactRecord
-from research_system.schemas.subagents import RoleContract
 from research_system.schemas.events import EventEnvelope
 from research_system.schemas.execution_graph import ExecutionGraph
 from research_system.schemas.execution_runtime import (
@@ -36,27 +53,30 @@ from research_system.schemas.execution_runtime import (
     ExecutionRunSnapshot,
     GraphStepOutcome,
 )
-from research_system.schemas.protocol import ProgressState, RequestEnvelope, ResponseEnvelope
-from research_system.schemas.state_machine import RUN_TERMINAL_STATUSES, transition_status
+from research_system.schemas.protocol import (
+    ProgressState,
+    RequestEnvelope,
+    ResponseEnvelope,
+)
+from research_system.schemas.state_machine import (
+    RUN_TERMINAL_STATUSES,
+    transition_status,
+)
+from research_system.schemas.subagents import RoleContract
 from research_system.schemas.turn_runtime import (
-    FollowUpConfig,
-    GraphExecutorConfig,
-    HookConfig,
-    TaskSelection,
-    TaskOutcome,
-    TurnConfig,
-    TurnExecutionMode,
-    TurnTaskType,
     ChildTurnSnapshot,
+    FollowUpConfig,
     FollowupTaskRequest,
     FollowupTaskResult,
+    GraphExecutorConfig,
+    HookConfig,
+    TaskOutcome,
+    TaskSelection,
+    TurnConfig,
+    TurnExecutionMode,
     TurnSnapshot,
+    TurnTaskType,
 )
-
-
-# TurnContext and the Core provider/tool loop live in focused runtime modules.
-# They remain re-exported here for the existing public import path.
-from research_system.runtime.core.core_loop import CoreLoopExecutor
 
 
 class GraphRunnerAdapter(Protocol):
@@ -2242,7 +2262,7 @@ class TurnRunner:
         if lease_path.exists():
             if not isinstance(existing, dict):
                 raise ValueError(f"Turn execution lease is unreadable: {run_id}")
-            expires_at = self._parse_lease_time(existing.get("expires_at"))
+            expires_at = parse_utc_datetime(existing.get("expires_at"))
             if expires_at is not None and expires_at > now:
                 raise ValueError(f"Turn is already being executed by another worker: {run_id}")
             lease_path.unlink(missing_ok=True)
@@ -2279,16 +2299,6 @@ class TurnRunner:
     def _lease_seconds(self) -> int:
         timeout = float(self.timeout_seconds or 300.0)
         return max(120, int(timeout * 2) + 60)
-
-    @staticmethod
-    def _parse_lease_time(value: object) -> datetime | None:
-        try:
-            parsed = datetime.fromisoformat(str(value or ""))
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
 
     def _input_hook_blocked_outcome(self, context: TurnContext, reason: str) -> TaskOutcome:
         continuation = {

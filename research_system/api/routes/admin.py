@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query
-from starlette.concurrency import run_in_threadpool
 
 from research_system.api.agent_os_admin_service import AgentOSAdminService
 from research_system.api.dependencies import (
@@ -20,20 +19,13 @@ from research_system.api.models import (
     RunApprovalRejectRequest,
     RunApprovalRequest,
 )
-from research_system.api.route_support import identity_scope_kwargs
+from research_system.api.route_support import call_public_service, identity_scope_kwargs
 from research_system.api.validation import safe_identifier
-from research_system.runtime.presentation.display import localize_public_error_fields
-
 
 ApprovalStatus = Literal["pending", "approved", "rejected", "revoked", "expired"]
 MemoryLayer = Literal["episodic", "domain", "policy"]
 
 router = APIRouter(tags=["administration"])
-
-
-async def _public_call(operation, *args, **kwargs):
-    result = await run_in_threadpool(operation, *args, **kwargs)
-    return localize_public_error_fields(result)
 
 
 def _admin_service(agent_os=Depends(get_agent_os)) -> AgentOSAdminService:
@@ -42,7 +34,7 @@ def _admin_service(agent_os=Depends(get_agent_os)) -> AgentOSAdminService:
 
 @router.get("/admin/domain-packs")
 async def list_domain_packs(service: AgentOSAdminService = Depends(_admin_service)) -> list[dict]:
-    return await _public_call(service.list_domain_packs)
+    return await call_public_service(service.list_domain_packs)
 
 
 @router.get("/admin/domain-packs/{domain_id}")
@@ -52,7 +44,7 @@ async def show_domain_pack(
 ) -> dict:
     resolved = safe_identifier(domain_id, field_name="domain_id")
     try:
-        return await _public_call(service.domain_pack, resolved)
+        return await call_public_service(service.domain_pack, resolved)
     except KeyError as exc:
         raise ApiError(
             status_code=404,
@@ -71,7 +63,7 @@ async def list_run_approvals(
 ) -> list[dict]:
     resolved = safe_identifier(run_id, field_name="run_id")
     try:
-        return await _public_call(
+        return await call_public_service(
             service.list_approvals,
             resolved,
             status=status,
@@ -97,7 +89,7 @@ async def approve_run_node(
     resolved = safe_identifier(run_id, field_name="run_id")
     async with mutation_lock:
         try:
-            return await _public_call(
+            return await call_public_service(
                 service.approve,
                 resolved,
                 node_id=payload.node_id,
@@ -140,7 +132,7 @@ async def reject_run_approval(
     resolved_approval = safe_identifier(approval_id, field_name="approval_id")
     async with mutation_lock:
         try:
-            return await _public_call(
+            return await call_public_service(
                 service.reject,
                 resolved,
                 approval_id=resolved_approval,
@@ -177,7 +169,7 @@ async def list_memory(
     principal: ApiPrincipal = Depends(require_role("admin")),
     service: AgentOSAdminService = Depends(_admin_service),
 ) -> list[dict]:
-    return await _public_call(
+    return await call_public_service(
         service.list_memory,
         layer=layer,
         domain_id=domain_id,
@@ -194,7 +186,7 @@ async def expire_memory(
     mutation_lock=Depends(get_mutation_lock),
 ) -> dict:
     async with mutation_lock:
-        return await _public_call(service.expire_memory)
+        return await call_public_service(service.expire_memory)
 
 
 @router.post("/admin/memory/{memory_id}/promote")
@@ -208,7 +200,7 @@ async def promote_memory(
     resolved = safe_identifier(memory_id, field_name="memory_id")
     async with mutation_lock:
         try:
-            return await _public_call(
+            return await call_public_service(
                 service.promote_memory,
                 resolved,
                 target_layer=payload.target_layer,
@@ -246,7 +238,7 @@ async def revoke_memory(
     resolved = safe_identifier(memory_id, field_name="memory_id")
     async with mutation_lock:
         try:
-            return await _public_call(
+            return await call_public_service(
                 service.revoke_memory,
                 resolved,
                 revoked_by=f"api_v1:{principal.actor_id}",
@@ -268,7 +260,7 @@ async def cleanup_artifacts(
     mutation_lock=Depends(get_mutation_lock),
 ) -> dict:
     async with mutation_lock:
-        return await _public_call(service.cleanup_artifacts)
+        return await call_public_service(service.cleanup_artifacts)
 
 
 @router.post("/admin/qdrant/reindex")
@@ -278,7 +270,7 @@ async def reindex_qdrant(
     mutation_lock=Depends(get_mutation_lock),
 ) -> dict:
     async with mutation_lock:
-        return await _public_call(service.rebuild_qdrant)
+        return await call_public_service(service.rebuild_qdrant)
 
 
 __all__ = ["router"]

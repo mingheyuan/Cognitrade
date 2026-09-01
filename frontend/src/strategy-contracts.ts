@@ -1,8 +1,8 @@
 export type BacktestMode = 'fund_only' | 'holdings_portfolio'
 export type ResearchProfile = 'lite' | 'medium' | 'deep'
-export type StrategyLifecycle = 'draft' | 'published' | 'archived'
-export type GovernanceState = 'published' | 'verified' | 'promoted'
-export type SignalState = 'ALLOW_BUY' | 'WATCH' | 'AVOID' | 'BLOCKED'
+type StrategyLifecycle = 'draft' | 'published' | 'archived'
+type GovernanceState = 'published' | 'verified' | 'promoted'
+type SignalState = 'ALLOW_BUY' | 'WATCH' | 'AVOID' | 'BLOCKED'
 
 export type StrategyDocument = {
   metadata: { schema_version: '1'; description: string }
@@ -82,7 +82,7 @@ export type StrategyDocument = {
   }
 }
 
-export type StrategyVersion = {
+type StrategyVersion = {
   id: string
   strategy_id: string
   version_number: number
@@ -96,7 +96,7 @@ export type StrategyVersion = {
   document?: StrategyDocument
 }
 
-export type StrategyDraft = {
+type StrategyDraft = {
   strategy_id: string
   base_version_id?: string | null
   draft_revision: number
@@ -203,7 +203,7 @@ export type TradeSignal = {
   [key: string]: unknown
 }
 
-export type SignalCalculation = {
+type SignalCalculation = {
   subject_code?: string
   state: SignalState
   score_lower_bound: number
@@ -237,7 +237,7 @@ export type BacktestPreflight = {
   carry_days: number
 }
 
-export type BacktestEquityPoint = {
+type BacktestEquityPoint = {
   date: string
   equity?: number
   cash?: number
@@ -249,7 +249,7 @@ export type BacktestEquityPoint = {
   return_pct?: number
 }
 
-export type BacktestTrade = {
+type BacktestTrade = {
   date: string
   order_date?: string
   side: string
@@ -268,7 +268,7 @@ export type BacktestTrade = {
   entry_tranche_limit?: number
 }
 
-export type BacktestBenchmark = {
+type BacktestBenchmark = {
   status: string
   start?: string
   end?: string
@@ -304,6 +304,8 @@ export type StrategyBacktest = {
   start_date: string
   end_date: string
   initial_cash: number
+  report_policy?: 'existing_only' | 'require_complete'
+  benchmark?: Record<string, unknown>
   input_snapshot_hash?: string | null
   status: string
   metrics: Record<string, number>

@@ -276,7 +276,7 @@ class DataSourceRegistry:
                     notes="UZI-Skill 3.9.4 source registry parity entry; availability is verified per run.",
                     upstream_dims=upstream_dims,
                     health=str(health),
-                    upstream="UZI-Skill@1b5cdcbbc95012f5d18515d19ced4b2ffe4672c4",
+                    upstream="UZI-Skill@b3665e85b8666477038e11157d8e8feb0e006b76",
                 )
             )
         return rows

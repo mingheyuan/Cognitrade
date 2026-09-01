@@ -14,9 +14,17 @@ from research_system.api.fund_holding_report_service import (
     FundHoldingReportsUnavailable,
 )
 from research_system.market_data.bundles import BundlePublisher, bundle_manifest_hash
-from research_system.market_data.dimension_contracts import DEFAULT_DIMENSION_REGISTRY
-from research_system.market_data.fund_holdings_adapter import FundTopHoldingsSnapshotAdapter
-from research_system.market_data.fund_holdings_contracts import FUND_TOP_HOLDINGS_REGISTRY
+from research_system.market_data.contracts import LEGACY_UZI_CONTRACT_VERSIONS
+from research_system.market_data.dimension_contracts import (
+    DEFAULT_DIMENSION_REGISTRY,
+    DimensionRegistry,
+)
+from research_system.market_data.fund_holdings_adapter import (
+    FundTopHoldingsSnapshotAdapter,
+)
+from research_system.market_data.fund_holdings_contracts import (
+    FUND_TOP_HOLDINGS_REGISTRY,
+)
 from research_system.market_data.ingestion import SnapshotIngestionService
 from research_system.market_data.models import (
     ReportDataManifest,
@@ -37,11 +45,17 @@ from research_system.strategies.database import StrategyDatabase
 from research_system.strategies.orchestration import ReportOrchestrationService
 from tests.market_data.test_fund_holdings_foundation import (
     OBSERVED as FUND_OBSERVED,
+)
+from tests.market_data.test_fund_holdings_foundation import (
     STOCK_CODES as FUND_STOCK_CODES,
+)
+from tests.market_data.test_fund_holdings_foundation import (
     direct_skill_output,
 )
 from tests.market_data.test_pit_core import (
     _input as strict_market_data_input,
+)
+from tests.market_data.test_pit_core import (
     seed_strict_bundle,
 )
 from tests.test_fund_holding_reports import (
@@ -175,6 +189,29 @@ class _CollectContext:
         return self._query
 
 
+class _ArtifactBackedCollectContext(_CollectContext):
+    def __init__(self, slots: dict) -> None:
+        super().__init__({})
+        self.node.inputs = {
+            "intent": "stock_check",
+            "research_profile": "lite",
+            "data_source_mode": "bundle_only",
+        }
+        self._request = SimpleNamespace(
+            artifact_id="request-1",
+            artifact_type="user_request",
+            content=dict(slots),
+            source_refs=[{"type": "request", "id": "request-1"}],
+        )
+
+    def artifacts(self, artifact_type: str):
+        if artifact_type == "normalized_query":
+            return [self._query]
+        if artifact_type == "user_request":
+            return [self._request]
+        return []
+
+
 class ReportInputServiceTests(unittest.TestCase):
     def test_binding_report_inputs_starts_deferred_fund_batch_recovery(self) -> None:
         calls: list[object] = []
@@ -297,6 +334,24 @@ class ReportInputServiceTests(unittest.TestCase):
         self.assertEqual(bundle.content["collection"]["manifest_hash"], "a" * 64)
         self.assertEqual(len(bundle.content["snapshots"]), 2)
 
+    def test_collect_node_loads_large_bundle_inputs_from_user_request_artifact(self) -> None:
+        manifest = _manifest("600519")
+        slots = slots_for_manifest(manifest)
+        context = _ArtifactBackedCollectContext(slots)
+
+        output = collect_snapshot(context)
+
+        bundle = next(
+            row
+            for row in output.artifacts
+            if row.artifact_type == "stock_snapshot_bundle"
+        )
+        self.assertNotIn("snapshots", context.node.inputs)
+        self.assertNotIn("report_data_manifest", context.node.inputs)
+        self.assertEqual(bundle.content["collection"]["data_source_mode"], "bundle_only")
+        self.assertEqual(bundle.content["collection"]["manifest_hash"], "a" * 64)
+        self.assertEqual(len(bundle.content["snapshots"]), 2)
+
 
 class FundHoldingBundleInputTests(unittest.TestCase):
     def test_parent_freezes_once_and_children_receive_only_their_bundle(self) -> None:
@@ -362,6 +417,60 @@ class FundHoldingBundleInputTests(unittest.TestCase):
 
 
 class DatabaseReportInputGatewayTests(unittest.TestCase):
+    def test_legacy_uzi_bundle_remains_read_only_report_compatible(self) -> None:
+        database = StrategyDatabase("sqlite:///:memory:")
+        database.create_schema()
+        as_of = date(2026, 8, 20)
+        legacy_version = next(iter(LEGACY_UZI_CONTRACT_VERSIONS))
+        legacy_registry = DimensionRegistry(
+            tuple(DEFAULT_DIMENSION_REGISTRY),
+            contract_version=legacy_version,
+        )
+        try:
+            with database.session() as session:
+                repository = MarketDataRepository(session)
+                ingestion = SnapshotIngestionService(
+                    repository,
+                    registry=legacy_registry,
+                )
+                for contract in legacy_registry:
+                    ingestion.ingest(
+                        strict_market_data_input(contract.dimension).model_copy(
+                            update={"contract_version": legacy_version}
+                        )
+                    )
+                legacy_bundle = BundlePublisher(
+                    repository,
+                    registry=legacy_registry,
+                ).publish(
+                    symbol="600519.SH",
+                    market="CN_EQUITY",
+                    as_of_date=as_of,
+                    published_by="legacy-test",
+                    now=datetime(2026, 8, 21, 1, tzinfo=UTC),
+                )
+
+            manifest = DatabaseReportInputGateway(
+                database,
+                clock=lambda: datetime(2026, 8, 21, 1, tzinfo=UTC),
+            ).freeze_report_manifest(
+                symbols=["600519"],
+                as_of_date=as_of,
+                tenant_id="tenant-legacy",
+                user_id="user-legacy",
+                workflow_pins={"research_profile": "lite"},
+                context={"report_kind": "single_stock"},
+            )
+
+            self.assertEqual(manifest["items"][0]["bundle_id"], legacy_bundle.id)
+            self.assertEqual(
+                manifest["items"][0]["bundle"]["contract_version"],
+                legacy_version,
+            )
+            self.assertEqual(len(manifest["items"][0]["snapshots"]), 22)
+        finally:
+            database.close()
+
     def test_real_fund_batch_fails_closed_when_parent_bundle_is_missing(self) -> None:
         database = StrategyDatabase("sqlite:///:memory:")
         database.create_schema()
@@ -891,9 +1000,10 @@ class DatabaseReportInputGatewayTests(unittest.TestCase):
                     ),
                 }
                 for surface, operation in blocked_surfaces.items():
-                    with self.subTest(surface=surface):
-                        with self.assertRaises(FundHoldingReportsUnavailable):
-                            operation()
+                    with self.subTest(surface=surface), self.assertRaises(
+                        FundHoldingReportsUnavailable
+                    ):
+                        operation()
                 reused_invalidated = service.detail(fully_reused["batch_id"])
                 self.assertEqual(reused_invalidated["status"], "failed")
                 self.assertEqual(reused_invalidated["counts"]["deliverable"], 0)

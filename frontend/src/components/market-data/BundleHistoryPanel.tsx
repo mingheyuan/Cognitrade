@@ -1,16 +1,13 @@
-import { Archive, ChevronRight, FileDiff, LockKeyhole, RefreshCw, UploadCloud } from 'lucide-react'
+import { Archive, ChevronRight, FileDiff, LockKeyhole, RefreshCw } from 'lucide-react'
 import { formatDateTime, jobStatusMeta, shortHash } from './status'
 import { DefinitionList, EmptyState, LoadingState, StatusBadge } from './shared'
 import type { MarketDataBundle, PageResult } from './types'
 
-export function BundleHistoryPanel({ bundles, selected, loading, actionLoading, canPublish, onRefresh, onPublish, onSelect }: {
+export function BundleHistoryPanel({ bundles, selected, loading, onRefresh, onSelect }: {
   bundles: PageResult<MarketDataBundle>
   selected: MarketDataBundle | null
   loading: boolean
-  actionLoading: boolean
-  canPublish: boolean
   onRefresh: () => Promise<unknown>
-  onPublish: () => Promise<unknown>
   onSelect: (bundleId: string) => void
 }) {
   const previous = selected ? bundles.items.find((item) => item.bundle_id !== selected.bundle_id) : null
@@ -23,12 +20,11 @@ export function BundleHistoryPanel({ bundles, selected, loading, actionLoading, 
           <div><span className="mdc-eyebrow">IMMUTABLE HISTORY</span><h2>Bundle 修订链</h2></div>
           <div className="mdc-panel-actions">
             <button className="secondary-button" type="button" disabled={loading} onClick={() => void onRefresh()}><RefreshCw className={loading ? 'is-spinning' : ''} size={14} />刷新</button>
-            <button className="primary-button" type="button" disabled={actionLoading || !canPublish} onClick={() => void onPublish().catch(() => undefined)}><UploadCloud size={14} />发布当前 Bundle</button>
           </div>
         </header>
-        {!canPublish && <p className="mdc-form-note">需要先让 22 个 UZI 采集槽全部形成日级快照；明确的数据源失败也可作为缺口快照冻结，交给 Agent 后续恢复。</p>}
+        <p className="mdc-form-note">这里仅展示已经确认冻结的不可变版本。新 Bundle 请在对应采集任务中完成 Agent 补采与候选核对后，由用户显式确认发布。</p>
         {loading && !bundles.items.length ? <LoadingState label="正在读取 Bundle 历史…" /> : null}
-        {!loading && !bundles.items.length ? <EmptyState title="尚未发布 Bundle" detail="完成全部采集槽后可在此发布；已发布内容永不修改。" /> : null}
+        {!loading && !bundles.items.length ? <EmptyState title="尚未冻结 Bundle" detail="完成采集与补采后，请回到采集任务确认候选；已发布内容永不修改。" /> : null}
         <div className="mdc-bundle-list">
           {bundles.items.map((bundle) => {
             const status = jobStatusMeta(bundle.status)

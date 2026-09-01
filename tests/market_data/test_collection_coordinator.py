@@ -1,18 +1,28 @@
 from __future__ import annotations
 
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Barrier, Event
+from time import monotonic, sleep
 from unittest.mock import patch
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from research_system.market_data.collection import (
     CollectionJobError,
     MarketDataCollectionCoordinator,
 )
-from research_system.market_data.contracts import SnapshotIngestInput
+from research_system.market_data.contracts import CollectionStatus, SnapshotIngestInput
+from research_system.market_data.dimension_contracts import (
+    DEFAULT_DIMENSION_REGISTRY,
+    DimensionRegistry,
+)
 from research_system.market_data.ingestion import SnapshotIngestionService
 from research_system.market_data.models import (
+    MarketDataBundle,
     MarketDataCollectionJob,
     MarketDataCollectionTask,
     MarketDataCollectionTaskResult,
@@ -111,7 +121,9 @@ class CollectionCoordinatorTests(unittest.TestCase):
         self.coordinator.close()
         self.database.close()
 
-    def test_creation_is_persistent_but_does_not_collect_when_not_submitted(self) -> None:
+    def test_creation_is_persistent_but_does_not_collect_when_not_submitted(
+        self,
+    ) -> None:
         today = datetime.now(timezone.utc).date()
 
         job = self.coordinator.create_job(
@@ -129,12 +141,15 @@ class CollectionCoordinatorTests(unittest.TestCase):
         self.assertEqual(len(job["tasks"]), 1)
         self.assertEqual(self.collector.calls, [])
 
-    def test_creation_rejects_concurrency_outside_public_one_to_five_contract(self) -> None:
+    def test_creation_rejects_concurrency_outside_public_one_to_five_contract(
+        self,
+    ) -> None:
         today = datetime.now(timezone.utc).date()
         for concurrency in (0, 6):
-            with self.subTest(max_concurrency=concurrency), self.assertRaises(
-                CollectionJobError
-            ) as captured:
+            with (
+                self.subTest(max_concurrency=concurrency),
+                self.assertRaises(CollectionJobError) as captured,
+            ):
                 self.coordinator.create_job(
                     tenant_id="tenant",
                     user_id="user",
@@ -181,7 +196,9 @@ class CollectionCoordinatorTests(unittest.TestCase):
         )
 
         self.coordinator.run_job_now(job["id"])
-        completed = self.coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")
+        completed = self.coordinator.get_job(
+            job["id"], tenant_id="tenant", user_id="user"
+        )
 
         self.assertEqual(completed["status"], "succeeded")
         self.assertEqual(completed["tasks"][0]["status"], "succeeded")
@@ -214,7 +231,198 @@ class CollectionCoordinatorTests(unittest.TestCase):
         self.assertTrue(self.collector.calls[0]["uzi_root_route"])
         self.assertTrue(self.collector.calls[0]["no_resume"])
 
-    def test_scoped_event_retry_does_not_collect_basic_or_use_root_workflow(self) -> None:
+    def test_full_draft_requires_agent_stage_and_explicit_freeze_confirmation(
+        self,
+    ) -> None:
+        registry = DimensionRegistry([DEFAULT_DIMENSION_REGISTRY[0]])
+        coordinator = MarketDataCollectionCoordinator(
+            self.database,
+            collector=self.collector,
+            registry=registry,
+        )
+        self.addCleanup(coordinator.close)
+        today = datetime.now(timezone.utc).date()
+        job = coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions="all",
+            publish_when_complete=False,
+            submit=False,
+        )
+        coordinator.run_job_now(job["id"])
+        collected = coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")
+        original_evaluated_at = collected["publication_candidate"]["evaluated_at"]
+        with self.database.session() as session:
+            self.assertEqual(
+                session.scalar(select(func.count()).select_from(MarketDataBundle)), 0
+            )
+
+        recovery_result = {
+            "attempted": 1,
+            "succeeded": 1,
+            "failed": 0,
+            "persisted_snapshot_count": 0,
+            "coverage": [],
+            "stages": {"strict_recovery": {"attempted": 1, "succeeded": 1}},
+            "provider_recovery": {
+                "attempted_dimensions": 0,
+                "persisted_snapshot_count": 0,
+                "failures": [],
+            },
+        }
+        with patch(
+            "research_system.market_data.collection.recover_collection_job_draft",
+            return_value=recovery_result,
+        ):
+            queued = coordinator.start_agent_recovery(
+                job["id"],
+                tenant_id="tenant",
+                user_id="user",
+                actor_id="actor",
+            )
+            self.assertEqual(queued["freeze_status"], "awaiting_recovery")
+            coordinator._recovery_futures[job["id"]].result(timeout=5)
+
+        recovered = coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")
+        self.assertEqual(recovered["agent_recovery"]["status"], "succeeded")
+        self.assertGreater(
+            datetime.fromisoformat(recovered["publication_candidate"]["evaluated_at"]),
+            datetime.fromisoformat(original_evaluated_at),
+        )
+        self.assertTrue(recovered["can_confirm_freeze"])
+        with self.database.session() as session:
+            self.assertEqual(
+                session.scalar(select(func.count()).select_from(MarketDataBundle)), 0
+            )
+
+        frozen = coordinator.confirm_freeze(
+            job["id"],
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            proposal_hash=recovered["publication_candidate"]["proposal_hash"],
+            acknowledge_degraded=True,
+        )
+        self.assertEqual(frozen["freeze_status"], "frozen")
+        with self.database.session() as session:
+            self.assertEqual(
+                session.scalar(select(func.count()).select_from(MarketDataBundle)), 1
+            )
+            row = session.get(MarketDataCollectionJob, job["id"])
+            row.status = CollectionStatus.PARTIAL.value
+            task = session.scalar(
+                select(MarketDataCollectionTask).where(
+                    MarketDataCollectionTask.job_id == job["id"]
+                )
+            )
+            task.status = CollectionStatus.FAILED.value
+            task.retryable = True
+            task.attempt_count = 1
+        with self.assertRaises(CollectionJobError) as captured:
+            coordinator.retry_failed(
+                job["id"],
+                tenant_id="tenant",
+                user_id="user",
+                actor_id="actor",
+            )
+        self.assertEqual(captured.exception.code, "collection_retry_bundle_frozen")
+
+    def test_retry_invalidates_old_freeze_candidate_before_new_provider_wave(
+        self,
+    ) -> None:
+        registry = DimensionRegistry([DEFAULT_DIMENSION_REGISTRY[0]])
+        coordinator = MarketDataCollectionCoordinator(
+            self.database,
+            collector=self.collector,
+            registry=registry,
+        )
+        self.addCleanup(coordinator.close)
+        today = datetime.now(timezone.utc).date()
+        job = coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions="all",
+            publish_when_complete=False,
+            submit=False,
+        )
+        coordinator.run_job_now(job["id"])
+        before = coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")
+        self.assertIsNotNone(before["publication_candidate"])
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            row.status = CollectionStatus.PARTIAL.value
+            task = session.scalar(
+                select(MarketDataCollectionTask).where(
+                    MarketDataCollectionTask.job_id == job["id"]
+                )
+            )
+            task.status = CollectionStatus.FAILED.value
+            task.retryable = True
+            task.attempt_count = 1
+        with patch.object(coordinator, "submit") as submit:
+            retried = coordinator.retry_failed(
+                job["id"],
+                tenant_id="tenant",
+                user_id="user",
+                actor_id="actor",
+            )
+        submit.assert_called_once_with(job["id"])
+        self.assertIsNone(retried["publication_candidate"])
+        self.assertEqual(
+            retried["checkpoint"]["publication"]["error_code"],
+            "collection_retry_pending",
+        )
+
+    def test_restart_resumes_persisted_agent_recovery_stage(self) -> None:
+        registry = DimensionRegistry([DEFAULT_DIMENSION_REGISTRY[0]])
+        coordinator = MarketDataCollectionCoordinator(
+            self.database,
+            collector=self.collector,
+            registry=registry,
+        )
+        self.addCleanup(coordinator.close)
+        today = datetime.now(timezone.utc).date()
+        job = coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions="all",
+            publish_when_complete=False,
+            submit=False,
+        )
+        coordinator.run_job_now(job["id"])
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            checkpoint = dict(row.checkpoint_json or {})
+            checkpoint.pop("publication_candidate", None)
+            checkpoint["publication"] = {"status": "blocked"}
+            checkpoint["agent_recovery"] = {
+                "status": "running",
+                "requested_by": "actor",
+            }
+            row.checkpoint_json = checkpoint
+        with patch.object(coordinator, "_submit_agent_recovery") as submit:
+            resumed = coordinator.resume_pending()
+        self.assertEqual(resumed, [job["id"]])
+        submit.assert_called_once_with(job["id"])
+        persisted = coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")
+        self.assertEqual(persisted["agent_recovery"]["status"], "queued")
+        self.assertIn("重启", persisted["agent_recovery"]["message"])
+
+    def test_scoped_event_retry_does_not_collect_basic_or_use_root_workflow(
+        self,
+    ) -> None:
         today = datetime.now(timezone.utc).date()
         job = self.coordinator.create_job(
             tenant_id="tenant",
@@ -269,7 +477,9 @@ class CollectionCoordinatorTests(unittest.TestCase):
         self.assertEqual(completed["status"], "partial")
         self.assertEqual(completed["progress"]["completed"], 2)
         self.assertEqual(completed["progress"]["total"], 2)
-        self.assertEqual(completed["progress"]["by_status"], {"failed": 1, "succeeded": 1})
+        self.assertEqual(
+            completed["progress"]["by_status"], {"failed": 1, "succeeded": 1}
+        )
         self.assertEqual(
             set(completed["checkpoint"]["finished_task_ids"]),
             {task["id"] for task in completed["tasks"]},
@@ -289,7 +499,9 @@ class CollectionCoordinatorTests(unittest.TestCase):
             self.assertEqual(failed.provider_status, "adapter_error")
             self.assertEqual(failed.error_code, "adapter_validation_error")
 
-    def test_unexpected_ingestion_failure_is_isolated_and_safely_summarized(self) -> None:
+    def test_unexpected_ingestion_failure_is_isolated_and_safely_summarized(
+        self,
+    ) -> None:
         today = datetime.now(timezone.utc).date()
         job = self.coordinator.create_job(
             tenant_id="tenant",
@@ -325,18 +537,20 @@ class CollectionCoordinatorTests(unittest.TestCase):
         tasks = {task["symbol"]: task for task in completed["tasks"]}
         self.assertEqual(completed["status"], "partial")
         self.assertEqual(tasks["600519.SH"]["status"], "failed")
-        self.assertEqual(
-            tasks["600519.SH"]["error_code"], "ingestion_unexpected_error"
-        )
+        self.assertEqual(tasks["600519.SH"]["error_code"], "ingestion_unexpected_error")
         self.assertEqual(
             tasks["600519.SH"]["error_message"],
             "ingestion failed with RuntimeError",
         )
-        self.assertNotIn("sensitive-provider-detail", tasks["600519.SH"]["error_message"])
+        self.assertNotIn(
+            "sensitive-provider-detail", tasks["600519.SH"]["error_message"]
+        )
         self.assertTrue(tasks["600519.SH"]["retryable"])
         self.assertEqual(tasks["000858.SZ"]["status"], "succeeded")
 
-    def test_worker_failure_terminalizes_active_tasks_and_updates_progress(self) -> None:
+    def test_worker_failure_terminalizes_active_tasks_and_updates_progress(
+        self,
+    ) -> None:
         today = datetime.now(timezone.utc).date()
         job = self.coordinator.create_job(
             tenant_id="tenant",
@@ -367,9 +581,7 @@ class CollectionCoordinatorTests(unittest.TestCase):
                 task.lease_owner = "worker"
                 task.lease_until = datetime.now(timezone.utc) + timedelta(minutes=5)
 
-        self.coordinator._fail_job(
-            job["id"], RuntimeError("sensitive-worker-detail")
-        )
+        self.coordinator._fail_job(job["id"], RuntimeError("sensitive-worker-detail"))
 
         completed = self.coordinator.get_job(
             job["id"], tenant_id="tenant", user_id="user"
@@ -424,9 +636,7 @@ class CollectionCoordinatorTests(unittest.TestCase):
                 task.status = "running"
                 task.lease_owner = "worker"
 
-        self.coordinator._finish_job(
-            job["id"], cancelled=True
-        )
+        self.coordinator._finish_job(job["id"], cancelled=True)
 
         completed = self.coordinator.get_job(
             job["id"], tenant_id="tenant", user_id="user"
@@ -434,7 +644,9 @@ class CollectionCoordinatorTests(unittest.TestCase):
         self.assertEqual(completed["status"], "cancelled")
         self.assertEqual(completed["progress"]["completed"], 2)
         self.assertEqual(completed["progress"]["by_status"], {"cancelled": 2})
-        self.assertTrue(all(task["status"] == "cancelled" for task in completed["tasks"]))
+        self.assertTrue(
+            all(task["status"] == "cancelled" for task in completed["tasks"])
+        )
 
     def test_cancel_requested_before_worker_start_is_fully_finalized(self) -> None:
         today = datetime.now(timezone.utc).date()
@@ -462,9 +674,13 @@ class CollectionCoordinatorTests(unittest.TestCase):
         self.assertEqual(completed["progress"]["completed"], 2)
         self.assertEqual(completed["progress"]["by_status"], {"cancelled": 2})
         self.assertEqual(self.collector.calls, [])
-        self.assertTrue(all(task["status"] == "cancelled" for task in completed["tasks"]))
+        self.assertTrue(
+            all(task["status"] == "cancelled" for task in completed["tasks"])
+        )
 
-    def test_historical_current_only_source_is_disclosed_without_calling_provider(self) -> None:
+    def test_historical_current_only_source_is_disclosed_without_calling_provider(
+        self,
+    ) -> None:
         historical = datetime.now(timezone.utc).date() - timedelta(days=30)
         job = self.coordinator.create_job(
             tenant_id="tenant",
@@ -515,9 +731,7 @@ class CollectionCoordinatorTests(unittest.TestCase):
 
         coordinator.run_job_now(job["id"])
 
-        completed = coordinator.get_job(
-            job["id"], tenant_id="tenant", user_id="user"
-        )
+        completed = coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")
         self.assertEqual(completed["status"], "succeeded")
         self.assertEqual(completed["tasks"][0]["status"], "succeeded")
         self.assertEqual(len(collector.calls), 1)
@@ -704,7 +918,9 @@ class CollectionCoordinatorTests(unittest.TestCase):
             self.assertEqual(cancelled.status, "cancelled")
             self.assertTrue(cancelled.cancel_requested)
 
-    def test_restart_leaves_parented_equity_jobs_to_the_parent_coordinator(self) -> None:
+    def test_restart_leaves_parented_equity_jobs_to_the_parent_coordinator(
+        self,
+    ) -> None:
         today = datetime.now(timezone.utc).date()
         parent = self.coordinator.create_job(
             tenant_id="tenant",
@@ -764,7 +980,9 @@ class CollectionCoordinatorTests(unittest.TestCase):
             self.assertEqual(child_task.status, "running")
             self.assertEqual(child_task.lease_owner, "dead-worker")
 
-    def test_restart_reconciles_active_tasks_owned_by_a_terminal_parented_job(self) -> None:
+    def test_restart_reconciles_active_tasks_owned_by_a_terminal_parented_job(
+        self,
+    ) -> None:
         today = datetime.now(timezone.utc).date()
         parent = self.coordinator.create_job(
             tenant_id="tenant",
@@ -816,7 +1034,9 @@ class CollectionCoordinatorTests(unittest.TestCase):
             child_tasks[1].status = "running"
             child_tasks[1].attempt_count = 1
             child_tasks[1].lease_owner = "dead-worker"
-            child_tasks[1].lease_until = datetime.now(timezone.utc) + timedelta(minutes=5)
+            child_tasks[1].lease_until = datetime.now(timezone.utc) + timedelta(
+                minutes=5
+            )
 
         submitted: list[str] = []
         self.coordinator.submit = submitted.append  # type: ignore[method-assign]
@@ -844,6 +1064,1247 @@ class CollectionCoordinatorTests(unittest.TestCase):
             self.assertIsNone(task.lease_owner)
             self.assertIsNone(task.lease_until)
             self.assertIsNotNone(task.completed_at)
+
+    def test_idempotency_replay_never_resubmits_the_existing_job(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        original = self.coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions=["0_basic"],
+            idempotency_key="durable-replay",
+            submit=False,
+        )
+        with patch.object(self.coordinator, "submit") as submit:
+            replayed = self.coordinator.create_job(
+                tenant_id="tenant",
+                user_id="user",
+                actor_id="actor",
+                symbols=["600519.SH"],
+                start_date=today,
+                end_date=today,
+                dimensions=["0_basic"],
+                idempotency_key="durable-replay",
+                submit=True,
+            )
+        self.assertEqual(replayed["id"], original["id"])
+        submit.assert_not_called()
+
+        self.coordinator.run_job_now(original["id"])
+        with patch.object(self.coordinator, "submit") as submit:
+            terminal_replay = self.coordinator.create_job(
+                tenant_id="tenant",
+                user_id="user",
+                actor_id="actor",
+                symbols=["600519.SH"],
+                start_date=today,
+                end_date=today,
+                dimensions=["0_basic"],
+                idempotency_key="durable-replay",
+                submit=True,
+            )
+        self.assertEqual(terminal_replay["status"], "succeeded")
+        submit.assert_not_called()
+
+    def test_idempotency_replay_normalizes_symbol_and_dimension_order(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        original = self.coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.sh", "000858.SZ"],
+            start_date=today,
+            end_date=today,
+            dimensions=["0_basic", "1_financials"],
+            idempotency_key="normalized-replay",
+            submit=False,
+        )
+
+        replayed = self.coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="other-actor",
+            symbols=["000858.sz", "600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions=["1_financials", "0_basic"],
+            idempotency_key="normalized-replay",
+            submit=False,
+        )
+
+        self.assertEqual(replayed["id"], original["id"])
+
+    def test_idempotency_key_rejects_every_material_request_change(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        yesterday = today - timedelta(days=1)
+        base = {
+            "tenant_id": "tenant",
+            "user_id": "user",
+            "actor_id": "actor",
+            "symbols": ["600519.SH"],
+            "start_date": today,
+            "end_date": today,
+            "dimensions": ["0_basic"],
+            "mode": "missing_or_stale",
+            "max_concurrency": 5,
+            "publish_when_complete": False,
+            "idempotency_key": "conflicting-replay",
+            "submit": False,
+        }
+        self.coordinator.create_job(**base)
+        changes = {
+            "symbols": {"symbols": ["000858.SZ"]},
+            "date": {"start_date": yesterday, "end_date": yesterday},
+            "dimensions": {"dimensions": ["1_financials"]},
+            "mode": {"mode": "force_all"},
+            "concurrency": {"max_concurrency": 2},
+            "publish": {"publish_when_complete": True},
+        }
+
+        for label, change in changes.items():
+            with self.subTest(label=label):
+                request = {**base, **change}
+                with self.assertRaises(CollectionJobError) as captured:
+                    self.coordinator.create_job(**request)
+                self.assertEqual(
+                    captured.exception.code, "collection_idempotency_conflict"
+                )
+                self.assertEqual(captured.exception.status_code, 409)
+
+    def test_idempotency_key_rejects_an_existing_non_equity_job_type(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        request = {
+            "tenant_id": "tenant",
+            "user_id": "user",
+            "actor_id": "actor",
+            "symbols": ["600519.SH"],
+            "start_date": today,
+            "end_date": today,
+            "dimensions": ["0_basic"],
+            "idempotency_key": "type-conflict",
+            "submit": False,
+        }
+        job = self.coordinator.create_job(**request)
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            row.job_type = "fund_holding_expansion"
+
+        with self.assertRaises(CollectionJobError) as captured:
+            self.coordinator.create_job(**request)
+
+        self.assertEqual(captured.exception.code, "collection_idempotency_conflict")
+        self.assertEqual(captured.exception.status_code, 409)
+
+    def test_concurrent_file_sqlite_create_is_idempotent_and_conflict_stable(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database = StrategyDatabase(
+                f"sqlite:///{Path(temporary_directory) / 'collection.sqlite3'}"
+            )
+            database.create_schema()
+            first = MarketDataCollectionCoordinator(database, collector=self.collector)
+            second = MarketDataCollectionCoordinator(database, collector=self.collector)
+            try:
+                today = datetime.now(timezone.utc).date()
+                original_first = first._find_idempotent_job
+                original_second = second._find_idempotent_job
+
+                def synchronize_initial_miss(coordinator, original, barrier):
+                    def synchronized(session, **kwargs):
+                        existing = original(session, **kwargs)
+                        if existing is None:
+                            barrier.wait(timeout=5)
+                        return existing
+
+                    coordinator._find_idempotent_job = synchronized  # type: ignore[method-assign]
+
+                barrier = Barrier(2)
+                synchronize_initial_miss(first, original_first, barrier)
+                synchronize_initial_miss(second, original_second, barrier)
+                request = {
+                    "tenant_id": "tenant",
+                    "user_id": "user",
+                    "actor_id": "actor",
+                    "symbols": ["600519.SH"],
+                    "start_date": today,
+                    "end_date": today,
+                    "dimensions": ["0_basic"],
+                    "idempotency_key": "concurrent-same",
+                    "submit": False,
+                }
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = [
+                        executor.submit(coordinator.create_job, **request)
+                        for coordinator in (first, second)
+                    ]
+                    results = [future.result(timeout=10) for future in futures]
+                self.assertEqual(results[0]["id"], results[1]["id"])
+                with database.session() as session:
+                    self.assertEqual(
+                        session.scalar(
+                            select(func.count()).select_from(MarketDataCollectionJob)
+                        ),
+                        1,
+                    )
+
+                barrier = Barrier(2)
+                synchronize_initial_miss(first, original_first, barrier)
+                synchronize_initial_miss(second, original_second, barrier)
+
+                def create_or_error(coordinator, symbol):
+                    try:
+                        result = coordinator.create_job(
+                            **{
+                                **request,
+                                "symbols": [symbol],
+                                "idempotency_key": "concurrent-conflict",
+                            }
+                        )
+                        return ("ok", result["id"])
+                    except CollectionJobError as exc:
+                        return ("error", exc.code, exc.status_code)
+
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = [
+                        executor.submit(create_or_error, first, "600519.SH"),
+                        executor.submit(create_or_error, second, "000858.SZ"),
+                    ]
+                    outcomes = [future.result(timeout=10) for future in futures]
+                self.assertEqual([item[0] for item in outcomes].count("ok"), 1)
+                self.assertIn(
+                    ("error", "collection_idempotency_conflict", 409), outcomes
+                )
+            finally:
+                first.close()
+                second.close()
+                database.close()
+
+    def test_worker_claims_only_queued_jobs(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        job = self.coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions=["0_basic"],
+            submit=False,
+        )
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            row.status = CollectionStatus.SUCCEEDED.value
+            row.completed_at = datetime.now(timezone.utc)
+
+        self.coordinator.run_job_now(job["id"])
+
+        persisted = self.coordinator.get_job(
+            job["id"], tenant_id="tenant", user_id="user"
+        )
+        self.assertEqual(persisted["status"], "succeeded")
+        self.assertEqual(persisted["tasks"][0]["status"], "queued")
+        self.assertEqual(self.collector.calls, [])
+
+    def test_restart_resumes_only_an_expired_job_lease(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        job = self.coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions=["0_basic"],
+            submit=False,
+        )
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            task = session.scalar(
+                select(MarketDataCollectionTask).where(
+                    MarketDataCollectionTask.job_id == job["id"]
+                )
+            )
+            row.status = CollectionStatus.RUNNING.value
+            row.lease_owner = "live-worker"
+            row.lease_until = datetime.now(timezone.utc) + timedelta(minutes=5)
+            task.status = CollectionStatus.RUNNING.value
+            task.lease_owner = "live-worker"
+            task.lease_until = row.lease_until
+        with patch.object(self.coordinator, "submit") as submit:
+            self.assertEqual(self.coordinator.resume_pending(), [])
+        submit.assert_not_called()
+
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            row.lease_until = datetime.now(timezone.utc) - timedelta(seconds=1)
+        with patch.object(self.coordinator, "submit") as submit:
+            self.assertEqual(self.coordinator.resume_pending(), [job["id"]])
+        submit.assert_called_once_with(job["id"])
+        persisted = self.coordinator.get_job(
+            job["id"], tenant_id="tenant", user_id="user"
+        )
+        self.assertEqual(persisted["status"], "queued")
+        self.assertEqual(persisted["tasks"][0]["status"], "queued")
+
+    def test_collection_heartbeat_renews_only_the_current_owner(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        job = self.coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions=["0_basic"],
+            submit=False,
+        )
+        original_until = datetime.now(timezone.utc) + timedelta(seconds=1)
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            task = session.scalar(
+                select(MarketDataCollectionTask).where(
+                    MarketDataCollectionTask.job_id == job["id"]
+                )
+            )
+            row.status = CollectionStatus.RUNNING.value
+            row.lease_owner = "current-worker"
+            row.lease_until = original_until
+            task.status = CollectionStatus.RUNNING.value
+            task.lease_owner = "current-worker"
+            task.lease_until = original_until
+
+        self.assertTrue(
+            self.coordinator._renew_collection_lease(job["id"], "current-worker")
+        )
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            task = session.scalar(
+                select(MarketDataCollectionTask).where(
+                    MarketDataCollectionTask.job_id == job["id"]
+                )
+            )
+            self.assertGreater(
+                row.lease_until.replace(tzinfo=timezone.utc), original_until
+            )
+            self.assertEqual(task.lease_until, row.lease_until)
+            row.lease_owner = "replacement-worker"
+            task.lease_owner = "replacement-worker"
+
+        self.assertFalse(
+            self.coordinator._renew_collection_lease(job["id"], "current-worker")
+        )
+
+    def test_heartbeat_thread_renews_and_signals_owner_loss(self) -> None:
+        renewed = Event()
+
+        def renew_current_owner(job_id, worker_id):
+            self.assertEqual((job_id, worker_id), ("job", "worker"))
+            renewed.set()
+            return True
+
+        with (
+            patch(
+                "research_system.market_data.collection."
+                "COLLECTION_LEASE_HEARTBEAT_SECONDS",
+                0.001,
+            ),
+            patch.object(
+                self.coordinator,
+                "_renew_collection_lease",
+                side_effect=renew_current_owner,
+            ),
+            self.coordinator._lease_heartbeat(
+                "job",
+                "worker",
+                recovery=False,
+                lease_deadline=datetime.now(timezone.utc) + timedelta(minutes=30),
+            ) as signals,
+        ):
+            self.assertTrue(renewed.wait(timeout=1))
+            self.assertFalse(signals.lost.is_set())
+
+        with (
+            patch(
+                "research_system.market_data.collection."
+                "COLLECTION_LEASE_HEARTBEAT_SECONDS",
+                0.001,
+            ),
+            patch.object(
+                self.coordinator,
+                "_renew_agent_recovery_lease",
+                return_value=False,
+            ) as renew_agent,
+            self.coordinator._lease_heartbeat(
+                "job",
+                "agent",
+                recovery=True,
+                lease_deadline=datetime.now(timezone.utc) + timedelta(minutes=30),
+            ) as signals,
+        ):
+            self.assertTrue(signals.lost.wait(timeout=1))
+        renew_agent.assert_called_with("job", "agent")
+
+        with (
+            patch(
+                "research_system.market_data.collection."
+                "COLLECTION_LEASE_HEARTBEAT_SECONDS",
+                0.001,
+            ),
+            patch.object(
+                self.coordinator,
+                "_renew_collection_lease",
+                side_effect=RuntimeError("database unavailable"),
+            ),
+            self.coordinator._lease_heartbeat(
+                "job",
+                "worker",
+                recovery=False,
+                lease_deadline=datetime.now(timezone.utc) - timedelta(seconds=1),
+            ) as signals,
+        ):
+            self.assertTrue(signals.lost.wait(timeout=1))
+
+    def test_stale_collection_owner_cannot_finish_or_fail_reclaimed_job(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        job = self.coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions=["0_basic"],
+            submit=False,
+        )
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            task = session.scalar(
+                select(MarketDataCollectionTask).where(
+                    MarketDataCollectionTask.job_id == job["id"]
+                )
+            )
+            row.status = CollectionStatus.RUNNING.value
+            row.lease_owner = "replacement-worker"
+            row.lease_until = datetime.now(timezone.utc) + timedelta(minutes=30)
+            task.status = CollectionStatus.RUNNING.value
+            task.lease_owner = "replacement-worker"
+            task.lease_until = row.lease_until
+
+        self.coordinator._finish_job(job["id"], worker_id="stale-worker")
+        self.coordinator._fail_job(
+            job["id"], RuntimeError("old worker"), worker_id="stale-worker"
+        )
+
+        persisted = self.coordinator.get_job(
+            job["id"], tenant_id="tenant", user_id="user"
+        )
+        self.assertEqual(persisted["status"], "running")
+        self.assertEqual(persisted["tasks"][0]["status"], "running")
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            task = session.get(MarketDataCollectionTask, persisted["tasks"][0]["id"])
+            self.assertEqual(row.lease_owner, "replacement-worker")
+            self.assertEqual(task.lease_owner, "replacement-worker")
+
+    def test_heartbeat_errors_past_deadline_prevent_worker_final_write(self) -> None:
+        started = Event()
+        release = Event()
+        delegate = self.collector
+
+        def blocking_collector(**kwargs):
+            started.set()
+            self.assertTrue(release.wait(timeout=5))
+            return delegate(**kwargs)
+
+        coordinator = MarketDataCollectionCoordinator(
+            self.database, collector=blocking_collector
+        )
+        self.addCleanup(coordinator.close)
+        today = datetime.now(timezone.utc).date()
+        job = coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions=["0_basic"],
+            submit=False,
+        )
+
+        with (
+            patch(
+                "research_system.market_data.collection.COLLECTION_LEASE_DURATION",
+                timedelta(milliseconds=30),
+            ),
+            patch(
+                "research_system.market_data.collection."
+                "COLLECTION_LEASE_HEARTBEAT_SECONDS",
+                0.005,
+            ),
+            patch.object(
+                coordinator,
+                "_renew_collection_lease",
+                side_effect=RuntimeError("database unavailable"),
+            ),
+            ThreadPoolExecutor(max_workers=1) as executor,
+        ):
+            future = executor.submit(coordinator.run_job_now, job["id"])
+            self.assertTrue(started.wait(timeout=5))
+            sleep(0.08)
+            release.set()
+            future.result(timeout=5)
+
+        persisted = coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")
+        self.assertEqual(persisted["status"], "running")
+        self.assertEqual(persisted["tasks"][0]["status"], "running")
+        with self.database.session() as session:
+            self.assertEqual(
+                session.scalar(select(func.count()).select_from(MarketDataSnapshot)),
+                0,
+            )
+        with patch.object(coordinator, "submit") as submit:
+            self.assertEqual(coordinator.resume_pending(), [job["id"]])
+        submit.assert_called_once_with(job["id"])
+
+    def test_expired_same_owner_cannot_renew_or_write_terminal_state(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        job = self.coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions=["0_basic"],
+            submit=False,
+        )
+        expired = datetime.now(timezone.utc) - timedelta(seconds=1)
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            task = session.scalar(
+                select(MarketDataCollectionTask).where(
+                    MarketDataCollectionTask.job_id == job["id"]
+                )
+            )
+            row.status = CollectionStatus.RUNNING.value
+            row.lease_owner = "expired-worker"
+            row.lease_until = expired
+            task.status = CollectionStatus.RUNNING.value
+            task.lease_owner = "expired-worker"
+            task.lease_until = expired
+
+        self.assertFalse(
+            self.coordinator._renew_collection_lease(job["id"], "expired-worker")
+        )
+        self.coordinator._finish_job(job["id"], worker_id="expired-worker")
+        self.coordinator._fail_job(
+            job["id"], RuntimeError("expired"), worker_id="expired-worker"
+        )
+        persisted = self.coordinator.get_job(
+            job["id"], tenant_id="tenant", user_id="user"
+        )
+        self.assertEqual(persisted["status"], "running")
+
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            checkpoint = dict(row.checkpoint_json or {})
+            checkpoint["agent_recovery"] = {
+                "status": "running",
+                "lease_owner": "expired-agent",
+                "lease_until": expired.isoformat(),
+            }
+            row.checkpoint_json = checkpoint
+        self.assertFalse(
+            self.coordinator._renew_agent_recovery_lease(job["id"], "expired-agent")
+        )
+        self.coordinator._fail_agent_recovery(
+            job["id"], "expired", worker_id="expired-agent"
+        )
+        persisted = self.coordinator.get_job(
+            job["id"], tenant_id="tenant", user_id="user"
+        )["agent_recovery"]
+        self.assertEqual(persisted["status"], "running")
+        self.assertEqual(persisted["lease_owner"], "expired-agent")
+
+    def test_cross_coordinator_cancel_during_provider_prevents_ingest(self) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database = StrategyDatabase(
+                f"sqlite:///{Path(temporary_directory) / 'cancel.sqlite3'}"
+            )
+            database.create_schema()
+            started = Event()
+            release = Event()
+            delegate = _Collector()
+
+            def blocking_collector(**kwargs):
+                started.set()
+                self.assertTrue(release.wait(timeout=5))
+                return delegate(**kwargs)
+
+            worker = MarketDataCollectionCoordinator(
+                database, collector=blocking_collector
+            )
+            controller = MarketDataCollectionCoordinator(database, collector=delegate)
+            try:
+                today = datetime.now(timezone.utc).date()
+                job = worker.create_job(
+                    tenant_id="tenant",
+                    user_id="user",
+                    actor_id="actor",
+                    symbols=["600519.SH"],
+                    start_date=today,
+                    end_date=today,
+                    dimensions=["0_basic"],
+                    submit=False,
+                )
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(worker.run_job_now, job["id"])
+                    self.assertTrue(started.wait(timeout=5))
+                    cancelled = controller.cancel(
+                        job["id"],
+                        tenant_id="tenant",
+                        user_id="user",
+                        actor_id="controller",
+                    )
+                    self.assertEqual(cancelled["status"], "cancelled")
+                    release.set()
+                    future.result(timeout=5)
+
+                persisted = controller.get_job(
+                    job["id"], tenant_id="tenant", user_id="user"
+                )
+                self.assertEqual(persisted["status"], "cancelled")
+                self.assertEqual(persisted["tasks"][0]["status"], "cancelled")
+                with database.session() as session:
+                    self.assertEqual(
+                        session.scalar(
+                            select(func.count()).select_from(MarketDataSnapshot)
+                        ),
+                        0,
+                    )
+            finally:
+                release.set()
+                worker.close()
+                controller.close()
+                database.close()
+
+    def test_restart_terminalizes_a_hanging_cancel_request(self) -> None:
+        today = datetime.now(timezone.utc).date()
+        job = self.coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions=["0_basic"],
+            submit=False,
+        )
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            row.status = CollectionStatus.RUNNING.value
+            row.cancel_requested = True
+            row.lease_owner = "crashed-worker"
+            row.lease_until = datetime.now(timezone.utc) + timedelta(minutes=5)
+            task = session.scalar(
+                select(MarketDataCollectionTask).where(
+                    MarketDataCollectionTask.job_id == job["id"]
+                )
+            )
+            task.status = CollectionStatus.RUNNING.value
+            task.lease_owner = "crashed-worker"
+            task.lease_until = row.lease_until
+
+        self.assertEqual(self.coordinator.resume_pending(), [])
+
+        persisted = self.coordinator.get_job(
+            job["id"], tenant_id="tenant", user_id="user"
+        )
+        self.assertEqual(persisted["status"], "cancelled")
+        self.assertEqual(persisted["tasks"][0]["status"], "cancelled")
+        self.assertIsNotNone(persisted["completed_at"])
+
+    def test_agent_completion_observes_cross_process_cancelling_checkpoint(
+        self,
+    ) -> None:
+        registry = DimensionRegistry([DEFAULT_DIMENSION_REGISTRY[0]])
+        coordinator = MarketDataCollectionCoordinator(
+            self.database,
+            collector=self.collector,
+            registry=registry,
+        )
+        self.addCleanup(coordinator.close)
+        today = datetime.now(timezone.utc).date()
+        job = coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions="all",
+            submit=False,
+        )
+        coordinator.run_job_now(job["id"])
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            checkpoint = dict(row.checkpoint_json or {})
+            checkpoint["agent_recovery"] = {"status": "queued"}
+            row.checkpoint_json = checkpoint
+
+        def recover_then_cancel(*args, **kwargs):
+            del args, kwargs
+            with self.database.session() as session:
+                row = session.get(MarketDataCollectionJob, job["id"])
+                checkpoint = dict(row.checkpoint_json or {})
+                recovery = dict(checkpoint["agent_recovery"])
+                recovery["status"] = "cancelling"
+                checkpoint["agent_recovery"] = recovery
+                row.checkpoint_json = checkpoint
+            return {
+                "attempted": 1,
+                "succeeded": 1,
+                "failed": 0,
+                "provider_recovery": {},
+            }
+
+        with patch(
+            "research_system.market_data.collection.recover_collection_job_draft",
+            side_effect=recover_then_cancel,
+        ):
+            coordinator.run_agent_recovery_now(job["id"])
+
+        persisted = coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")
+        self.assertEqual(persisted["agent_recovery"]["status"], "cancelled")
+        self.assertEqual(
+            persisted["checkpoint"]["publication"]["error_code"],
+            "agent_recovery_cancelled",
+        )
+
+    def test_selected_agent_resume_respects_lease_and_finalizes_cancel(self) -> None:
+        registry = DimensionRegistry([DEFAULT_DIMENSION_REGISTRY[0]])
+        coordinator = MarketDataCollectionCoordinator(
+            self.database,
+            collector=self.collector,
+            registry=registry,
+        )
+        self.addCleanup(coordinator.close)
+        today = datetime.now(timezone.utc).date()
+        job = coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions="all",
+            submit=False,
+        )
+        coordinator.run_job_now(job["id"])
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            checkpoint = dict(row.checkpoint_json or {})
+            checkpoint["agent_recovery"] = {
+                "status": "running",
+                "lease_until": (
+                    datetime.now(timezone.utc) + timedelta(minutes=5)
+                ).isoformat(),
+            }
+            row.checkpoint_json = checkpoint
+        with patch.object(coordinator, "_submit_agent_recovery") as submit:
+            self.assertEqual(coordinator.resume_agent_recovery_jobs([job["id"]]), 0)
+        submit.assert_not_called()
+
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            checkpoint = dict(row.checkpoint_json or {})
+            recovery = dict(checkpoint["agent_recovery"])
+            recovery["lease_until"] = (
+                datetime.now(timezone.utc) - timedelta(seconds=1)
+            ).isoformat()
+            checkpoint["agent_recovery"] = recovery
+            row.checkpoint_json = checkpoint
+        with patch.object(coordinator, "_submit_agent_recovery") as submit:
+            self.assertEqual(coordinator.resume_agent_recovery_jobs([job["id"]]), 1)
+        submit.assert_called_once_with(job["id"])
+
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            checkpoint = dict(row.checkpoint_json or {})
+            recovery = dict(checkpoint["agent_recovery"])
+            recovery["status"] = "cancelling"
+            checkpoint["agent_recovery"] = recovery
+            row.checkpoint_json = checkpoint
+        self.assertEqual(coordinator.resume_agent_recovery_jobs([job["id"]]), 0)
+        persisted = coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")
+        self.assertEqual(persisted["agent_recovery"]["status"], "cancelled")
+
+    def test_agent_heartbeat_and_completion_are_fenced_by_lease_owner(self) -> None:
+        registry = DimensionRegistry([DEFAULT_DIMENSION_REGISTRY[0]])
+        coordinator = MarketDataCollectionCoordinator(
+            self.database,
+            collector=self.collector,
+            registry=registry,
+        )
+        self.addCleanup(coordinator.close)
+        today = datetime.now(timezone.utc).date()
+        job = coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions="all",
+            submit=False,
+        )
+        coordinator.run_job_now(job["id"])
+        original_until = datetime.now(timezone.utc) + timedelta(seconds=1)
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            checkpoint = dict(row.checkpoint_json or {})
+            checkpoint["agent_recovery"] = {
+                "status": "running",
+                "lease_owner": "current-agent",
+                "lease_until": original_until.isoformat(),
+            }
+            row.checkpoint_json = checkpoint
+
+        self.assertTrue(
+            coordinator._renew_agent_recovery_lease(job["id"], "current-agent")
+        )
+        renewed = coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")[
+            "agent_recovery"
+        ]
+        self.assertGreater(
+            datetime.fromisoformat(renewed["lease_until"]), original_until
+        )
+
+        with self.database.session() as session:
+            row = session.get(MarketDataCollectionJob, job["id"])
+            checkpoint = dict(row.checkpoint_json or {})
+            checkpoint["agent_recovery"] = {
+                "status": "queued",
+                "requested_by": "actor",
+            }
+            row.checkpoint_json = checkpoint
+
+        def transfer_agent_lease(*args, **kwargs):
+            del args, kwargs
+            with self.database.session() as session:
+                row = session.get(MarketDataCollectionJob, job["id"])
+                checkpoint = dict(row.checkpoint_json or {})
+                recovery = dict(checkpoint["agent_recovery"])
+                recovery.update(
+                    {
+                        "status": "running",
+                        "lease_owner": "replacement-agent",
+                        "lease_until": (
+                            datetime.now(timezone.utc) + timedelta(minutes=30)
+                        ).isoformat(),
+                    }
+                )
+                checkpoint["agent_recovery"] = recovery
+                row.checkpoint_json = checkpoint
+            return {
+                "attempted": 1,
+                "succeeded": 1,
+                "failed": 0,
+                "provider_recovery": {},
+            }
+
+        with patch(
+            "research_system.market_data.collection.recover_collection_job_draft",
+            side_effect=transfer_agent_lease,
+        ):
+            coordinator.run_agent_recovery_now(job["id"])
+
+        persisted = coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")[
+            "agent_recovery"
+        ]
+        self.assertEqual(persisted["status"], "running")
+        self.assertEqual(persisted["lease_owner"], "replacement-agent")
+        self.assertFalse(
+            coordinator._renew_agent_recovery_lease(job["id"], "current-agent")
+        )
+
+    def test_delayed_cancelled_future_cannot_cancel_new_agent_owner(self) -> None:
+        registry = DimensionRegistry([DEFAULT_DIMENSION_REGISTRY[0]])
+        old = MarketDataCollectionCoordinator(
+            self.database,
+            collector=self.collector,
+            registry=registry,
+            max_background_jobs=1,
+        )
+        replacement = MarketDataCollectionCoordinator(
+            self.database,
+            collector=self.collector,
+            registry=registry,
+        )
+        self.addCleanup(replacement.close)
+        blocker_started = Event()
+        release_blocker = Event()
+        release_replacement = Event()
+        try:
+            today = datetime.now(timezone.utc).date()
+            job = old.create_job(
+                tenant_id="tenant",
+                user_id="user",
+                actor_id="actor",
+                symbols=["600519.SH"],
+                start_date=today,
+                end_date=today,
+                dimensions="all",
+                submit=False,
+            )
+            old.run_job_now(job["id"])
+
+            def occupy_old_executor():
+                blocker_started.set()
+                self.assertTrue(release_blocker.wait(timeout=5))
+
+            blocker = old._executor.submit(occupy_old_executor)
+            self.assertTrue(blocker_started.wait(timeout=5))
+            old.start_agent_recovery(
+                job["id"],
+                tenant_id="tenant",
+                user_id="user",
+                actor_id="old",
+            )
+            delayed = old._recovery_futures[job["id"]]
+            self.assertFalse(delayed.running())
+            old.close()
+
+            replacement_started = Event()
+
+            def blocking_recovery(*args, **kwargs):
+                del args, kwargs
+                replacement_started.set()
+                self.assertTrue(release_replacement.wait(timeout=5))
+                return {
+                    "attempted": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "provider_recovery": {},
+                }
+
+            with (
+                patch(
+                    "research_system.market_data.collection."
+                    "recover_collection_job_draft",
+                    side_effect=blocking_recovery,
+                ),
+                ThreadPoolExecutor(max_workers=1) as executor,
+            ):
+                current = executor.submit(replacement.run_agent_recovery_now, job["id"])
+                self.assertTrue(replacement_started.wait(timeout=5))
+                running = replacement.get_job(
+                    job["id"], tenant_id="tenant", user_id="user"
+                )["agent_recovery"]
+                self.assertEqual(running["status"], "running")
+                replacement_owner = running["lease_owner"]
+
+                release_blocker.set()
+                blocker.result(timeout=5)
+                delayed.result(timeout=5)
+                after_old_future = replacement.get_job(
+                    job["id"], tenant_id="tenant", user_id="user"
+                )["agent_recovery"]
+                self.assertEqual(after_old_future["status"], "running")
+                self.assertEqual(after_old_future["lease_owner"], replacement_owner)
+
+                release_replacement.set()
+                current.result(timeout=5)
+            completed = replacement.get_job(
+                job["id"], tenant_id="tenant", user_id="user"
+            )["agent_recovery"]
+            self.assertEqual(completed["status"], "succeeded")
+        finally:
+            release_blocker.set()
+            release_replacement.set()
+            old.close()
+
+    def test_candidate_refresh_lock_preserves_concurrent_agent_cancellation(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary_directory:
+            database = StrategyDatabase(
+                f"sqlite:///{Path(temporary_directory) / 'candidate.sqlite3'}"
+            )
+            database.create_schema()
+            registry = DimensionRegistry([DEFAULT_DIMENSION_REGISTRY[0]])
+            refresher = MarketDataCollectionCoordinator(
+                database, collector=_Collector(), registry=registry
+            )
+            controller = MarketDataCollectionCoordinator(
+                database, collector=_Collector(), registry=registry
+            )
+            release = Event()
+            try:
+                today = datetime.now(timezone.utc).date()
+                job = refresher.create_job(
+                    tenant_id="tenant",
+                    user_id="user",
+                    actor_id="actor",
+                    symbols=["600519.SH"],
+                    start_date=today,
+                    end_date=today,
+                    dimensions="all",
+                    submit=False,
+                )
+                refresher.run_job_now(job["id"])
+                with database.session() as session:
+                    row = session.get(MarketDataCollectionJob, job["id"])
+                    checkpoint = dict(row.checkpoint_json or {})
+                    checkpoint["agent_recovery"] = {
+                        "status": "running",
+                        "lease_owner": "agent-owner",
+                        "lease_until": (
+                            datetime.now(timezone.utc) + timedelta(minutes=30)
+                        ).isoformat(),
+                        "custom_progress": {"stage": "web"},
+                    }
+                    row.checkpoint_json = checkpoint
+
+                entered = Event()
+                original_candidate = refresher._publication_candidate
+
+                def blocking_candidate(*args, **kwargs):
+                    entered.set()
+                    self.assertTrue(release.wait(timeout=5))
+                    return original_candidate(*args, **kwargs)
+
+                with (
+                    patch.object(
+                        refresher,
+                        "_publication_candidate",
+                        side_effect=blocking_candidate,
+                    ),
+                    ThreadPoolExecutor(max_workers=2) as executor,
+                ):
+                    refresh = executor.submit(
+                        refresher._refresh_publication_candidate, job["id"]
+                    )
+                    self.assertTrue(entered.wait(timeout=5))
+                    cancel = executor.submit(
+                        controller.cancel,
+                        job["id"],
+                        tenant_id="tenant",
+                        user_id="user",
+                        actor_id="controller",
+                    )
+                    sleep(0.05)
+                    self.assertFalse(cancel.done())
+                    release.set()
+                    self.assertIsNotNone(refresh.result(timeout=5))
+                    cancel.result(timeout=5)
+
+                persisted = controller.get_job(
+                    job["id"], tenant_id="tenant", user_id="user"
+                )
+                recovery = persisted["agent_recovery"]
+                self.assertEqual(recovery["status"], "cancelling")
+                self.assertEqual(recovery["lease_owner"], "agent-owner")
+                self.assertEqual(recovery["custom_progress"], {"stage": "web"})
+                self.assertIsNotNone(
+                    persisted["checkpoint"].get("publication_candidate")
+                )
+            finally:
+                release.set()
+                refresher.close()
+                controller.close()
+                database.close()
+
+    def test_stale_freeze_hash_refreshes_candidate_before_conflict(self) -> None:
+        registry = DimensionRegistry([DEFAULT_DIMENSION_REGISTRY[0]])
+        coordinator = MarketDataCollectionCoordinator(
+            self.database,
+            collector=self.collector,
+            registry=registry,
+        )
+        self.addCleanup(coordinator.close)
+        today = datetime.now(timezone.utc).date()
+        job = coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions="all",
+            submit=False,
+        )
+        coordinator.run_job_now(job["id"])
+        old_hash = coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")[
+            "publication_candidate"
+        ]["proposal_hash"]
+        fresh_candidate = {
+            "version": "market-data-freeze-proposal-v1",
+            "job_id": job["id"],
+            "evaluated_at": datetime.now(timezone.utc).isoformat(),
+            "bundles": [],
+            "proposal_hash": "fresh-proposal",
+            "bundle_count": 0,
+            "missing_dimensions": [],
+            "degraded": False,
+            "quality": "strict",
+        }
+        with (
+            patch.object(
+                coordinator, "_publication_candidate", return_value=fresh_candidate
+            ),
+            self.assertRaises(CollectionJobError) as captured,
+        ):
+            coordinator.confirm_freeze(
+                job["id"],
+                tenant_id="tenant",
+                user_id="user",
+                actor_id="actor",
+                proposal_hash=old_hash,
+            )
+        self.assertEqual(captured.exception.code, "collection_freeze_proposal_changed")
+        refreshed = coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")
+        self.assertEqual(
+            refreshed["publication_candidate"]["proposal_hash"], "fresh-proposal"
+        )
+
+    def test_published_freeze_rejects_a_different_proposal_hash(self) -> None:
+        registry = DimensionRegistry([DEFAULT_DIMENSION_REGISTRY[0]])
+        coordinator = MarketDataCollectionCoordinator(
+            self.database,
+            collector=self.collector,
+            registry=registry,
+        )
+        self.addCleanup(coordinator.close)
+        today = datetime.now(timezone.utc).date()
+        job = coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions="all",
+            submit=False,
+        )
+        coordinator.run_job_now(job["id"])
+        candidate = coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")[
+            "publication_candidate"
+        ]
+        coordinator.confirm_freeze(
+            job["id"],
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            proposal_hash=candidate["proposal_hash"],
+            acknowledge_degraded=True,
+        )
+
+        with self.assertRaises(CollectionJobError) as captured:
+            coordinator.confirm_freeze(
+                job["id"],
+                tenant_id="tenant",
+                user_id="user",
+                actor_id="actor",
+                proposal_hash="not-the-published-proposal",
+            )
+        self.assertEqual(captured.exception.code, "collection_freeze_proposal_changed")
+
+    def test_completed_background_worker_releases_future_and_cancel_event(self) -> None:
+        started = Event()
+        release = Event()
+        delegate = self.collector
+
+        def blocking_collector(**kwargs):
+            started.set()
+            self.assertTrue(release.wait(timeout=5))
+            return delegate(**kwargs)
+
+        coordinator = MarketDataCollectionCoordinator(
+            self.database,
+            collector=blocking_collector,
+        )
+        self.addCleanup(coordinator.close)
+        today = datetime.now(timezone.utc).date()
+        job = coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions=["0_basic"],
+            submit=False,
+        )
+        coordinator.submit(job["id"])
+        self.assertTrue(started.wait(timeout=5))
+        future = coordinator._futures[job["id"]]
+        release.set()
+        future.result(timeout=5)
+        deadline = monotonic() + 5
+        while job["id"] in coordinator._futures and monotonic() < deadline:
+            sleep(0.01)
+        self.assertNotIn(job["id"], coordinator._futures)
+        self.assertNotIn(job["id"], coordinator._cancellations)
+
+    def test_completed_agent_worker_releases_future_and_cancel_event(self) -> None:
+        registry = DimensionRegistry([DEFAULT_DIMENSION_REGISTRY[0]])
+        coordinator = MarketDataCollectionCoordinator(
+            self.database,
+            collector=self.collector,
+            registry=registry,
+        )
+        self.addCleanup(coordinator.close)
+        today = datetime.now(timezone.utc).date()
+        job = coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=today,
+            end_date=today,
+            dimensions="all",
+            submit=False,
+        )
+        coordinator.run_job_now(job["id"])
+        started = Event()
+        release = Event()
+
+        def blocking_recovery(*args, **kwargs):
+            del args, kwargs
+            started.set()
+            self.assertTrue(release.wait(timeout=5))
+            return {
+                "attempted": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "provider_recovery": {},
+            }
+
+        with patch(
+            "research_system.market_data.collection.recover_collection_job_draft",
+            side_effect=blocking_recovery,
+        ):
+            coordinator.start_agent_recovery(
+                job["id"],
+                tenant_id="tenant",
+                user_id="user",
+                actor_id="actor",
+            )
+            self.assertTrue(started.wait(timeout=5))
+            future = coordinator._recovery_futures[job["id"]]
+            release.set()
+            future.result(timeout=5)
+        deadline = monotonic() + 5
+        while job["id"] in coordinator._recovery_futures and monotonic() < deadline:
+            sleep(0.01)
+        self.assertNotIn(job["id"], coordinator._recovery_futures)
+        self.assertNotIn(job["id"], coordinator._cancellations)
 
 
 if __name__ == "__main__":

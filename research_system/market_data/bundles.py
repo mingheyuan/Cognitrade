@@ -4,7 +4,6 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from research_system.market_data.contracts import (
-    CONTRACT_VERSION,
     BundleStatus,
     CoverageResult,
     EvidenceGrade,
@@ -12,6 +11,7 @@ from research_system.market_data.contracts import (
     SnapshotStatus,
     canonical_hash,
     cutoff_at_for_date,
+    is_supported_uzi_contract_version,
     require_aware_utc,
 )
 from research_system.market_data.dimension_contracts import (
@@ -25,7 +25,11 @@ from research_system.market_data.ingestion import (
 )
 from research_system.market_data.models import MarketDataBundle, MarketDataBundleItem
 from research_system.market_data.repository import MarketDataRepository
-from research_system.market_data.resolver import SnapshotResolver, _database_utc
+from research_system.market_data.resolver import (
+    SnapshotResolver,
+    _database_utc,
+    _snapshot_pit_visibility_errors,
+)
 from research_system.market_data.uzi_gate import native_payload, native_quality
 
 
@@ -118,52 +122,71 @@ class BundlePublisher:
         published_by: str = "system",
         now: datetime | None = None,
         allow_degraded: bool = False,
+        expected_manifest_hash: str | None = None,
     ) -> MarketDataBundle:
-        symbol = symbol.strip().upper()
-        market = market.strip().upper()
-        cutoff = (
-            require_aware_utc(cutoff_at, field_name="cutoff_at")
-            if cutoff_at is not None
-            else cutoff_at_for_date(as_of_date, exchange_timezone)
-        )
-        publication_time = require_aware_utc(
-            now or datetime.now(timezone.utc), field_name="now"
-        )
-        coverage = self.resolver.coverage(
-            symbol,
-            market,
-            as_of_date,
-            cutoff,
-            exchange_timezone=exchange_timezone,
-            now=publication_time,
-        )
-        uses_uzi_gate = self.registry.contract_version == CONTRACT_VERSION
-        if not coverage.report_ready and not (
-            coverage.report_generatable and (uses_uzi_gate or allow_degraded)
-        ):
-            raise IncompleteBundleError(coverage)
-
-        rows = [
-            {
-                "dimension": item.dimension,
-                "ordinal": item.ordinal,
-                "snapshot_id": item.snapshot_id,
-                "content_hash": item.content_hash,
-                "status": item.status.value if item.status else None,
-                "evidence_grade": item.evidence_grade.value
-                if item.evidence_grade
-                else None,
-            }
-            for item in coverage.dimensions
-        ]
-        manifest_hash = bundle_manifest_hash(
-            symbol=symbol,
-            market=market,
+        # Bundle revisions and Snapshot revocation share this transaction lock.
+        # It closes both the max(revision)+1 race and the gap between resolving
+        # a candidate and persisting its immutable item rows.
+        normalized_symbol = symbol.strip().upper()
+        normalized_market = market.strip().upper()
+        self.repository.lock_snapshot_scope_for_publication(
+            symbol=normalized_symbol,
+            market=normalized_market,
             as_of_date=as_of_date,
-            cutoff_at=cutoff,
             contract_version=self.registry.contract_version,
-            items=rows,
         )
+        plan = self._publication_plan(
+            symbol=normalized_symbol,
+            market=normalized_market,
+            as_of_date=as_of_date,
+            cutoff_at=cutoff_at,
+            exchange_timezone=exchange_timezone,
+            now=now,
+            allow_degraded=allow_degraded,
+        )
+        symbol = plan["symbol"]
+        market = plan["market"]
+        cutoff = plan["cutoff_at"]
+        publication_time = plan["publication_time"]
+        coverage = plan["coverage"]
+        rows = plan["items"]
+        manifest_hash = plan["manifest_hash"]
+        locked_snapshots = {
+            snapshot.id: snapshot
+            for snapshot in self.repository.lock_snapshots_for_update(
+                row["snapshot_id"] for row in rows if row.get("snapshot_id")
+            )
+        }
+        for row in rows:
+            snapshot_id = row.get("snapshot_id")
+            if snapshot_id is None:
+                continue
+            snapshot = locked_snapshots.get(snapshot_id)
+            if snapshot is None:
+                raise BundleIntegrityError(
+                    f"publication candidate Snapshot disappeared: {snapshot_id}"
+                )
+            if snapshot.revoked_at is not None:
+                raise BundleIntegrityError(
+                    f"publication candidate Snapshot was revoked: {snapshot_id}"
+                )
+            if (
+                snapshot.symbol != symbol
+                or snapshot.market != market
+                or snapshot.as_of_date != as_of_date
+                or snapshot.contract_version != self.registry.contract_version
+                or snapshot.dimension != row["dimension"]
+                or snapshot.content_hash != row["content_hash"]
+                or snapshot.status != row["status"]
+            ):
+                raise BundleIntegrityError(
+                    f"publication candidate Snapshot changed before persistence: {snapshot_id}"
+                )
+        if expected_manifest_hash is not None and manifest_hash != expected_manifest_hash:
+            raise BundleIntegrityError(
+                "publication candidate changed before confirmation; refresh the proposal"
+            )
+
         existing = self.repository.find_bundle_by_hash(manifest_hash)
         if existing is not None:
             if existing.invalidated_at is not None:
@@ -218,6 +241,176 @@ class BundlePublisher:
             )
         return bundle
 
+    def propose(
+        self,
+        *,
+        symbol: str,
+        market: str,
+        as_of_date: date,
+        cutoff_at: datetime | None = None,
+        exchange_timezone: str = "Asia/Shanghai",
+        now: datetime | None = None,
+        allow_degraded: bool = False,
+    ) -> dict[str, Any]:
+        """Return the exact immutable manifest that ``publish`` would create."""
+
+        plan = self._publication_plan(
+            symbol=symbol,
+            market=market,
+            as_of_date=as_of_date,
+            cutoff_at=cutoff_at,
+            exchange_timezone=exchange_timezone,
+            now=now,
+            allow_degraded=allow_degraded,
+        )
+        coverage = plan["coverage"]
+        degraded_dimensions = [
+            {
+                "dimension": item.dimension,
+                "status": item.status.value if item.status else None,
+                "reason": item.reason,
+            }
+            for item in coverage.dimensions
+            if item.snapshot_id is None or not item.eligible
+        ]
+        uzi_issues = [
+            {
+                "severity": str(issue.get("severity") or "warning"),
+                "check": str(issue.get("check") or ""),
+                "dimension": str(issue.get("dimension") or "overall"),
+                "message": str(issue.get("message") or "")[:500],
+            }
+            for issue in list(coverage.uzi_integrity.get("issues") or [])
+            if isinstance(issue, dict)
+        ]
+        missing_dimensions = sorted(
+            {
+                *(
+                    str(item["dimension"])
+                    for item in degraded_dimensions
+                    if item.get("dimension")
+                ),
+                *(
+                    str(issue["dimension"])
+                    for issue in uzi_issues
+                    if issue.get("dimension")
+                ),
+            }
+        )
+        return {
+            "symbol": plan["symbol"],
+            "market": plan["market"],
+            "exchange_timezone": coverage.exchange_timezone,
+            "as_of_date": as_of_date.isoformat(),
+            "cutoff_at": plan["cutoff_at"].isoformat(),
+            "contract_version": self.registry.contract_version,
+            "manifest_hash": plan["manifest_hash"],
+            "expected_dimension_count": coverage.expected_dimension_count,
+            "ready_dimension_count": coverage.ready_dimension_count,
+            "resolved_dimension_count": coverage.resolved_dimension_count,
+            "report_ready": coverage.report_ready,
+            "report_generatable": coverage.report_generatable,
+            "quality": coverage.quality,
+            "gate_policy": coverage.gate_policy,
+            "degraded": not coverage.report_ready,
+            "missing_dimensions": missing_dimensions,
+            "degraded_dimensions": degraded_dimensions,
+            "uzi_issues": uzi_issues,
+            "uzi_critical_count": int(
+                coverage.uzi_integrity.get("critical_count") or 0
+            ),
+            "uzi_warning_count": int(
+                coverage.uzi_integrity.get("warning_count") or 0
+            ),
+            "items": [dict(item) for item in plan["items"]],
+        }
+
+    def _publication_plan(
+        self,
+        *,
+        symbol: str,
+        market: str,
+        as_of_date: date,
+        cutoff_at: datetime | None,
+        exchange_timezone: str,
+        now: datetime | None,
+        allow_degraded: bool,
+    ) -> dict[str, Any]:
+        symbol = symbol.strip().upper()
+        market = market.strip().upper()
+        cutoff = (
+            require_aware_utc(cutoff_at, field_name="cutoff_at")
+            if cutoff_at is not None
+            else cutoff_at_for_date(as_of_date, exchange_timezone)
+        )
+        publication_time = require_aware_utc(
+            now or datetime.now(timezone.utc), field_name="now"
+        )
+        coverage = self.resolver.coverage(
+            symbol,
+            market,
+            as_of_date,
+            cutoff,
+            exchange_timezone=exchange_timezone,
+            now=publication_time,
+        )
+        pit_errors: list[str] = []
+        for item in coverage.dimensions:
+            if item.snapshot_id is None:
+                continue
+            snapshot = self.repository.require_snapshot(item.snapshot_id)
+            pit_errors.extend(
+                f"{item.dimension}: {error}"
+                for error in _snapshot_pit_visibility_errors(
+                    self.repository,
+                    snapshot,
+                    cutoff,
+                )
+            )
+        if pit_errors:
+            raise BundleIntegrityError(
+                "publication candidate crosses the PIT cutoff; "
+                + "; ".join(dict.fromkeys(pit_errors))
+            )
+        uses_uzi_gate = is_supported_uzi_contract_version(
+            self.registry.contract_version
+        )
+        if not coverage.report_ready and not (
+            coverage.report_generatable and (uses_uzi_gate or allow_degraded)
+        ):
+            raise IncompleteBundleError(coverage)
+
+        rows = [
+            {
+                "dimension": item.dimension,
+                "ordinal": item.ordinal,
+                "snapshot_id": item.snapshot_id,
+                "content_hash": item.content_hash,
+                "status": item.status.value if item.status else None,
+                "evidence_grade": item.evidence_grade.value
+                if item.evidence_grade
+                else None,
+            }
+            for item in coverage.dimensions
+        ]
+        manifest_hash = bundle_manifest_hash(
+            symbol=symbol,
+            market=market,
+            as_of_date=as_of_date,
+            cutoff_at=cutoff,
+            contract_version=self.registry.contract_version,
+            items=rows,
+        )
+        return {
+            "symbol": symbol,
+            "market": market,
+            "cutoff_at": cutoff,
+            "publication_time": publication_time,
+            "coverage": coverage,
+            "items": rows,
+            "manifest_hash": manifest_hash,
+        }
+
 
 class BundleMaterializer:
     def __init__(
@@ -236,14 +429,31 @@ class BundleMaterializer:
             or bundle.invalidated_at is not None
         ):
             raise BundleIntegrityError(f"bundle {bundle_id} is invalidated")
-        if bundle.contract_version != self.registry.contract_version:
-            raise BundleIntegrityError(
-                f"bundle contract mismatch: {bundle.contract_version} != {self.registry.contract_version}"
+        materialization_registry = self.registry
+        if bundle.contract_version != materialization_registry.contract_version:
+            if not (
+                is_supported_uzi_contract_version(bundle.contract_version)
+                and is_supported_uzi_contract_version(
+                    materialization_registry.contract_version
+                )
+            ):
+                raise BundleIntegrityError(
+                    "bundle contract mismatch: "
+                    f"{bundle.contract_version} != "
+                    f"{materialization_registry.contract_version}"
+                )
+            # The b3665e8 upgrade did not change UZI's immutable 22-slot
+            # shape.  Bind the same contracts to the Bundle's stored version
+            # so old Bundles remain read-only materializable; new publications
+            # still always use the current registry version.
+            materialization_registry = DimensionRegistry(
+                tuple(materialization_registry),
+                contract_version=bundle.contract_version,
             )
         items = self.repository.list_bundle_items(bundle.id)
-        if len(items) != len(self.registry):
+        if len(items) != len(materialization_registry):
             raise BundleIntegrityError(
-                f"bundle has {len(items)} items; expected {len(self.registry)}"
+                f"bundle has {len(items)} items; expected {len(materialization_registry)}"
             )
 
         manifest_rows: list[dict[str, Any]] = []
@@ -251,13 +461,15 @@ class BundleMaterializer:
         all_source_refs: list[dict[str, Any]] = []
         seen_evidence: set[str] = set()
         bundle_coverage = dict(bundle.coverage_json or {})
-        uses_uzi_gate = bundle.contract_version == CONTRACT_VERSION
+        uses_uzi_gate = is_supported_uzi_contract_version(
+            bundle.contract_version
+        )
         degraded_bundle = bool(
             bundle_coverage.get("report_generatable") is True
             and bundle_coverage.get("quality") == "degraded"
         )
         resolved_snapshots: dict[str, Any] = {}
-        for contract, item in zip(self.registry, items, strict=True):
+        for contract, item in zip(materialization_registry, items, strict=True):
             if item.ordinal != contract.ordinal or item.dimension != contract.dimension:
                 raise BundleIntegrityError(
                     "bundle item order does not match the 22-slot contract"
@@ -292,6 +504,19 @@ class BundleMaterializer:
                     f"snapshot hash drift detected for {item.dimension}"
                 )
             series = self.repository.list_snapshot_series_points(snapshot.id)
+            evidence = self.repository.list_snapshot_evidence(snapshot.id)
+            pit_errors = _snapshot_pit_visibility_errors(
+                self.repository,
+                snapshot,
+                _database_utc(bundle.cutoff_at),
+                evidence=evidence,
+                series_points=series,
+            )
+            if pit_errors:
+                raise BundleIntegrityError(
+                    f"snapshot {snapshot.id} crosses the PIT cutoff: "
+                    + "; ".join(pit_errors)
+                )
             calculated_snapshot_hash = snapshot_content_hash(
                 symbol=snapshot.symbol,
                 market=snapshot.market,
@@ -324,7 +549,7 @@ class BundleMaterializer:
                 contract_errors = validate_persisted_snapshot_contract(
                     snapshot,
                     contract=contract,
-                    expected_contract_version=self.registry.contract_version,
+                    expected_contract_version=materialization_registry.contract_version,
                 )
                 if contract_errors:
                     raise BundleIntegrityError(
@@ -355,14 +580,6 @@ class BundleMaterializer:
                 )
             if snapshot.revoked_at is not None:
                 raise BundleIntegrityError(f"snapshot {snapshot.id} was revoked")
-            if (
-                not uses_uzi_gate
-                and not safe_degradation
-                and _database_utc(snapshot.published_at) > _database_utc(bundle.cutoff_at)
-            ):
-                raise BundleIntegrityError(
-                    f"snapshot {snapshot.id} crosses the PIT cutoff"
-                )
             conflicts = self.repository.list_open_conflicts(
                 symbol=bundle.symbol,
                 market=bundle.market,
@@ -375,7 +592,6 @@ class BundleMaterializer:
                     f"snapshot {snapshot.id} has an unresolved conflict"
                 )
 
-            evidence = self.repository.list_snapshot_evidence(snapshot.id)
             if (
                 not uses_uzi_gate
                 and not safe_degradation
@@ -391,7 +607,10 @@ class BundleMaterializer:
                     validate_persisted_fund_top_holdings,
                 )
 
-                if self.registry.contract_version == FUND_HOLDINGS_CONTRACT_VERSION:
+                if (
+                    materialization_registry.contract_version
+                    == FUND_HOLDINGS_CONTRACT_VERSION
+                ):
                     validate_persisted_fund_top_holdings(snapshot, evidence=evidence)
             except FundHoldingsSemanticError as exc:
                 raise BundleIntegrityError(
@@ -407,20 +626,6 @@ class BundleMaterializer:
                 ):
                     raise BundleIntegrityError(
                         f"snapshot {snapshot.id} now has grade C evidence"
-                    )
-                if (
-                    not uses_uzi_gate
-                    and not safe_degradation
-                    and _database_utc(proof.published_at) > _database_utc(bundle.cutoff_at)
-                ):
-                    raise BundleIntegrityError(
-                        f"evidence for {snapshot.id} crosses the cutoff"
-                    )
-                if not uses_uzi_gate and not safe_degradation and proof.grade == EvidenceGrade.A.value and _database_utc(
-                    proof.observed_at
-                ) > _database_utc(bundle.cutoff_at):
-                    raise BundleIntegrityError(
-                        f"grade A evidence for {snapshot.id} was observed after cutoff"
                     )
                 if not uses_uzi_gate and not safe_degradation and proof.grade == EvidenceGrade.B.value and not proof.immutable_proof:
                     raise BundleIntegrityError(
