@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +13,6 @@ from research_system.schemas.turn_runtime import (
     TurnConfig,
     TurnSnapshot,
 )
-
 
 MIGRATION_ID = "canonical_run_state_v1"
 RUN_STATUSES = {
@@ -42,6 +41,7 @@ def migrate_workspace(workspace_root: Path, *, dry_run: bool = False) -> dict[st
         "created_task_states": 0,
         "created_requests": 0,
         "removed_aliases": 0,
+        "normalized_task_usage": 0,
         "conflicts": [],
         "dry_run": dry_run,
         "completed_at": datetime.now(timezone.utc).isoformat(),
@@ -112,6 +112,13 @@ def _migrate_state_root(root: Path, *, report: dict[str, Any], dry_run: bool) ->
         report=report,
         dry_run=dry_run,
     )
+    if isinstance(task, dict):
+        task = _normalize_legacy_task_usage(
+            root,
+            task=task,
+            report=report,
+            dry_run=dry_run,
+        )
     if not isinstance(task, dict) and isinstance(turn, dict):
         task = _synthesize_task(root, turn=turn)
         TaskSnapshot.model_validate(task)
@@ -120,6 +127,34 @@ def _migrate_state_root(root: Path, *, report: dict[str, Any], dry_run: bool) ->
             write_json(root / "task_state.json", task)
     elif isinstance(task, dict):
         TaskSnapshot.model_validate(task)
+
+
+def _normalize_legacy_task_usage(
+    root: Path,
+    *,
+    task: dict[str, Any],
+    report: dict[str, Any],
+    dry_run: bool,
+) -> dict[str, Any]:
+    """Remove a legacy duplicate only when its canonical audit copy matches."""
+
+    if "usage" not in task:
+        return task
+    child_turn = read_json(root / "child_turn.json")
+    child_usage = child_turn.get("usage") if isinstance(child_turn, dict) else None
+    task_usage = task.get("usage")
+    if child_usage != task_usage:
+        raise ValueError(
+            f"cannot normalize task usage at {root}: "
+            "child_turn.json is missing an identical audit copy"
+        )
+    normalized = dict(task)
+    normalized.pop("usage", None)
+    TaskSnapshot.model_validate(normalized)
+    report["normalized_task_usage"] += 1
+    if not dry_run:
+        write_json(root / "task_state.json", normalized)
+    return normalized
 
 
 def _canonical_or_alias(
