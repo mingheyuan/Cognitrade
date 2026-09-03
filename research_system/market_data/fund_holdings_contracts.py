@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping
 from datetime import date, datetime, timezone
 from typing import Any, Literal
@@ -11,6 +12,7 @@ from research_system.market_data.contracts import (
     EvidenceGrade,
     SnapshotIngestInput,
     SnapshotStatus,
+    canonical_hash,
     require_aware_utc,
 )
 from research_system.market_data.dimension_contracts import (
@@ -485,6 +487,17 @@ def _validate_semantics(
     if selected_ids != lineage_ids:
         errors.append("query manifest selected sources do not match payload lineage")
 
+    native_refs = [
+        dict(value)
+        for value in list(manifest.get("native_source_refs") or [])
+        if isinstance(value, Mapping)
+    ]
+    native_refs_by_id = {
+        str(ref.get("id") or ref.get("uri") or ref.get("locator") or "").strip(): ref
+        for ref in native_refs
+        if str(ref.get("id") or ref.get("uri") or ref.get("locator") or "").strip()
+    }
+
     evidence_by_source: dict[str, list[Any]] = {}
     for proof in evidence:
         metadata = _evidence_metadata(proof)
@@ -518,6 +531,35 @@ def _validate_semantics(
                 continue
             if not has_content or metadata.get("immutable_content") is not True:
                 continue
+            if grade_value == EvidenceGrade.B.value:
+                native_ref = native_refs_by_id.get(lineage.source_id)
+                if native_ref is None or not _official_immutable_source(native_ref):
+                    continue
+                native_hash = str(native_ref.get("content_hash") or "").lower()
+                native_content_ref = str(native_ref.get("content_ref") or "").strip()
+                proof_hash = str(_row_value(proof, "content_hash") or "").lower()
+                proof_content_ref = str(_row_value(proof, "content_ref") or "").strip()
+                proof_source_url = str(_row_value(proof, "source_url") or "").strip()
+                if (
+                    proof_hash != native_hash
+                    or proof_content_ref != native_content_ref
+                    or proof_source_url != native_content_ref
+                ):
+                    continue
+                expected_binding_hash = canonical_hash(
+                    {
+                        "lineage": lineage.model_dump(mode="json"),
+                        "holdings": [
+                            holding.model_dump(mode="json")
+                            for holding in resolved.holdings
+                        ],
+                    }
+                )
+                if (
+                    metadata.get("normalized_holdings_binding_hash")
+                    != expected_binding_hash
+                ):
+                    continue
             matching = True
             break
         if not matching:
@@ -527,6 +569,23 @@ def _validate_semantics(
     if errors:
         raise FundHoldingsSemanticError(errors)
     return resolved
+
+
+def _official_immutable_source(source: Mapping[str, Any]) -> bool:
+    content_hash = str(source.get("content_hash") or "").strip()
+    content_ref = str(source.get("content_ref") or "").strip()
+    source_id = str(
+        source.get("id") or source.get("uri") or source.get("locator") or ""
+    ).strip()
+    return bool(
+        source.get("immutable_proof") is True
+        and re.fullmatch(r"[0-9a-fA-F]{64}", content_hash)
+        and source_id == content_ref
+        and re.fullmatch(
+            r"https://pdf\.dfcfw\.com/pdf/H2_[A-Za-z0-9_-]+_1\.pdf",
+            content_ref,
+        )
+    )
 
 
 def _row_value(row: Any, field: str, *, fallback: str | None = None) -> Any:

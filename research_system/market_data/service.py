@@ -67,6 +67,7 @@ from research_system.market_data.models import (
     ReportDataManifestItem,
 )
 from research_system.market_data.providers import MarketDataProviderCatalog
+from research_system.market_data.recovery import MarketDataRecoveryScheduler
 from research_system.market_data.report_inputs import (
     DatabaseReportInputGateway,
     ReportInputError,
@@ -151,6 +152,13 @@ class MarketDataCenterService:
         )
         self.fund_subscription_scheduler = MarketDataSubscriptionScheduler(
             self.fund_subscriptions
+        )
+        self.recovery_scheduler = MarketDataRecoveryScheduler(
+            self.collection,
+            self.fund_collection,
+            resume_subscription_jobs=bool(
+                getattr(settings, "market_data_auto_collection_enabled", False)
+            ),
         )
         self.report_gateway = DatabaseReportInputGateway(database)
 
@@ -1432,10 +1440,14 @@ class MarketDataCenterService:
                 getattr(self.settings, "market_data_auto_collection_enabled", False)
             )
         )
+        # A process can die just after renewing a lease. The startup pass must
+        # not steal it, so keep scanning and reclaim it after expiry.
+        self.recovery_scheduler.start()
         self.subscription_scheduler.start()
         self.fund_subscription_scheduler.start()
 
     def close(self) -> None:
+        self.recovery_scheduler.stop()
         self.subscription_scheduler.stop()
         self.fund_subscription_scheduler.stop()
         self.fund_collection.close()

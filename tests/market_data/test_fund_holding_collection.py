@@ -6,7 +6,7 @@ from threading import Barrier, Event, Thread
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 
 from research_system.market_data.bundles import BundlePublisher
 from research_system.market_data.collection import (
@@ -27,6 +27,9 @@ from research_system.market_data.fund_holding_collection import (
     FUND_HOLDING_JOB_TYPE,
     FundHoldingCollectionCoordinator,
 )
+from research_system.market_data.fund_holdings_adapter import (
+    FundTopHoldingsSnapshotAdapter,
+)
 from research_system.market_data.fund_holdings_contracts import (
     FUND_HOLDINGS_CONTRACT_VERSION,
     FUND_TOP_HOLDINGS_REGISTRY,
@@ -42,6 +45,7 @@ from research_system.market_data.models import (
     MarketDataCollectionTask,
     MarketDataCollectionTaskResult,
     MarketDataSnapshot,
+    MarketDataSnapshotEvidence,
     MarketDataSubscription,
 )
 from research_system.market_data.repository import MarketDataRepository
@@ -57,6 +61,86 @@ class _FundSkill:
     def run(self, **kwargs):
         self.calls.append(dict(kwargs))
         return {"fixture": "fund_snapshot_skill_output"}
+
+
+class _HistoricalFundSkill:
+    def __init__(self, *, provider_failure: bool = False) -> None:
+        self.calls: list[dict] = []
+        self.provider_failure = provider_failure
+
+    def run_holdings_as_of(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        as_of = kwargs["as_of_date"]
+        if self.provider_failure:
+            return {
+                "funds": [
+                    {
+                        "fund_code": kwargs["fund_code"],
+                        "fund_name": "测试权益基金",
+                        "fund_type": "股票型",
+                        "top_holdings": [],
+                        "holdings_period": None,
+                        "holdings_coverage": {"is_fund_of_funds": False},
+                    }
+                ],
+                "quality_status": "degraded",
+                "data_gap": ["historical_top10_holdings_unavailable"],
+                "provider_errors": [
+                    {
+                        "stage": "fund_reports:020464",
+                        "error_type": "TimeoutError",
+                        "retryable": True,
+                    }
+                ],
+                "source_refs": [],
+                "historical_reconstruction": {
+                    "requested_as_of_date": as_of.isoformat(),
+                    "retryable": True,
+                },
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            }
+        disclosure = as_of - timedelta(days=90)
+        published = as_of - timedelta(days=30)
+        return {
+            "funds": [
+                {
+                    "fund_code": kwargs["fund_code"],
+                    "fund_name": "测试权益基金",
+                    "fund_type": "股票型",
+                    "top_holdings": [
+                        {
+                            "rank": index,
+                            "code": symbol.split(".", 1)[0],
+                            "name": f"fixture-{index}",
+                            "weight_pct": 1.0,
+                        }
+                        for index, symbol in enumerate(HOLDING_SYMBOLS, start=1)
+                    ],
+                    "holdings_period": disclosure.isoformat(),
+                    "holdings_published_at": published.isoformat(),
+                    "holdings_coverage": {"is_fund_of_funds": False},
+                }
+            ],
+            "quality_status": "available",
+            "data_gap": [],
+            "provider_errors": [],
+            "source_refs": [
+                {
+                    "type": "fund_direct_equity_holdings",
+                    "provider": "official.fixture",
+                    "id": "https://pdf.dfcfw.com/pdf/H2_AN_FIXTURE_1.pdf",
+                    "content_ref": "https://pdf.dfcfw.com/pdf/H2_AN_FIXTURE_1.pdf",
+                    "content_hash": "a" * 64,
+                    "immutable_proof": True,
+                    "published_at": published.isoformat(),
+                }
+            ],
+            "historical_reconstruction": {
+                "requested_as_of_date": as_of.isoformat(),
+                "retryable": False,
+            },
+            "retrieved_at": datetime.now(timezone.utc).isoformat(),
+        }
 
 
 class _MutableClock:
@@ -171,7 +255,11 @@ class _FundAdapter:
             as_of_date=as_of,
             status=SnapshotStatus.AVAILABLE,
             payload=fund_payload,
-            effective_at=observed_at,
+            effective_at=datetime.combine(
+                disclosure_date,
+                datetime.min.time(),
+                tzinfo=timezone.utc,
+            ),
             published_at=observed_at,
             observed_at=observed_at,
             ingested_at=observed_at,
@@ -830,6 +918,7 @@ def test_file_sqlite_concurrent_same_idempotency_key_returns_one_job(tmp_path) -
         install_race(second)
         results.clear()
         errors.clear()
+
         # Use a distinct key while keeping the same forced SELECT/INSERT race.
         def create_conflict(coordinator, fund_code: str) -> None:
             try:
@@ -981,13 +1070,9 @@ def test_reclaimed_fund_agent_lease_fences_the_obsolete_worker() -> None:
             parent["id"], tenant_id="tenant", user_id="user"
         )
         assert persisted["agent_recovery"]["status"] == "running"
+        assert persisted["agent_recovery"]["lease_owner"] == "replacement-fund-agent"
         assert (
-            persisted["agent_recovery"]["lease_owner"]
-            == "replacement-fund-agent"
-        )
-        assert (
-            persisted["agent_recovery"]["message"]
-            == "replacement owner is processing"
+            persisted["agent_recovery"]["message"] == "replacement owner is processing"
         )
     finally:
         equity.agent_released.set()
@@ -1052,14 +1137,8 @@ def test_closed_old_coordinator_delayed_agent_future_cannot_cancel_new_owner() -
             parent["id"], tenant_id="tenant", user_id="user"
         )
         assert persisted["agent_recovery"]["status"] == "running"
-        assert (
-            persisted["agent_recovery"]["lease_owner"]
-            == "replacement-agent-worker"
-        )
-        assert (
-            persisted["agent_recovery"]["message"]
-            == "replacement owner is active"
-        )
+        assert persisted["agent_recovery"]["lease_owner"] == "replacement-agent-worker"
+        assert persisted["agent_recovery"]["message"] == "replacement owner is active"
     finally:
         blocker_released.set()
         coordinator.close()
@@ -1127,9 +1206,7 @@ def test_restart_does_not_requeue_unexpired_fund_agent_recovery(harness) -> None
         assert coordinator.resume_pending() == []
 
     submit.assert_not_called()
-    persisted = coordinator.get_job(
-        parent["id"], tenant_id="tenant", user_id="user"
-    )
+    persisted = coordinator.get_job(parent["id"], tenant_id="tenant", user_id="user")
     assert persisted["agent_recovery"]["status"] == "running"
     assert persisted["agent_recovery"]["lease_owner"] == "live-fund-agent"
 
@@ -1776,6 +1853,81 @@ def test_historical_day_without_stored_pit_never_calls_live_skill(harness) -> No
     assert captured.value.code == "collection_retry_unavailable"
 
 
+def test_historical_day_reconstructs_grade_b_parent_and_expands_children() -> None:
+    database = StrategyDatabase("sqlite://")
+    database.create_schema()
+    equity = _TrackingEquityCollection(database)
+    skill = _HistoricalFundSkill()
+    coordinator = _TestFundHoldingCoordinator(
+        database,
+        equity_collection=equity,
+        fund_snapshot_loader=skill,
+        adapter=FundTopHoldingsSnapshotAdapter(),
+        registry=FUND_TOP_HOLDINGS_REGISTRY,
+    )
+    try:
+        historical = coordinator._local_today() - timedelta(days=45)
+        parent = _create_parent(coordinator, as_of_date=historical)
+
+        coordinator.run_job_now(parent["id"])
+        completed = coordinator.get_job(
+            parent["id"], tenant_id="tenant", user_id="user"
+        )
+
+        assert completed["status"] == "succeeded"
+        assert skill.calls[0]["as_of_date"] == historical
+        assert len(completed["expanded_holdings"]) == 10
+        assert completed["child_collection_job_ids"]
+        with database.session() as session:
+            snapshot = session.get(
+                MarketDataSnapshot,
+                completed["checkpoint"]["parent_snapshot_id"],
+            )
+            assert snapshot is not None
+            assert snapshot.evidence_grade == EvidenceGrade.B.value
+            assert snapshot.as_of_date == historical
+            assert snapshot.observed_at.date() > historical
+    finally:
+        coordinator.close()
+        equity.close()
+        database.close()
+
+
+def test_historical_provider_failure_remains_retryable() -> None:
+    database = StrategyDatabase("sqlite://")
+    database.create_schema()
+    equity = _TrackingEquityCollection(database)
+    coordinator = _TestFundHoldingCoordinator(
+        database,
+        equity_collection=equity,
+        fund_snapshot_loader=_HistoricalFundSkill(provider_failure=True),
+        adapter=FundTopHoldingsSnapshotAdapter(),
+        registry=FUND_TOP_HOLDINGS_REGISTRY,
+    )
+    try:
+        historical = coordinator._local_today() - timedelta(days=45)
+        parent = _create_parent(coordinator, as_of_date=historical)
+
+        coordinator.run_job_now(parent["id"])
+        failed = coordinator.get_job(parent["id"], tenant_id="tenant", user_id="user")
+
+        assert failed["status"] == "failed"
+        assert failed["tasks"][0]["error_code"] == "fund_top_holdings_contract_gap"
+        assert failed["tasks"][0]["retryable"] is True
+        with database.session() as session:
+            result = session.scalar(
+                select(MarketDataCollectionTaskResult).where(
+                    MarketDataCollectionTaskResult.task_id == failed["tasks"][0]["id"]
+                )
+            )
+            assert result is not None
+            assert result.provider_status == "historical_provider_error"
+    finally:
+        coordinator.close()
+        equity.close()
+        database.close()
+
+
 def test_live_fund_collection_crossing_shanghai_midnight_is_stored_next_day() -> None:
     before_midnight = datetime(2026, 8, 20, 15, 59, tzinfo=timezone.utc)
     after_midnight = datetime(2026, 8, 20, 16, 1, tzinfo=timezone.utc)
@@ -1863,6 +2015,143 @@ def test_historical_day_reuses_an_existing_fund_pit_snapshot_without_live(
     assert completed["checkpoint"]["parent_snapshot_id"] == persisted.id
     assert completed["child_collection_job_ids"] == []
     assert skill.calls == []
+
+
+def test_historical_force_all_refreshes_instead_of_reusing_existing_snapshot() -> None:
+    database = StrategyDatabase("sqlite://")
+    database.create_schema()
+    equity = _TrackingEquityCollection(database)
+    skill = _HistoricalFundSkill()
+    adapter = FundTopHoldingsSnapshotAdapter()
+    coordinator = _TestFundHoldingCoordinator(
+        database,
+        equity_collection=equity,
+        fund_snapshot_loader=skill,
+        adapter=adapter,
+        registry=FUND_TOP_HOLDINGS_REGISTRY,
+    )
+    try:
+        historical = coordinator._local_today() - timedelta(days=45)
+        seed_raw = skill.run_holdings_as_of(
+            fund_code="020464",
+            as_of_date=historical,
+        )
+        seed_ingest = adapter.adapt(
+            seed_raw,
+            fund_code="020464",
+            as_of_date=historical,
+            observed_at=datetime.now(timezone.utc),
+        )
+        with database.session() as session:
+            SnapshotIngestionService(
+                MarketDataRepository(session), registry=FUND_TOP_HOLDINGS_REGISTRY
+            ).ingest(seed_ingest)
+        skill.calls.clear()
+        for symbol in HOLDING_SYMBOLS:
+            equity.available[symbol].update(DEFAULT_DIMENSION_REGISTRY.dimension_ids)
+
+        parent = coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            fund_code="020464",
+            as_of_date=historical,
+            mode="force_all",
+            submit=False,
+        )
+        coordinator.run_job_now(parent["id"])
+        completed = coordinator.get_job(
+            parent["id"], tenant_id="tenant", user_id="user"
+        )
+
+        assert completed["status"] == "succeeded"
+        assert len(skill.calls) == 1
+        assert skill.calls[0]["as_of_date"] == historical
+        assert len(equity.run_calls) == 1
+        with database.session() as session:
+            child = session.get(MarketDataCollectionJob, equity.run_calls[0])
+            assert child is not None
+            assert child.mode == "force_all"
+            assert child.parent_job_id == parent["id"]
+            assert (
+                len(
+                    list(
+                        session.scalars(
+                            select(MarketDataCollectionTask).where(
+                                MarketDataCollectionTask.job_id == child.id
+                            )
+                        )
+                    )
+                )
+                == 10 * 22
+            )
+    finally:
+        coordinator.close()
+        equity.close()
+        database.close()
+
+
+def test_invalid_checkpoint_and_resolver_snapshot_are_recollected() -> None:
+    database = StrategyDatabase("sqlite://")
+    database.create_schema()
+    equity = _TrackingEquityCollection(database)
+    skill = _HistoricalFundSkill()
+    adapter = FundTopHoldingsSnapshotAdapter()
+    coordinator = _TestFundHoldingCoordinator(
+        database,
+        equity_collection=equity,
+        fund_snapshot_loader=skill,
+        adapter=adapter,
+        registry=FUND_TOP_HOLDINGS_REGISTRY,
+    )
+    try:
+        historical = coordinator._local_today() - timedelta(days=45)
+        seed_raw = skill.run_holdings_as_of(
+            fund_code="020464",
+            as_of_date=historical,
+        )
+        seed_ingest = adapter.adapt(
+            seed_raw,
+            fund_code="020464",
+            as_of_date=historical,
+            observed_at=datetime.now(timezone.utc),
+        )
+        with database.session() as session:
+            persisted = SnapshotIngestionService(
+                MarketDataRepository(session), registry=FUND_TOP_HOLDINGS_REGISTRY
+            ).ingest(seed_ingest)
+            snapshot_id = persisted.id
+            session.execute(
+                delete(MarketDataSnapshotEvidence).where(
+                    MarketDataSnapshotEvidence.snapshot_id == snapshot_id
+                )
+            )
+        skill.calls.clear()
+
+        assert (
+            coordinator._checkpoint_snapshot(
+                {
+                    "checkpoint": {"parent_snapshot_id": snapshot_id},
+                    "fund_code": "020464",
+                    "as_of_date": historical,
+                }
+            )
+            is None
+        )
+        for symbol in HOLDING_SYMBOLS:
+            equity.available[symbol].update(DEFAULT_DIMENSION_REGISTRY.dimension_ids)
+        parent = _create_parent(coordinator, as_of_date=historical)
+        coordinator.run_job_now(parent["id"])
+        completed = coordinator.get_job(
+            parent["id"], tenant_id="tenant", user_id="user"
+        )
+
+        assert completed["status"] == "succeeded"
+        assert len(skill.calls) == 1
+    finally:
+        coordinator.close()
+        equity.close()
+        database.close()
 
 
 def test_parent_requires_the_complete_equity_contract(harness) -> None:
@@ -2467,8 +2756,12 @@ def test_cross_process_cancel_after_provider_return_prevents_fund_snapshot() -> 
         adapter=_FundAdapter(),
         registry=FUND_TOP_HOLDINGS_REGISTRY,
     )
-    parent = _create_parent(worker_coordinator, as_of_date=worker_coordinator._local_today())
-    worker = Thread(target=worker_coordinator.run_job_now, args=(parent["id"],), daemon=True)
+    parent = _create_parent(
+        worker_coordinator, as_of_date=worker_coordinator._local_today()
+    )
+    worker = Thread(
+        target=worker_coordinator.run_job_now, args=(parent["id"],), daemon=True
+    )
     try:
         worker.start()
         assert skill.started.wait(timeout=5)
@@ -2524,8 +2817,12 @@ def test_cross_process_cancel_wakes_cancellable_fund_provider_without_release() 
         adapter=_FundAdapter(),
         registry=FUND_TOP_HOLDINGS_REGISTRY,
     )
-    parent = _create_parent(worker_coordinator, as_of_date=worker_coordinator._local_today())
-    worker = Thread(target=worker_coordinator.run_job_now, args=(parent["id"],), daemon=True)
+    parent = _create_parent(
+        worker_coordinator, as_of_date=worker_coordinator._local_today()
+    )
+    worker = Thread(
+        target=worker_coordinator.run_job_now, args=(parent["id"],), daemon=True
+    )
     try:
         worker.start()
         assert skill.started.wait(timeout=5)
@@ -2647,9 +2944,7 @@ def test_restart_waits_for_unexpired_child_without_duplicate_provider_wave() -> 
         resume_worker.start()
         for _ in range(200):
             with database.session() as session:
-                owner = session.get(
-                    MarketDataCollectionJob, parent["id"]
-                ).lease_owner
+                owner = session.get(MarketDataCollectionJob, parent["id"]).lease_owner
             if owner and owner != original_owner:
                 break
             Event().wait(0.01)
@@ -2663,9 +2958,7 @@ def test_restart_waits_for_unexpired_child_without_duplicate_provider_wave() -> 
         assert not resume_worker.is_alive()
         assert resume_result == [[parent["id"]]]
 
-        completed = second.get_job(
-            parent["id"], tenant_id="tenant", user_id="user"
-        )
+        completed = second.get_job(parent["id"], tenant_id="tenant", user_id="user")
         assert completed["status"] == CollectionStatus.SUCCEEDED.value
         assert len(completed["child_collection_job_ids"]) == 1
         assert equity.run_calls == completed["child_collection_job_ids"]

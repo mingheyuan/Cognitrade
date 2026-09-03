@@ -136,6 +136,40 @@ def test_uzi_inexplicably_empty_enabled_dimension_blocks() -> None:
     )
 
 
+def test_safe_historical_gap_is_disclosed_without_blocking_report() -> None:
+    rows = _native_rows()
+    rows["19_contests"] = SimpleNamespace(
+        status="data_gap",
+        source_version="cognitrade-historical-disclosure-v1",
+        payload_json={
+            "availability": "historically_unavailable",
+            "excluded_from_scoring": True,
+        },
+        query_manifest_json={
+            "native_quality_status": "data_gap",
+            "collection_outcome": "unavailable",
+            "degradation": {
+                "safe_for_report": True,
+                "excluded_from_scoring": True,
+                "reason_code": "historical_source_current_only",
+            },
+        },
+        validation_json={"native_available": False, "audit_errors": []},
+    )
+
+    report = evaluate_uzi_collection_gate(rows, profile="medium")
+
+    assert report["gate_passed"] is True
+    assert report["critical_count"] == 0
+    assert any(
+        row["check"] == "empty_dims"
+        and row["dimension"] == "19_contests"
+        and row["severity"] == "warning"
+        and "评分排除" in row["message"]
+        for row in report["issues"]
+    )
+
+
 def test_empty_dimension_preserves_native_error_location_semantics() -> None:
     pipeline_rows = _native_rows()
     pipeline_rows["7_industry"].payload_json = {

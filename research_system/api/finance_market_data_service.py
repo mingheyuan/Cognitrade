@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -89,12 +89,18 @@ class FinanceMarketDataService:
                         break
         return results[:normalized_limit]
 
-    def get_market_data(self, query: str, *, refresh: bool = False) -> dict[str, Any]:
+    def get_market_data(
+        self,
+        query: str,
+        *,
+        refresh: bool = False,
+        as_of_date: date | None = None,
+    ) -> dict[str, Any]:
         if self._market_data_center is not None:
             # ``refresh`` is intentionally ignored in DB mode. A GET must never
             # turn into acquisition; callers use POST collection-jobs instead.
             symbol, _ = self.resolve_security(query, allow_network=False)
-            payload = self._workspace_market_data(symbol)
+            payload = self._workspace_market_data(symbol, as_of_date=as_of_date)
             payload["refresh_requested"] = bool(refresh)
             payload["refresh_performed"] = False
             return payload
@@ -222,16 +228,21 @@ class FinanceMarketDataService:
         name = str(row.get("name") or self._name_from_matches(resolution.matches, symbol) or symbol)
         return symbol, name
 
-    def _workspace_market_data(self, symbol: str) -> dict[str, Any]:
+    def _workspace_market_data(
+        self,
+        symbol: str,
+        *,
+        as_of_date: date | None = None,
+    ) -> dict[str, Any]:
         last_error: Exception | None = None
         for candidate in self._database_symbol_candidates(symbol):
             try:
                 return dict(
                     self._market_data_center.get_workspace_market_data(
                         symbol=candidate,
-                        # The data center derives the current day in the exchange
-                        # timezone; API-server local time must not choose a PIT day.
-                        as_of_date=None,
+                        # Interactive reads use the exchange-local current day;
+                        # historical consumers must bind the exact replay cutoff.
+                        as_of_date=as_of_date,
                     )
                 )
             except Exception as exc:

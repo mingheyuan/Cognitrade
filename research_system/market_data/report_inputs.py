@@ -290,6 +290,50 @@ class DatabaseReportInputGateway:
         tenant_id: str | None,
         user_id: str | None,
     ) -> Mapping[str, Any]:
+        return self._load_frozen_report_manifest(
+            manifest_id=manifest_id,
+            manifest_hash=manifest_hash,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            symbols=None,
+        )
+
+    def load_frozen_report_manifest_items(
+        self,
+        *,
+        manifest_id: str,
+        manifest_hash: str,
+        tenant_id: str | None,
+        user_id: str | None,
+        symbols: Sequence[str],
+    ) -> Mapping[str, Any]:
+        """Verify a parent manifest while materialising only selected Bundles.
+
+        A fund batch stores one ten-stock manifest, but each child Agent consumes
+        exactly one stock Bundle. Reloading all 220 snapshots for every child
+        made the trust check quadratic. This scoped path still verifies the
+        parent hash, every referenced Bundle row and the fund dependency, then
+        performs the expensive snapshot/conflict validation only for the
+        requested stock items.
+        """
+
+        return self._load_frozen_report_manifest(
+            manifest_id=manifest_id,
+            manifest_hash=manifest_hash,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            symbols=_unique_symbols(symbols),
+        )
+
+    def _load_frozen_report_manifest(
+        self,
+        *,
+        manifest_id: str,
+        manifest_hash: str,
+        tenant_id: str | None,
+        user_id: str | None,
+        symbols: Sequence[str] | None,
+    ) -> Mapping[str, Any]:
         """Re-materialise a pinned report input from the database only.
 
         This is the trust boundary for resumed/internal ``bundle_only``
@@ -340,14 +384,14 @@ class DatabaseReportInputGateway:
                     "数据库中的报告 manifest 缺少日期",
                 )
 
-            materializer = BundleMaterializer(repository)
             stored_items = repository.list_report_manifest_items(manifest.id)
             if not stored_items:
                 raise ReportInputError(
                     "report_manifest_empty",
                     "数据库中的报告 manifest 没有 Bundle",
                 )
-            frozen_items: list[dict[str, Any]] = []
+            requested = {_symbol_key(symbol) for symbol in symbols or []}
+            stored_rows: list[tuple[Any, Any, dict[str, Any]]] = []
             for item in stored_items:
                 bundle = repository.get_bundle(item.bundle_id)
                 if (
@@ -364,18 +408,83 @@ class DatabaseReportInputGateway:
                         "report_bundle_hash_mismatch",
                         f"{item.symbol} 的冻结 Bundle hash 与 manifest item 不一致",
                     )
+                stored_rows.append(
+                    (
+                        item,
+                        bundle,
+                        {
+                            "ordinal": item.ordinal,
+                            "symbol": item.symbol,
+                            "market": item.market,
+                            "bundle_id": bundle.id,
+                            "bundle_manifest_hash": bundle.manifest_hash,
+                            "weight": item.weight,
+                            "context": dict(item.context_json or {}),
+                        },
+                    )
+                )
+
+            manifest_items = [row for _, _, row in stored_rows]
+
+            frozen_dependencies = _load_manifest_dependencies(
+                repository=repository,
+                manifest=manifest,
+                stock_items=manifest_items,
+            )
+
+            hash_payload = {
+                "contract_version": manifest.contract_version,
+                "report_kind": manifest.report_kind,
+                "as_of_date": manifest.as_of_date.isoformat(),
+                "evaluation_at": _aware_utc(manifest.evaluation_at).isoformat(),
+                "workflow_pins": dict(manifest.workflow_pins_json or {}),
+                "items": [
+                    {
+                        "ordinal": item["ordinal"],
+                        "symbol": item["symbol"],
+                        "market": item["market"],
+                        "bundle_id": item["bundle_id"],
+                        "bundle_manifest_hash": item["bundle_manifest_hash"],
+                        "weight": item["weight"],
+                        "context": item["context"],
+                    }
+                    for item in manifest_items
+                ],
+            }
+            if frozen_dependencies:
+                # Keep the v1 stock-only hash byte-for-byte stable.  The new
+                # key exists only when a parent fund disclosure selected the
+                # stock portfolio.
+                hash_payload["dependencies"] = [
+                    _dependency_hash_row(item) for item in frozen_dependencies
+                ]
+            if canonical_hash(hash_payload) != manifest.manifest_hash:
+                raise ReportInputError(
+                    "report_manifest_integrity_mismatch",
+                    "数据库中的报告 manifest 未通过内容哈希校验",
+                )
+
+            selected_rows = [
+                (item, bundle, row)
+                for item, bundle, row in stored_rows
+                if not requested or _symbol_key(item.symbol) in requested
+            ]
+            if requested and requested != {
+                _symbol_key(item.symbol) for item, _, _ in selected_rows
+            }:
+                raise ReportInputError(
+                    "report_manifest_item_missing",
+                    "冻结 manifest 中没有所选标的",
+                )
+            materializer = BundleMaterializer(repository)
+            frozen_items: list[dict[str, Any]] = []
+            for item, bundle, manifest_item in selected_rows:
                 materialized = materializer.materialize(bundle.id)
                 bundle_items = repository.list_bundle_items(bundle.id)
                 bundle_coverage = dict(bundle.coverage_json or {})
                 frozen_items.append(
                     {
-                        "ordinal": item.ordinal,
-                        "symbol": item.symbol,
-                        "market": item.market,
-                        "bundle_id": bundle.id,
-                        "bundle_manifest_hash": bundle.manifest_hash,
-                        "weight": item.weight,
-                        "context": dict(item.context_json or {}),
+                        **manifest_item,
                         "bundle": {
                             "bundle_id": bundle.id,
                             "symbol": bundle.symbol,
@@ -422,44 +531,6 @@ class DatabaseReportInputGateway:
                         "source_refs": [dict(row) for row in materialized.source_refs],
                         "contract_version": bundle.contract_version,
                     }
-                )
-
-            frozen_dependencies = _load_manifest_dependencies(
-                repository=repository,
-                manifest=manifest,
-                stock_items=frozen_items,
-            )
-
-            hash_payload = {
-                "contract_version": manifest.contract_version,
-                "report_kind": manifest.report_kind,
-                "as_of_date": manifest.as_of_date.isoformat(),
-                "evaluation_at": _aware_utc(manifest.evaluation_at).isoformat(),
-                "workflow_pins": dict(manifest.workflow_pins_json or {}),
-                "items": [
-                    {
-                        "ordinal": item["ordinal"],
-                        "symbol": item["symbol"],
-                        "market": item["market"],
-                        "bundle_id": item["bundle_id"],
-                        "bundle_manifest_hash": item["bundle_manifest_hash"],
-                        "weight": item["weight"],
-                        "context": item["context"],
-                    }
-                    for item in frozen_items
-                ],
-            }
-            if frozen_dependencies:
-                # Keep the v1 stock-only hash byte-for-byte stable.  The new
-                # key exists only when a parent fund disclosure selected the
-                # stock portfolio.
-                hash_payload["dependencies"] = [
-                    _dependency_hash_row(item) for item in frozen_dependencies
-                ]
-            if canonical_hash(hash_payload) != manifest.manifest_hash:
-                raise ReportInputError(
-                    "report_manifest_integrity_mismatch",
-                    "数据库中的报告 manifest 未通过内容哈希校验",
                 )
             return {
                 "manifest_id": manifest.id,
@@ -841,7 +912,16 @@ class ReportInputService:
                 bundle=(request.slots or {}).get("market_data_bundle"),
                 symbols=self.request_symbols(request),
             )
-            loader = getattr(self.gateway, "load_frozen_report_manifest", None)
+            scoped_loader = getattr(
+                self.gateway,
+                "load_frozen_report_manifest_items",
+                None,
+            )
+            loader = (
+                scoped_loader
+                if callable(scoped_loader)
+                else getattr(self.gateway, "load_frozen_report_manifest", None)
+            )
             if callable(loader):
                 requested_symbols = self.request_symbols(request)
                 manifest_id = str(
@@ -850,14 +930,22 @@ class ReportInputService:
                     or ""
                 )
                 manifest_hash = str((supplied_manifest or {}).get("manifest_hash") or "")
-                trusted = normalize_manifest(
-                    loader(
+                if callable(scoped_loader):
+                    trusted_payload = scoped_loader(
                         manifest_id=manifest_id,
                         manifest_hash=manifest_hash,
                         tenant_id=request.tenant_id,
                         user_id=request.user_id,
-                    ),
-                )
+                        symbols=requested_symbols,
+                    )
+                else:
+                    trusted_payload = loader(
+                        manifest_id=manifest_id,
+                        manifest_hash=manifest_hash,
+                        tenant_id=request.tenant_id,
+                        user_id=request.user_id,
+                    )
+                trusted = normalize_manifest(trusted_payload)
                 # A fund batch freezes one immutable portfolio manifest, while
                 # each stock child consumes only its own Bundle. Always derive
                 # that child view from the DB-loaded parent; never trust the

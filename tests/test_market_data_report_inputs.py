@@ -729,6 +729,19 @@ class DatabaseReportInputGatewayTests(unittest.TestCase):
             )
             self.assertEqual(loaded["manifest_hash"], pinned["manifest_hash"])
             child_symbol = pinned["items"][0]["symbol"]
+            scoped = gateway.load_frozen_report_manifest_items(
+                manifest_id=pinned["manifest_id"],
+                manifest_hash=pinned["manifest_hash"],
+                tenant_id="tenant-1",
+                user_id="user-1",
+                symbols=[child_symbol],
+            )
+            self.assertEqual(
+                [item["symbol"] for item in scoped["items"]],
+                [child_symbol],
+            )
+            self.assertEqual(len(scoped["items"][0]["snapshots"]), 22)
+            self.assertEqual(len(scoped["dependencies"]), 1)
             child_slots = slots_for_manifest(pinned, symbols=[child_symbol])
             child_request = RequestEnvelope(
                 intent="stock_check",

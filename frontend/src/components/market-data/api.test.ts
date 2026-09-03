@@ -109,7 +109,14 @@ describe('MarketDataCenterApi', () => {
         progress: { completed: 1, total: 1, child_complete: 3, child_total: 10, by_status: { partial: 1 } },
         task_summary: { total: 1, by_status: { partial: 1 }, active: 0, succeeded: 0, skipped: 0, retryable_failed: 1, blocked_failed: 0, by_error_code: [], by_dimension: [] },
         portfolio_summary: { total_holdings: 10, ready_holdings: 3, dimensions_per_holding: 22, total_slots: 220, ready_slots: 91, missing_slots: 129, retryable_slots: 80, blocked_slots: 49, active_slots: 0, attempt: 2, current_child_job_ids: ['child-2'], by_error_code: [{ key: 'strict_contract_gap', count: 49, retryable_count: 0, blocked_count: 49, active_count: 0 }], by_dimension: [] },
-        tasks: [{ id: 'task-1', symbol: '020464', dimension_id: 'fund_top_holdings', status: 'partial', attempt_count: 1, max_attempts: 3, retryable: true }],
+        tasks: [{
+          id: 'task-1', symbol: '020464', dimension_id: 'fund_top_holdings', status: 'partial',
+          attempt_count: 1, max_attempts: 3, retryable: true,
+          collection_outcome: 'retryable_failure', reason_code: 'historical_provider_failure',
+          result_message: 'fund archive: timeout', provider_status: 'timeout',
+          field_coverage: { recovered_fields: [] },
+          source_trace: [{ source_id: 'fund archive', status: 'timeout' }],
+        }],
       }],
       total_count: 1,
       limit: 50,
@@ -119,7 +126,13 @@ describe('MarketDataCenterApi', () => {
     const page = await api.listJobs({ symbol: '020464', asset_family: 'fund', as_of_date: '2026-08-20', status: 'partial' })
 
     expect(page.items[0].progress).toMatchObject({ child_complete: 3, child_total: 10 })
-    expect(page.items[0].tasks?.[0]).toMatchObject({ task_id: 'task-1', attempt: 1, max_attempts: 3, retryable: true })
+    expect(page.items[0].tasks?.[0]).toMatchObject({
+      task_id: 'task-1', attempt: 1, max_attempts: 3, retryable: true,
+      collection_outcome: 'retryable_failure', reason_code: 'historical_provider_failure',
+      result_message: 'fund archive: timeout', provider_status: 'timeout',
+      field_coverage: { recovered_fields: [] },
+      source_trace: [{ source_id: 'fund archive', status: 'timeout' }],
+    })
     expect(page.items[0].task_summary).toMatchObject({ retryable_failed: 1, blocked_failed: 0 })
     expect(page.items[0].portfolio_summary).toMatchObject({ ready_slots: 91, retryable_slots: 80, blocked_slots: 49 })
     expect(page.items[0]).toMatchObject({ freeze_status: 'awaiting_recovery', can_confirm_freeze: false })
@@ -157,7 +170,7 @@ describe('MarketDataCenterApi', () => {
       return json({ job: {
         id: 'job-1', asset_family: 'equity', status: 'succeeded', symbols: ['600519.SH'], dimensions: ['0_basic'],
         start_date: '2026-08-20', end_date: '2026-08-20', max_concurrency: 5, publish_when_complete: false,
-        freeze_status: url.endsWith('/confirm-freeze') ? 'frozen' : 'awaiting_confirmation', can_confirm_freeze: !url.endsWith('/confirm-freeze'),
+        freeze_status: url.endsWith('/confirm-freeze') ? 'frozen' : 'ready', can_confirm_freeze: !url.endsWith('/confirm-freeze'),
         progress: { total: 1, by_status: { succeeded: 1 } }, created_at: '2026-08-20T08:00:00Z',
       } })
     }))

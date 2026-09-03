@@ -378,6 +378,7 @@ function normalizeJob(payload: unknown): CollectionJob {
   const source = asRecord(payload)
   const rawProgress = asRecord(source.progress)
   const byStatus = asRecord(rawProgress.by_status)
+  const rawProviderProgress = asRecord(rawProgress.provider)
   const checkpoint = asRecord(source.checkpoint)
   const rawChildJobIds = source.child_collection_job_ids ?? checkpoint.child_job_ids
   const total = numberValue(rawProgress.total)
@@ -462,6 +463,14 @@ function normalizeJob(payload: unknown): CollectionJob {
       skipped: numberValue(rawProgress.skipped ?? byStatus.skipped ?? byStatus.cancelled),
       child_complete: rawProgress.child_complete == null ? undefined : numberValue(rawProgress.child_complete),
       child_total: rawProgress.child_total == null ? undefined : numberValue(rawProgress.child_total),
+      provider: Object.keys(rawProviderProgress).length ? {
+        as_of_date: stringValue(rawProviderProgress.as_of_date) || undefined,
+        phase: stringValue(rawProviderProgress.phase, 'collecting'),
+        snapshot_type: stringValue(rawProviderProgress.snapshot_type) || null,
+        completed: numberValue(rawProviderProgress.completed),
+        total: numberValue(rawProviderProgress.total),
+        updated_at: stringValue(rawProviderProgress.updated_at) || undefined,
+      } : undefined,
     },
     requested_by: stringValue(source.requested_by) || null,
     created_at: stringValue(source.created_at),
@@ -502,6 +511,12 @@ function normalizeJob(payload: unknown): CollectionJob {
       snapshot_id: stringValue(task.snapshot_id) || null,
       resolution_status: stringValue(task.resolution_status) || undefined,
       degraded_count: task.degraded_count == null ? undefined : numberValue(task.degraded_count),
+      collection_outcome: stringValue(task.collection_outcome) || null,
+      reason_code: stringValue(task.reason_code) || null,
+      result_message: stringValue(task.result_message) || null,
+      provider_status: stringValue(task.provider_status) || null,
+      field_coverage: asRecord(task.field_coverage),
+      source_trace: records(task.source_trace),
     })),
   }
 }

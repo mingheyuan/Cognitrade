@@ -13,12 +13,15 @@ class TuShareCapitalFlowAdapter:
     def __init__(self, token: str) -> None:
         self.token = str(token or "").strip()
 
-    def get_capital_flow_snapshot(self, *, symbol: str) -> dict[str, Any]:
+    def get_capital_flow_snapshot(
+        self, *, symbol: str, as_of_date: date | None = None
+    ) -> dict[str, Any]:
         pro = import_module("tushare").pro_api(self.token)
+        target = as_of_date or date.today()
         frame = pro.moneyflow(
             ts_code=tushare_code(symbol),
-            start_date=(date.today() - timedelta(days=45)).strftime("%Y%m%d"),
-            end_date=date.today().strftime("%Y%m%d"),
+            start_date=(target - timedelta(days=45)).strftime("%Y%m%d"),
+            end_date=target.strftime("%Y%m%d"),
         )
         rows = frame_records(frame)
         if not rows:
@@ -38,12 +41,15 @@ class TuShareLHBAdapter:
     def __init__(self, token: str) -> None:
         self.token = str(token or "").strip()
 
-    def get_lhb_snapshot(self, *, symbol: str) -> dict[str, Any]:
+    def get_lhb_snapshot(
+        self, *, symbol: str, as_of_date: date | None = None
+    ) -> dict[str, Any]:
         pro = import_module("tushare").pro_api(self.token)
+        target = as_of_date or date.today()
         frame = pro.top_list(
             ts_code=tushare_code(symbol),
-            start_date=(date.today() - timedelta(days=30)).strftime("%Y%m%d"),
-            end_date=date.today().strftime("%Y%m%d"),
+            start_date=(target - timedelta(days=30)).strftime("%Y%m%d"),
+            end_date=target.strftime("%Y%m%d"),
         )
         rows = frame_records(frame)
         if not rows:
@@ -79,7 +85,8 @@ class TuShareLHBAdapter:
             "lhb_statistics": rows[:10],
             "lhb_count_30d": len(
                 {str(row.get("trade_date")) for row in rows if row.get("trade_date")}
-            ) or 1,
+            )
+            or 1,
             "buy_top_total": rows[0].get("l_buy"),
             "sell_top_total": rows[0].get("l_sell"),
             "observation_status": "verified_non_empty",

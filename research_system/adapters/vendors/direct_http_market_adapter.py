@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Callable
 
 import requests
@@ -36,9 +36,7 @@ class DirectHttpMarketAdapter:
                 lambda: self._tencent_a(symbol, adjust),
             )
         elif market in {"hk_equity", "global_equity"}:
-            loaders = (
-                lambda: self._yahoo_chart(self._yahoo_symbol(symbol), "2y"),
-            )
+            loaders = (lambda: self._yahoo_chart(self._yahoo_symbol(symbol), "2y"),)
         else:
             loaders = (
                 lambda: self._yahoo_chart(self._yahoo_symbol(symbol), "2y"),
@@ -62,9 +60,17 @@ class DirectHttpMarketAdapter:
                     "latest_bar": dict(bars[-1]),
                     "bar_count": len(bars),
                 }
-        raise ConnectionError(f"all direct HTTP market sources failed ({','.join(errors)})")
+        raise ConnectionError(
+            f"all direct HTTP market sources failed ({','.join(errors)})"
+        )
 
-    def get_market_overview(self, *, symbol: str, latest_bar: dict[str, Any] | None = None) -> dict[str, Any]:
+    def get_market_overview(
+        self,
+        *,
+        symbol: str,
+        latest_bar: dict[str, Any] | None = None,
+        as_of_date: date | None = None,
+    ) -> dict[str, Any]:
         bar = dict(latest_bar or {})
         close = coerce_numeric(bar.get("close"))
         previous = coerce_numeric(bar.get("pre_close"))
@@ -100,14 +106,19 @@ class DirectHttpMarketAdapter:
             timeout=12,
         )
         response.raise_for_status()
-        lines = ((response.json().get("data") or {}).get("klines") or [])
+        lines = (response.json().get("data") or {}).get("klines") or []
         return [self._csv_bar(line) for line in lines if len(str(line).split(",")) >= 7]
 
     def _sina_a(self, symbol: str) -> list[dict[str, Any]]:
         code = self._a_code(symbol)
         response = requests.get(
             "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData",
-            params={"symbol": f"{self._a_exchange(code)}{code}", "scale": "240", "ma": "no", "datalen": "5000"},
+            params={
+                "symbol": f"{self._a_exchange(code)}{code}",
+                "scale": "240",
+                "ma": "no",
+                "datalen": "5000",
+            },
             headers={"User-Agent": self._UA},
             timeout=12,
         )
@@ -183,7 +194,9 @@ class DirectHttpMarketAdapter:
 
     def _stooq_us(self, symbol: str) -> list[dict[str, Any]]:
         ticker = self._yahoo_symbol(symbol).lower().replace(".", "-")
-        response = requests.get(f"https://stooq.com/q/d/l/?s={ticker}.us&i=d", timeout=12)
+        response = requests.get(
+            f"https://stooq.com/q/d/l/?s={ticker}.us&i=d", timeout=12
+        )
         response.raise_for_status()
         rows = []
         for line in response.text.strip().splitlines()[1:]:
@@ -212,13 +225,25 @@ class DirectHttpMarketAdapter:
             "low": DirectHttpMarketAdapter._float(fields[4]),
             "volume": DirectHttpMarketAdapter._float(fields[5]),
             "amount": DirectHttpMarketAdapter._float(fields[6]),
-            "pct_change": DirectHttpMarketAdapter._float(fields[8]) if len(fields) > 8 else None,
+            "pct_change": DirectHttpMarketAdapter._float(fields[8])
+            if len(fields) > 8
+            else None,
         }
 
     @staticmethod
-    def _filter_dates(rows: list[dict[str, Any]], start_date: str, end_date: str) -> list[dict[str, Any]]:
-        start = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:8]}" if len(start_date) == 8 else start_date
-        end = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}" if len(end_date) == 8 else end_date
+    def _filter_dates(
+        rows: list[dict[str, Any]], start_date: str, end_date: str
+    ) -> list[dict[str, Any]]:
+        start = (
+            f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:8]}"
+            if len(start_date) == 8
+            else start_date
+        )
+        end = (
+            f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:8]}"
+            if len(end_date) == 8
+            else end_date
+        )
         return [row for row in rows if start <= str(row.get("date") or "") <= end]
 
     @staticmethod
@@ -253,4 +278,6 @@ class DirectHttpMarketAdapter:
 
     @staticmethod
     def _at(values: Any, index: int) -> Any:
-        return values[index] if isinstance(values, list) and index < len(values) else None
+        return (
+            values[index] if isinstance(values, list) and index < len(values) else None
+        )

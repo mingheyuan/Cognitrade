@@ -239,4 +239,73 @@ describe('FundCollectionOverview', () => {
     screen.getAllByRole('button', { name: /查看 22 维/ })[0].click()
     expect(await screen.findByText('eFinance / 东财连接被上游中断；Tushare 账户没有 moneyflow 接口权限。')).toBeInTheDocument()
   })
+
+  it('distinguishes partial, verified-empty, retryable and unavailable historical outcomes', async () => {
+    const outcomeChild: CollectionJob = {
+      ...childJob,
+      status: 'partial',
+      symbols: [holdings[0].symbol],
+      dimensions: ['10_valuation', '16_lhb', '12_capital_flow', '19_contests'],
+      progress: { total: 4, queued: 0, running: 0, completed: 4, failed: 1, skipped: 0 },
+      tasks: [
+        {
+          task_id: 'valuation-partial',
+          symbol: holdings[0].symbol,
+          dimension_id: '10_valuation',
+          status: 'partial',
+          attempt: 1,
+          max_attempts: 3,
+          retryable: false,
+          collection_outcome: 'partial',
+          result_message: '估值倍数可用，历史分位样本不足。',
+          raw_data_present: true,
+        },
+        {
+          task_id: 'lhb-empty',
+          symbol: holdings[0].symbol,
+          dimension_id: '16_lhb',
+          status: 'succeeded',
+          attempt: 1,
+          collection_outcome: 'verified_empty',
+        },
+        {
+          task_id: 'capital-retryable',
+          symbol: holdings[0].symbol,
+          dimension_id: '12_capital_flow',
+          status: 'failed',
+          attempt: 1,
+          max_attempts: 3,
+          retryable: true,
+          collection_outcome: 'retryable_failure',
+        },
+        {
+          task_id: 'contest-unavailable',
+          symbol: holdings[0].symbol,
+          dimension_id: '19_contests',
+          status: 'partial',
+          attempt: 1,
+          retryable: false,
+          collection_outcome: 'unavailable',
+        },
+      ],
+    }
+
+    render(<FundCollectionOverview
+      job={parentJob}
+      childJobs={[outcomeChild]}
+      jobDetails={{ 'equity-child': outcomeChild }}
+      actionLoading={false}
+      onLoadDetail={vi.fn().mockResolvedValue(outcomeChild)}
+      onRetry={vi.fn()}
+    />)
+
+    screen.getAllByRole('button', { name: /查看 22 维/ })[0].click()
+    expect(await screen.findByText('部分恢复')).toBeInTheDocument()
+    expect(screen.getByText('估值倍数可用，历史分位样本不足。')).toBeInTheDocument()
+    expect(screen.getByText('查证为空')).toBeInTheDocument()
+    expect(screen.getByText('数据源失败')).toBeInTheDocument()
+    expect(screen.getByText('无历史档案')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: `重试 ${holdings[0].symbol} 12_capital_flow` })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: `重试 ${holdings[0].symbol} 19_contests` })).not.toBeInTheDocument()
+  })
 })

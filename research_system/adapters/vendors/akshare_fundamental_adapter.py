@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any
 
 import akshare as ak
 import pandas as pd
 import requests
 
-from research_system.adapters.vendors.akshare_utils import call_with_retry, coerce_numeric, normalize_ashare_symbol, normalize_value
+from research_system.adapters.vendors.akshare_utils import (
+    call_with_retry,
+    coerce_numeric,
+    normalize_ashare_symbol,
+    normalize_value,
+)
 
 
 class AkShareFundamentalAdapter:
@@ -19,14 +25,38 @@ class AkShareFundamentalAdapter:
     _PEER_VALUATION_PB_MRQ_LABEL = "\u5e02\u51c0\u7387MRQ"
     _PEER_VALUATION_PE_TTM_LABEL = "\u5e02\u76c8\u7387TTM"
 
-    def get_fundamental_snapshot(self, *, symbol: str) -> dict[str, Any]:
-        abstract_df = call_with_retry(lambda: ak.stock_financial_abstract_ths(symbol=symbol, indicator="鎸夋姤鍛婃湡"))
-        analysis_df = self._try_get_analysis_indicator(symbol)
-        abstract_new_df = self._try_get_new_metric_frame("stock_financial_abstract_new_ths", symbol)
-        benefit_new_df = self._try_get_new_metric_frame("stock_financial_benefit_new_ths", symbol)
-        debt_new_df = self._try_get_new_metric_frame("stock_financial_debt_new_ths", symbol)
-        cash_new_df = self._try_get_new_metric_frame("stock_financial_cash_new_ths", symbol)
-        balance_sheet_payload, balance_sheet_gap = self._try_get_balance_sheet(symbol)
+    def get_fundamental_snapshot(
+        self, *, symbol: str, as_of_date: date | None = None
+    ) -> dict[str, Any]:
+        abstract_df = call_with_retry(
+            lambda: ak.stock_financial_abstract_ths(
+                symbol=symbol, indicator="鎸夋姤鍛婃湡"
+            )
+        )
+        abstract_df = self._filter_frame_as_of(abstract_df, as_of_date)
+        analysis_df = self._filter_frame_as_of(
+            self._try_get_analysis_indicator(symbol, as_of_date=as_of_date),
+            as_of_date,
+        )
+        abstract_new_df = self._filter_frame_as_of(
+            self._try_get_new_metric_frame("stock_financial_abstract_new_ths", symbol),
+            as_of_date,
+        )
+        benefit_new_df = self._filter_frame_as_of(
+            self._try_get_new_metric_frame("stock_financial_benefit_new_ths", symbol),
+            as_of_date,
+        )
+        debt_new_df = self._filter_frame_as_of(
+            self._try_get_new_metric_frame("stock_financial_debt_new_ths", symbol),
+            as_of_date,
+        )
+        cash_new_df = self._filter_frame_as_of(
+            self._try_get_new_metric_frame("stock_financial_cash_new_ths", symbol),
+            as_of_date,
+        )
+        balance_sheet_payload, balance_sheet_gap = self._try_get_balance_sheet(
+            symbol, as_of_date=as_of_date
+        )
 
         abstract_payload: dict[str, Any] = {}
         abstract_history: list[dict[str, Any]] = []
@@ -53,10 +83,12 @@ class AkShareFundamentalAdapter:
             cash_new_payload=cash_new_payload,
         )
         bank_peer_comparison: dict[str, Any] = {}
-        if banking_metrics.get("is_bank_like"):
+        if banking_metrics.get("is_bank_like") and as_of_date is None:
             growth_comparison_df = self._try_get_bank_peer_growth_comparison(symbol)
             dupont_comparison_df = self._try_get_bank_peer_dupont_comparison(symbol)
-            valuation_comparison_df = self._try_get_bank_peer_valuation_comparison(symbol)
+            valuation_comparison_df = self._try_get_bank_peer_valuation_comparison(
+                symbol
+            )
             bank_special_indicators = self._try_get_bank_special_indicators(symbol)
             banking_metrics.update(
                 {
@@ -74,7 +106,9 @@ class AkShareFundamentalAdapter:
             banking_metrics.update(
                 {
                     key: value
-                    for key, value in dict(bank_peer_comparison.get("metrics") or {}).items()
+                    for key, value in dict(
+                        bank_peer_comparison.get("metrics") or {}
+                    ).items()
                     if value is not None
                 }
             )
@@ -98,7 +132,9 @@ class AkShareFundamentalAdapter:
             "data_gap": [gap for gap in (info_gap, balance_sheet_gap) if gap],
         }
 
-    def _try_get_balance_sheet(self, symbol: str) -> tuple[dict[str, Any], str | None]:
+    def _try_get_balance_sheet(
+        self, symbol: str, *, as_of_date: date | None = None
+    ) -> tuple[dict[str, Any], str | None]:
         fetcher = getattr(ak, "stock_balance_sheet_by_report_em", None)
         if not callable(fetcher):
             return {}, "balance_sheet_provider_missing"
@@ -112,7 +148,9 @@ class AkShareFundamentalAdapter:
             return {}, "balance_sheet_unavailable"
         if frame is None or getattr(frame, "empty", True):
             return {}, "balance_sheet_missing"
-        ordered = frame
+        ordered = self._filter_frame_as_of(frame, as_of_date)
+        if ordered is None or ordered.empty:
+            return {}, "balance_sheet_not_published_by_cutoff"
         for date_column in ("REPORT_DATE", "REPORTDATE", "NOTICE_DATE"):
             if date_column in ordered.columns:
                 ordered = ordered.sort_values(date_column)
@@ -136,11 +174,18 @@ class AkShareFundamentalAdapter:
         # does not publish a dedicated interest-bearing TOTAL_DEBT field. Keep
         # the source fact and disclose the proxy instead of silently treating
         # missing debt as zero.
-        if result.get("total_debt") is None and result.get("total_liabilities") is not None:
+        if (
+            result.get("total_debt") is None
+            and result.get("total_liabilities") is not None
+        ):
             result["total_debt"] = result["total_liabilities"]
             result["total_debt_basis"] = "total_liabilities_proxy"
         report_date = next(
-            (normalize_value(latest.get(key)) for key in ("REPORT_DATE", "REPORTDATE", "NOTICE_DATE") if key in ordered.columns),
+            (
+                normalize_value(latest.get(key))
+                for key in ("REPORT_DATE", "REPORTDATE", "NOTICE_DATE")
+                if key in ordered.columns
+            ),
             None,
         )
         if report_date:
@@ -148,9 +193,15 @@ class AkShareFundamentalAdapter:
         result["source"] = "akshare.stock_balance_sheet_by_report_em"
         return result, None if result else "balance_sheet_fields_missing"
 
-    def _try_get_individual_info(self, symbol: str) -> tuple[dict[str, Any], str | None]:
+    def _try_get_individual_info(
+        self, symbol: str
+    ) -> tuple[dict[str, Any], str | None]:
         try:
-            info_df = call_with_retry(lambda: ak.stock_individual_info_em(symbol=symbol), retries=2, delay_seconds=0.5)
+            info_df = call_with_retry(
+                lambda: ak.stock_individual_info_em(symbol=symbol),
+                retries=2,
+                delay_seconds=0.5,
+            )
         except Exception:
             return {}, "individual_info_unavailable"
 
@@ -166,10 +217,15 @@ class AkShareFundamentalAdapter:
             info_payload[key] = normalize_value(value)
         return info_payload, None
 
-    def _try_get_analysis_indicator(self, symbol: str):
+    def _try_get_analysis_indicator(
+        self, symbol: str, *, as_of_date: date | None = None
+    ):
         try:
             return call_with_retry(
-                lambda: ak.stock_financial_analysis_indicator(symbol=symbol, start_year="2024"),
+                lambda: ak.stock_financial_analysis_indicator(
+                    symbol=symbol,
+                    start_year=str((as_of_date or date.today()).year - 6),
+                ),
                 retries=2,
                 delay_seconds=0.5,
             )
@@ -192,7 +248,9 @@ class AkShareFundamentalAdapter:
     def _try_get_bank_peer_growth_comparison(self, symbol: str):
         try:
             return call_with_retry(
-                lambda: ak.stock_zh_growth_comparison_em(symbol=self._comparison_symbol(symbol)),
+                lambda: ak.stock_zh_growth_comparison_em(
+                    symbol=self._comparison_symbol(symbol)
+                ),
                 retries=2,
                 delay_seconds=0.5,
             )
@@ -202,7 +260,9 @@ class AkShareFundamentalAdapter:
     def _try_get_bank_peer_dupont_comparison(self, symbol: str):
         try:
             return call_with_retry(
-                lambda: ak.stock_zh_dupont_comparison_em(symbol=self._comparison_symbol(symbol)),
+                lambda: ak.stock_zh_dupont_comparison_em(
+                    symbol=self._comparison_symbol(symbol)
+                ),
                 retries=2,
                 delay_seconds=0.5,
             )
@@ -249,14 +309,18 @@ class AkShareFundamentalAdapter:
         rows = response.json().get("result", {}).get("data") or []
         normalized_rows = [
             {
-                    self._COMPARISON_CODE_LABEL: normalize_value(row.get("CORRE_SECURITY_CODE")),
-                    self._COMPARISON_NAME_LABEL: normalize_value(row.get("CORRE_SECURITY_NAME")),
-                    self._PEER_VALUATION_RANK_LABEL: normalize_value(row.get("PAIMING")),
-                    self._PEER_VALUATION_PB_MRQ_LABEL: normalize_value(row.get("PB_MRQ")),
-                    self._PEER_VALUATION_PE_TTM_LABEL: normalize_value(row.get("PE_TTM")),
-                    "PEG": normalize_value(row.get("PEG")),
-                    "PB_24A": normalize_value(row.get("PB")),
-                    "TOTAL_COUNT": normalize_value(row.get("TOTAL_COUNT")),
+                self._COMPARISON_CODE_LABEL: normalize_value(
+                    row.get("CORRE_SECURITY_CODE")
+                ),
+                self._COMPARISON_NAME_LABEL: normalize_value(
+                    row.get("CORRE_SECURITY_NAME")
+                ),
+                self._PEER_VALUATION_RANK_LABEL: normalize_value(row.get("PAIMING")),
+                self._PEER_VALUATION_PB_MRQ_LABEL: normalize_value(row.get("PB_MRQ")),
+                self._PEER_VALUATION_PE_TTM_LABEL: normalize_value(row.get("PE_TTM")),
+                "PEG": normalize_value(row.get("PEG")),
+                "PB_24A": normalize_value(row.get("PB")),
+                "TOTAL_COUNT": normalize_value(row.get("TOTAL_COUNT")),
             }
             for row in rows
         ]
@@ -265,7 +329,9 @@ class AkShareFundamentalAdapter:
     def _fetch_bank_special_indicators(self, symbol: str) -> dict[str, Any]:
         comparison_symbol = self._comparison_symbol(symbol)
         url = "https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/ZYZBAjaxNew"
-        response = requests.get(url, params={"code": comparison_symbol, "type": "1"}, timeout=20)
+        response = requests.get(
+            url, params={"code": comparison_symbol, "type": "1"}, timeout=20
+        )
         response.raise_for_status()
         rows = response.json().get("data") or []
         if not rows:
@@ -274,7 +340,9 @@ class AkShareFundamentalAdapter:
         return {
             "loan_to_deposit_ratio": self._comparison_numeric(row, "LTDRR"),
             "capital_adequacy_ratio": self._comparison_ratio(row, "NEWCAPITALADER"),
-            "core_tier1_capital_adequacy_ratio": self._comparison_ratio(row, "HXYJBCZL"),
+            "core_tier1_capital_adequacy_ratio": self._comparison_ratio(
+                row, "HXYJBCZL"
+            ),
             "nonperforming_loan_ratio": self._comparison_ratio(row, "NONPERLOAN"),
             "provision_coverage_ratio": self._comparison_ratio(row, "BLDKBBL"),
             "net_interest_spread": self._comparison_ratio(row, "NET_INTEREST_SPREAD"),
@@ -295,7 +363,9 @@ class AkShareFundamentalAdapter:
             return {}
         ordered = frame
         if "report_date" in ordered.columns:
-            ordered = ordered.sort_values(by=["report_date", "quarter_name"], ascending=[True, True])
+            ordered = ordered.sort_values(
+                by=["report_date", "quarter_name"], ascending=[True, True]
+            )
         latest_by_metric: dict[str, Any] = {}
         for _, row in ordered.iterrows():
             metric_name = str(row.get("metric_name") or "").strip()
@@ -312,16 +382,120 @@ class AkShareFundamentalAdapter:
             }
         return latest_by_metric
 
-    def _extract_bank_peer_comparison(self, *, symbol: str, growth_frame, dupont_frame, valuation_frame) -> dict[str, Any]:
+    @classmethod
+    def _filter_frame_as_of(cls, frame, as_of_date: date | None):
+        """Keep only facts visible by the requested point in time."""
+
+        if frame is None or getattr(frame, "empty", True) or as_of_date is None:
+            return frame
+        filtered = frame.copy()
+        publication_columns = (
+            "NOTICE_DATE",
+            "ANN_DATE",
+            "ann_date",
+            "公告日期",
+            "发布日期",
+            "pubDate",
+        )
+        report_columns = (
+            "REPORT_DATE",
+            "REPORTDATE",
+            "report_date",
+            "end_date",
+            "statDate",
+            "报告期",
+            "报告日期",
+        )
+        selected_column = next(
+            (column for column in publication_columns if column in filtered.columns),
+            None,
+        ) or next(
+            (column for column in report_columns if column in filtered.columns),
+            None,
+        )
+        if selected_column is not None:
+            publication_date = selected_column in publication_columns
+            parsed = filtered[selected_column].map(
+                lambda value: cls._visible_date(
+                    value, publication_date=publication_date
+                )
+            )
+            filtered = filtered[
+                parsed.map(
+                    lambda value: value is not None and value <= as_of_date
+                )
+            ]
+
+        keep_columns: list[Any] = []
+        for column in filtered.columns:
+            parsed_column = cls._calendar_date(column)
+            if parsed_column is None or parsed_column <= as_of_date:
+                keep_columns.append(column)
+        return filtered.loc[:, keep_columns]
+
+    @staticmethod
+    def _calendar_date(value: Any) -> date | None:
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        text = str(value or "").strip().replace("/", "-")
+        for fmt, width in (
+            ("%Y-%m-%d", 10),
+            ("%Y%m%d", 8),
+            ("%Y-%m", 7),
+            ("%Y", 4),
+        ):
+            try:
+                return datetime.strptime(text[:width], fmt).date()
+            except ValueError:
+                continue
+        return None
+
+    @classmethod
+    def _visible_date(
+        cls, value: Any, *, publication_date: bool
+    ) -> date | None:
+        text = str(value or "").strip()
+        if text.isdigit() and len(text) == 4:
+            year = int(text)
+            return date(year, 12, 31) if publication_date else date(year + 1, 4, 30)
+        resolved = cls._calendar_date(value)
+        if resolved is None or publication_date:
+            return resolved
+        month_day = (resolved.month, resolved.day)
+        if month_day <= (3, 31):
+            return date(resolved.year, 4, 30)
+        if month_day <= (6, 30):
+            return date(resolved.year, 8, 31)
+        if month_day <= (9, 30):
+            return date(resolved.year, 10, 31)
+        return date(resolved.year + 1, 4, 30)
+
+    def _extract_bank_peer_comparison(
+        self, *, symbol: str, growth_frame, dupont_frame, valuation_frame
+    ) -> dict[str, Any]:
         growth_target = self._comparison_row_by_code(growth_frame, symbol)
-        growth_average = self._comparison_row_by_code(growth_frame, self._INDUSTRY_AVERAGE_LABEL)
-        growth_median = self._comparison_row_by_code(growth_frame, self._INDUSTRY_MEDIAN_LABEL)
+        growth_average = self._comparison_row_by_code(
+            growth_frame, self._INDUSTRY_AVERAGE_LABEL
+        )
+        growth_median = self._comparison_row_by_code(
+            growth_frame, self._INDUSTRY_MEDIAN_LABEL
+        )
         dupont_target = self._comparison_row_by_code(dupont_frame, symbol)
-        dupont_average = self._comparison_row_by_code(dupont_frame, self._INDUSTRY_AVERAGE_LABEL)
-        dupont_median = self._comparison_row_by_code(dupont_frame, self._INDUSTRY_MEDIAN_LABEL)
+        dupont_average = self._comparison_row_by_code(
+            dupont_frame, self._INDUSTRY_AVERAGE_LABEL
+        )
+        dupont_median = self._comparison_row_by_code(
+            dupont_frame, self._INDUSTRY_MEDIAN_LABEL
+        )
         valuation_target = self._comparison_row_by_code(valuation_frame, symbol)
-        valuation_average = self._comparison_row_by_code(valuation_frame, self._INDUSTRY_AVERAGE_LABEL)
-        valuation_median = self._comparison_row_by_code(valuation_frame, self._INDUSTRY_MEDIAN_LABEL)
+        valuation_average = self._comparison_row_by_code(
+            valuation_frame, self._INDUSTRY_AVERAGE_LABEL
+        )
+        valuation_median = self._comparison_row_by_code(
+            valuation_frame, self._INDUSTRY_MEDIAN_LABEL
+        )
 
         metrics: dict[str, Any] = {
             "peer_eps_growth_rank": self._comparison_numeric(
@@ -365,16 +539,32 @@ class AkShareFundamentalAdapter:
                 "\u5e02\u76c8\u7387TTM",
             ),
         }
-        revenue_growth_avg = self._comparison_ratio(growth_average, "\u8425\u4e1a\u6536\u5165\u589e\u957f\u7387-TTM")
-        net_profit_growth_avg = self._comparison_ratio(growth_average, "\u51c0\u5229\u6da6\u589e\u957f\u7387-TTM")
+        revenue_growth_avg = self._comparison_ratio(
+            growth_average, "\u8425\u4e1a\u6536\u5165\u589e\u957f\u7387-TTM"
+        )
+        net_profit_growth_avg = self._comparison_ratio(
+            growth_average, "\u51c0\u5229\u6da6\u589e\u957f\u7387-TTM"
+        )
         roe_avg = self._comparison_ratio(dupont_average, "ROE-3\u5e74\u5e73\u5747")
         pb_avg = self._comparison_numeric(valuation_average, "\u5e02\u51c0\u7387MRQ")
-        if metrics.get("peer_revenue_growth_ttm") is not None and revenue_growth_avg is not None:
-            metrics["peer_revenue_growth_ttm_vs_industry_avg"] = metrics["peer_revenue_growth_ttm"] - revenue_growth_avg
-        if metrics.get("peer_net_profit_growth_ttm") is not None and net_profit_growth_avg is not None:
-            metrics["peer_net_profit_growth_ttm_vs_industry_avg"] = metrics["peer_net_profit_growth_ttm"] - net_profit_growth_avg
+        if (
+            metrics.get("peer_revenue_growth_ttm") is not None
+            and revenue_growth_avg is not None
+        ):
+            metrics["peer_revenue_growth_ttm_vs_industry_avg"] = (
+                metrics["peer_revenue_growth_ttm"] - revenue_growth_avg
+            )
+        if (
+            metrics.get("peer_net_profit_growth_ttm") is not None
+            and net_profit_growth_avg is not None
+        ):
+            metrics["peer_net_profit_growth_ttm_vs_industry_avg"] = (
+                metrics["peer_net_profit_growth_ttm"] - net_profit_growth_avg
+            )
         if metrics.get("peer_roe_3y_avg") is not None and roe_avg is not None:
-            metrics["peer_roe_3y_avg_vs_industry_avg"] = metrics["peer_roe_3y_avg"] - roe_avg
+            metrics["peer_roe_3y_avg_vs_industry_avg"] = (
+                metrics["peer_roe_3y_avg"] - roe_avg
+            )
         if metrics.get("peer_pb_mrq") is not None and pb_avg is not None:
             metrics["peer_pb_mrq_vs_industry_avg"] = metrics["peer_pb_mrq"] - pb_avg
 
@@ -428,12 +618,18 @@ class AkShareFundamentalAdapter:
             "revenue_yoy": self._first_numeric(
                 abstract_payload.get("营业总收入同比增长率"),
                 analysis_payload.get("主营业务收入增长率(%)"),
-                self._metric_yoy(abstract_new_payload, "calculate_operating_income_total_yoy_growth_ratio"),
+                self._metric_yoy(
+                    abstract_new_payload,
+                    "calculate_operating_income_total_yoy_growth_ratio",
+                ),
             ),
             "net_profit_yoy": self._first_numeric(
                 abstract_payload.get("净利润同比增长率"),
                 analysis_payload.get("净利润增长率(%)"),
-                self._metric_yoy(abstract_new_payload, "calculate_parent_holder_net_profit_yoy_growth_ratio"),
+                self._metric_yoy(
+                    abstract_new_payload,
+                    "calculate_parent_holder_net_profit_yoy_growth_ratio",
+                ),
             ),
             "sales_net_interest_ratio": self._first_numeric(
                 self._metric_value(abstract_new_payload, "sale_net_interest_ratio"),
@@ -454,7 +650,9 @@ class AkShareFundamentalAdapter:
                 self._metric_value(benefit_new_payload, "financial_interest_expenses"),
             ),
             "credit_impairment_loss": self._first_numeric(
-                self._metric_value(benefit_new_payload, "benefit_credit_impairment_loss"),
+                self._metric_value(
+                    benefit_new_payload, "benefit_credit_impairment_loss"
+                ),
                 self._metric_value(benefit_new_payload, "assets_impairment_loss"),
             ),
             "general_risk_preparation": self._first_numeric(
@@ -470,20 +668,30 @@ class AkShareFundamentalAdapter:
                 self._metric_value(debt_new_payload, "deposits_and_deposits"),
             ),
             "customer_loan_advance_net_addition": self._first_numeric(
-                self._metric_value(cash_new_payload, "customer_loan_advance_net_addition"),
+                self._metric_value(
+                    cash_new_payload, "customer_loan_advance_net_addition"
+                ),
             ),
             "customer_and_interbank_deposits_addition": self._first_numeric(
-                self._metric_value(cash_new_payload, "customer_and_interbank_deposits_addition"),
+                self._metric_value(
+                    cash_new_payload, "customer_and_interbank_deposits_addition"
+                ),
                 self._metric_value(cash_new_payload, "deposits_and_funds_net_addition"),
             ),
             "receive_interest_fee_and_commission_cash": self._first_numeric(
-                self._metric_value(cash_new_payload, "receive_interest_fee_and_commission_cash"),
+                self._metric_value(
+                    cash_new_payload, "receive_interest_fee_and_commission_cash"
+                ),
             ),
             "pay_interest_fee_and_commission_cash": self._first_numeric(
-                self._metric_value(cash_new_payload, "pay_interest_fee_and_commission_cash"),
+                self._metric_value(
+                    cash_new_payload, "pay_interest_fee_and_commission_cash"
+                ),
             ),
             "pay_dividends_profits_interest_cash": self._first_numeric(
-                self._metric_value(cash_new_payload, "pay_dividends_profits_interest_cash"),
+                self._metric_value(
+                    cash_new_payload, "pay_dividends_profits_interest_cash"
+                ),
             ),
         }
         interest_income = metrics.get("interest_income")
@@ -492,10 +700,22 @@ class AkShareFundamentalAdapter:
         loan_addition = metrics.get("customer_loan_advance_net_addition")
         deposit_addition = metrics.get("customer_and_interbank_deposits_addition")
         receive_interest_cash = metrics.get("receive_interest_fee_and_commission_cash")
-        if interest_income is not None and interest_expenses is not None and deposits not in (None, 0):
-            metrics["net_interest_spread_proxy"] = (interest_income - interest_expenses) / deposits
-        elif interest_income is not None and interest_expenses is not None and interest_income not in (None, 0):
-            metrics["net_interest_spread_proxy"] = (interest_income - interest_expenses) / interest_income
+        if (
+            interest_income is not None
+            and interest_expenses is not None
+            and deposits not in (None, 0)
+        ):
+            metrics["net_interest_spread_proxy"] = (
+                interest_income - interest_expenses
+            ) / deposits
+        elif (
+            interest_income is not None
+            and interest_expenses is not None
+            and interest_income not in (None, 0)
+        ):
+            metrics["net_interest_spread_proxy"] = (
+                interest_income - interest_expenses
+            ) / interest_income
         else:
             metrics["net_interest_spread_proxy"] = None
         if deposits not in (None, 0) and loan_addition is not None:
@@ -510,18 +730,28 @@ class AkShareFundamentalAdapter:
             metrics["deposit_growth_proxy"] = deposit_addition / receive_interest_cash
         else:
             metrics["deposit_growth_proxy"] = None
-        if metrics.get("general_risk_preparation") not in (None, 0) and metrics.get("credit_impairment_loss") not in (None, 0):
-            metrics["provision_coverage_proxy"] = metrics["general_risk_preparation"] / abs(metrics["credit_impairment_loss"])
+        if metrics.get("general_risk_preparation") not in (None, 0) and metrics.get(
+            "credit_impairment_loss"
+        ) not in (None, 0):
+            metrics["provision_coverage_proxy"] = metrics[
+                "general_risk_preparation"
+            ] / abs(metrics["credit_impairment_loss"])
         else:
             metrics["provision_coverage_proxy"] = None
-        if metrics.get("dividend_payout_ratio") is None and metrics.get("pay_dividends_profits_interest_cash") not in (None, 0):
+        if metrics.get("dividend_payout_ratio") is None and metrics.get(
+            "pay_dividends_profits_interest_cash"
+        ) not in (None, 0):
             net_profit = self._first_numeric(
                 abstract_payload.get("净利润"),
                 analysis_payload.get("扣除非经常性损益后的净利润(元)"),
             )
             if net_profit not in (None, 0):
-                metrics["dividend_payout_ratio"] = metrics["pay_dividends_profits_interest_cash"] / net_profit
-        available_fields = sorted(key for key, value in metrics.items() if value is not None)
+                metrics["dividend_payout_ratio"] = (
+                    metrics["pay_dividends_profits_interest_cash"] / net_profit
+                )
+        available_fields = sorted(
+            key for key, value in metrics.items() if value is not None
+        )
         metrics["available_fields"] = available_fields
         metrics["is_bank_like"] = len(available_fields) >= 6 and any(
             metrics.get(key) is not None
@@ -544,7 +774,9 @@ class AkShareFundamentalAdapter:
             return {}
         target = str(code or "").strip()
         for _, row in frame.iterrows():
-            row_dict = {str(key): normalize_value(value) for key, value in row.to_dict().items()}
+            row_dict = {
+                str(key): normalize_value(value) for key, value in row.to_dict().items()
+            }
             row_code = str(row_dict.get(self._COMPARISON_CODE_LABEL) or "").strip()
             row_name = str(row_dict.get(self._COMPARISON_NAME_LABEL) or "").strip()
             if row_code == target or row_name == target:

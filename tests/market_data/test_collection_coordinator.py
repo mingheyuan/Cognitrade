@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from threading import Barrier, Event
 from time import monotonic, sleep
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 
@@ -39,6 +40,7 @@ class _Collector:
     def __call__(self, **kwargs):
         self.calls.append(dict(kwargs))
         retrieved_at = datetime.now(timezone.utc).isoformat()
+        as_of_date = kwargs.get("as_of_date")
         rows = []
         for symbol in kwargs["symbols"]:
             for snapshot_type in kwargs["snapshot_types"]:
@@ -49,20 +51,40 @@ class _Collector:
                         "snapshot_type": "market",
                         "symbol": symbol,
                         "retrieved_at": retrieved_at,
-                        "snapshot_date": datetime.now(timezone.utc).date().isoformat(),
+                        "snapshot_date": (
+                            as_of_date or datetime.now(timezone.utc).date()
+                        ).isoformat(),
                         "quality_status": "available",
                         "facts": {
                             "availability": "available",
                             "_uzi_raw_result": {
                                 "data": {
                                     "code": symbol,
+                                    "name": "贵州茅台",
                                     "industry": "白酒",
                                     "price": 100.0,
                                     "market_cap_raw": 1_000_000.0,
+                                    "pe_ttm": 20.0,
+                                    "pb": 3.0,
                                 }
                             },
                         },
                         "source": {"provider_id": "test.market", "chain_position": 0},
+                        **(
+                            {
+                                "historical_reconstruction": {
+                                    "safe": True,
+                                    "strategy": "dated_series",
+                                    "requested_as_of_date": as_of_date.isoformat(),
+                                    "window_start": (
+                                        as_of_date - timedelta(days=550)
+                                    ).isoformat(),
+                                    "window_end": as_of_date.isoformat(),
+                                }
+                            }
+                            if as_of_date is not None
+                            else {}
+                        ),
                     }
                 )
         return rows
@@ -101,6 +123,59 @@ class _HistoricalResearchCollector:
                 "source": {
                     "provider_id": "test.research_archive",
                     "chain_position": 0,
+                },
+            }
+            for symbol in kwargs["symbols"]
+        ]
+
+
+class _HistoricalOutcomeCollector:
+    def __init__(self, outcome: str) -> None:
+        self.outcome = outcome
+        self.calls: list[dict] = []
+
+    def __call__(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        target = kwargs["as_of_date"]
+        if self.outcome == "partial":
+            quality = "degraded"
+            data = {"pe": 20.0, "pb": 3.0}
+            source_trace = [{"source_id": "test.valuation", "status": "available"}]
+            missing_fields = ["valuation.pe_history"]
+        else:
+            quality = "provider_unavailable"
+            data = {}
+            source_trace = [
+                {
+                    "source_id": "test.valuation",
+                    "status": "provider_unavailable",
+                    "error_type": "ConnectionError",
+                }
+            ]
+            missing_fields = ["valuation"]
+        return [
+            {
+                "snapshot_type": "valuation",
+                "symbol": symbol,
+                "retrieved_at": datetime.now(timezone.utc).isoformat(),
+                "snapshot_date": target.isoformat(),
+                "quality_status": quality,
+                "missing_fields": missing_fields,
+                "facts": {
+                    "availability": quality,
+                    "_uzi_raw_result": {"data": data},
+                },
+                "source": {
+                    "provider_id": "test.valuation",
+                    "chain_position": 0,
+                },
+                "source_trace": source_trace,
+                "historical_reconstruction": {
+                    "safe": True,
+                    "strategy": "dated_series",
+                    "requested_as_of_date": target.isoformat(),
+                    "window_start": (target - timedelta(days=550)).isoformat(),
+                    "window_end": target.isoformat(),
                 },
             }
             for symbol in kwargs["symbols"]
@@ -212,7 +287,7 @@ class CollectionCoordinatorTests(unittest.TestCase):
             self.assertEqual(result.status, "succeeded")
 
     def test_complete_dimension_run_keeps_native_uzi_root_workflow(self) -> None:
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
         job = self.coordinator.create_job(
             tenant_id="tenant",
             user_id="user",
@@ -441,6 +516,21 @@ class CollectionCoordinatorTests(unittest.TestCase):
         self.assertEqual(self.collector.calls[0]["snapshot_types"], ["events"])
         self.assertFalse(self.collector.calls[0]["uzi_root_route"])
         self.assertFalse(self.collector.calls[0]["no_resume"])
+        self.assertTrue(callable(self.collector.calls[0]["progress_callback"]))
+        completed = self.coordinator.get_job(
+            job["id"], tenant_id="tenant", user_id="user"
+        )
+        self.assertEqual(
+            completed["progress"]["provider"],
+            {
+                "as_of_date": today.isoformat(),
+                "phase": "persisting",
+                "snapshot_type": None,
+                "completed": 1,
+                "total": 1,
+                "updated_at": completed["progress"]["provider"]["updated_at"],
+            },
+        )
 
     def test_adapter_validation_failure_is_isolated_and_batch_continues(self) -> None:
         today = datetime.now(timezone.utc).date()
@@ -678,7 +768,7 @@ class CollectionCoordinatorTests(unittest.TestCase):
             all(task["status"] == "cancelled" for task in completed["tasks"])
         )
 
-    def test_historical_current_only_source_is_disclosed_without_calling_provider(
+    def test_historical_market_source_receives_cutoff_and_is_recovered(
         self,
     ) -> None:
         historical = datetime.now(timezone.utc).date() - timedelta(days=30)
@@ -695,13 +785,15 @@ class CollectionCoordinatorTests(unittest.TestCase):
 
         self.coordinator.run_job_now(job["id"])
 
-        self.assertEqual(self.collector.calls, [])
+        self.assertEqual(len(self.collector.calls), 1)
+        self.assertEqual(self.collector.calls[0]["as_of_date"], historical)
+        self.assertEqual(self.collector.calls[0]["cutoff_at"].date(), historical)
         with self.database.session() as session:
             task = session.scalar(select(MarketDataCollectionTask))
             result = session.scalar(select(MarketDataCollectionTaskResult))
             self.assertEqual(task.status, "succeeded")
-            self.assertEqual(result.status, "degraded")
-            self.assertEqual(result.provider_status, "historical_unavailable")
+            self.assertEqual(result.status, "succeeded")
+            self.assertEqual(result.provider_status, "available")
             self.assertFalse(result.retryable)
             self.assertIsNotNone(result.snapshot_id)
         coverage = self.coordinator.get_job(
@@ -753,6 +845,82 @@ class CollectionCoordinatorTests(unittest.TestCase):
                 "historical_reconstruction",
             )
             self.assertEqual(result.status, "succeeded")
+
+    def test_historical_partial_is_usable_but_not_reported_as_complete(self) -> None:
+        historical = datetime.now(timezone.utc).date() - timedelta(days=30)
+        collector = _HistoricalOutcomeCollector("partial")
+        coordinator = MarketDataCollectionCoordinator(
+            self.database,
+            collector=collector,
+        )
+        self.addCleanup(coordinator.close)
+        job = coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=historical,
+            end_date=historical,
+            dimensions=["10_valuation"],
+            mode="force_all",
+            publish_when_complete=False,
+            submit=False,
+        )
+
+        coordinator.run_job_now(job["id"])
+
+        completed = coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")
+        task = completed["tasks"][0]
+        self.assertEqual(completed["status"], "partial")
+        self.assertEqual(task["status"], "partial")
+        self.assertEqual(task["collection_outcome"], "partial")
+        self.assertEqual(task["error_code"], "historical_partial")
+        self.assertEqual(task["failure_kind"], "partial_available")
+        self.assertFalse(task["retryable"])
+        with self.database.session() as session:
+            result = session.scalar(
+                select(MarketDataCollectionTaskResult).where(
+                    MarketDataCollectionTaskResult.task_id == task["id"]
+                )
+            )
+            self.assertEqual(result.status, "partial")
+            self.assertEqual(result.metrics_json["collection_outcome"], "partial")
+            self.assertFalse(result.metrics_json["excluded_from_scoring"])
+
+    def test_historical_provider_failure_stays_retryable(self) -> None:
+        historical = datetime.now(timezone.utc).date() - timedelta(days=30)
+        collector = _HistoricalOutcomeCollector("retryable_failure")
+        coordinator = MarketDataCollectionCoordinator(
+            self.database,
+            collector=collector,
+        )
+        self.addCleanup(coordinator.close)
+        job = coordinator.create_job(
+            tenant_id="tenant",
+            user_id="user",
+            actor_id="actor",
+            symbols=["600519.SH"],
+            start_date=historical,
+            end_date=historical,
+            dimensions=["10_valuation"],
+            mode="force_all",
+            publish_when_complete=False,
+            submit=False,
+        )
+
+        coordinator.run_job_now(job["id"])
+
+        completed = coordinator.get_job(job["id"], tenant_id="tenant", user_id="user")
+        task = completed["tasks"][0]
+        self.assertEqual(completed["status"], "failed")
+        self.assertEqual(task["status"], "failed")
+        self.assertEqual(task["collection_outcome"], "retryable_failure")
+        self.assertEqual(task["error_code"], "historical_provider_failure")
+        self.assertEqual(task["failure_kind"], "source_unavailable")
+        self.assertTrue(task["retryable"])
+        self.assertEqual(task["reason_code"], "historical_provider_failure")
+        self.assertIn("test.valuation: provider_unavailable", task["result_message"])
+        self.assertIn("ConnectionError", task["error_message"])
 
     def test_missing_or_stale_skips_fresh_slot_before_provider_wave(self) -> None:
         today = datetime.now(timezone.utc).date()

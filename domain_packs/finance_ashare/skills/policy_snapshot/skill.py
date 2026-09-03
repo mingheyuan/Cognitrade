@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from research_system.adapters.vendors.akshare_policy_adapter import AkSharePolicyAdapter
@@ -25,14 +25,33 @@ class PolicySnapshotSkill:
         sector: str | None = None,
         constituents: list[dict[str, Any]] | None = None,
         symbol: str | None = None,
+        as_of_date: date | None = None,
+        cutoff_at: datetime | None = None,
     ) -> dict[str, Any]:
-        snapshot_date = date.today().isoformat()
-        theme = str(sector or " ".join(item for item in (symbol, query) if item) or "").strip()
-        provider_chain = self.provider_registry.get_provider_chain("policy", "cn_sector") if self.provider_registry else []
+        del cutoff_at
+        snapshot_date = (as_of_date or date.today()).isoformat()
+        theme = str(
+            sector or " ".join(item for item in (symbol, query) if item) or ""
+        ).strip()
+        provider_chain = (
+            self.provider_registry.get_provider_chain("policy", "cn_sector")
+            if self.provider_registry
+            else []
+        )
         provider_trace = [
-            {"provider_id": item.provider_id, "source_id": item.source_id, "status": "configured"}
+            {
+                "provider_id": item.provider_id,
+                "source_id": item.source_id,
+                "status": "configured",
+            }
             for item in provider_chain
-        ] or [{"provider_id": "akshare_policy", "source_id": "akshare", "status": "configured"}]
+        ] or [
+            {
+                "provider_id": "akshare_policy",
+                "source_id": "akshare",
+                "status": "configured",
+            }
+        ]
         if not theme:
             primary_source = SnapshotSource(
                 skill=self.skill_name,
@@ -59,29 +78,101 @@ class PolicySnapshotSkill:
         facts: dict[str, Any] = {}
         trace: list[dict[str, Any]] = []
         try:
-            facts.update(self.adapter.get_policy_snapshot(theme=theme, constituents=constituents))
-            trace.append({"provider_id": "akshare_policy", "source_id": "em_data", "status": "available"})
+            facts.update(
+                self.adapter.get_policy_snapshot(
+                    theme=theme,
+                    constituents=constituents,
+                    as_of_date=as_of_date,
+                )
+            )
+            trace.append(
+                {
+                    "provider_id": "akshare_policy",
+                    "source_id": "em_data",
+                    "status": "available",
+                }
+            )
         except Exception as exc:
-            trace.append({"provider_id": "akshare_policy", "source_id": "em_data", "status": "provider_unavailable", "error_type": exc.__class__.__name__})
+            trace.append(
+                {
+                    "provider_id": "akshare_policy",
+                    "source_id": "em_data",
+                    "status": "provider_unavailable",
+                    "error_type": exc.__class__.__name__,
+                }
+            )
         try:
-            web = UziWebSearchAdapter().search(query=f"{theme} 最新政策 监管 原文", dimension="policy", max_results=10)
+            if as_of_date is not None:
+                raise RuntimeError("historical_live_search_disabled")
+            web = UziWebSearchAdapter().search(
+                query=f"{theme} 最新政策 监管 原文", dimension="policy", max_results=10
+            )
             facts["official_policy_search"] = web.get("results") or []
-            trace.extend(list(web.get("source_trace") or [{"provider_id": "ddgs_policy", "source_id": "ddgs", "status": "available", "count": web.get("result_count", 0)}]))
+            trace.extend(
+                list(
+                    web.get("source_trace")
+                    or [
+                        {
+                            "provider_id": "ddgs_policy",
+                            "source_id": "ddgs",
+                            "status": "available",
+                            "count": web.get("result_count", 0),
+                        }
+                    ]
+                )
+            )
         except Exception as exc:
-            trace.append({"provider_id": "ddgs_policy", "source_id": "ddgs", "status": "provider_unavailable", "error_type": exc.__class__.__name__})
+            trace.append(
+                {
+                    "provider_id": "ddgs_policy",
+                    "source_id": "ddgs",
+                    "status": "not_queried"
+                    if str(exc) == "historical_live_search_disabled"
+                    else "provider_unavailable",
+                    "reason_code": "unbounded_search"
+                    if str(exc) == "historical_live_search_disabled"
+                    else None,
+                    "error_type": None
+                    if str(exc) == "historical_live_search_disabled"
+                    else exc.__class__.__name__,
+                }
+            )
         try:
+            if as_of_date is not None:
+                raise RuntimeError("historical_live_news_disabled")
             news = UziNewsAdapter().get_news(name=theme, limit=20)
             facts["news_multi_source"] = news.get("sources") or {}
             trace.extend(list(news.get("source_trace") or []))
         except Exception as exc:
-            trace.append({"provider_id": "uzi_news_policy", "source_id": "uzi_news_http", "status": "provider_unavailable", "error_type": exc.__class__.__name__})
+            trace.append(
+                {
+                    "provider_id": "uzi_news_policy",
+                    "source_id": "uzi_news_http",
+                    "status": "not_queried"
+                    if str(exc) == "historical_live_news_disabled"
+                    else "provider_unavailable",
+                    "reason_code": "unbounded_news"
+                    if str(exc) == "historical_live_news_disabled"
+                    else None,
+                    "error_type": None
+                    if str(exc) == "historical_live_news_disabled"
+                    else exc.__class__.__name__,
+                }
+            )
         available = any(bool(value) for value in facts.values())
         primary_source = SnapshotSource(
             skill=self.skill_name,
             vendor="uzi_policy",
             from_cache=False,
             provider_id="uzi_policy_multi",
-            source_id=next((str(row.get("source_id")) for row in trace if row.get("status") == "available"), "ddgs"),
+            source_id=next(
+                (
+                    str(row.get("source_id"))
+                    for row in trace
+                    if row.get("status") == "available"
+                ),
+                "ddgs",
+            ),
             chain_position=0,
             dim="policy",
         )
@@ -92,10 +183,18 @@ class PolicySnapshotSkill:
             snapshot_date=snapshot_date,
             sector=theme,
             theme=theme,
-            facts={**facts, "availability": "available" if available else "data_gap", "data_gap": [] if available else ["policy_sources_empty"]},
+            facts={
+                **facts,
+                "availability": "available" if available else "data_gap",
+                "data_gap": [] if available else ["policy_sources_empty"],
+            },
             source=primary_source,
             primary_source=primary_source,
-            source_confidence="high" if facts.get("official_policy_search") else "medium" if available else "low",
+            source_confidence="high"
+            if facts.get("official_policy_search")
+            else "medium"
+            if available
+            else "low",
             source_trace=trace,
             degraded=not available,
             degrade_reason=None if available else "no_data",

@@ -7,10 +7,13 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 
+from pydantic import ValidationError
+
 from domain_packs.finance_ashare.subagents.uzi_agent_roleplay import (
     AgentRoleplayBatch,
     AgentRoleplayVote,
     PERSONAS_DIR,
+    _validate_batch_members,
     apply_deep_agent_roleplay,
     load_persona,
 )
@@ -127,6 +130,91 @@ class UziDeepRoleplayTests(unittest.TestCase):
         self.assertIn("Mr. Market", persona.voice)
         stub = load_persona({"investor_id": "templeton", "school": "A"})
         self.assertFalse(stub.is_flagship)
+
+    def test_explicit_chinese_evidence_shortfall_is_a_concrete_headline(self) -> None:
+        vote = AgentRoleplayVote(
+            investor_id="zhang_mz",
+            signal="insufficient_evidence",
+            score=0,
+            headline="资金接力强度证据不足",
+            reasoning="冻结快照没有换手率、封板强度和席位联动数据，因此不能形成可审计的短线判断。",
+            override_rule_engine=True,
+            override_reason="规则骨架缺少 A 股资金证据，Agent 明确保留缺口。",
+        )
+
+        self.assertEqual(vote.signal, "insufficient_evidence")
+
+    def test_roleplay_allows_summary_headline_when_reasoning_is_grounded(self) -> None:
+        vote = AgentRoleplayVote(
+            investor_id="zhang_mz",
+            signal="bearish",
+            score=20,
+            headline="当前阶段暂不参与交易",
+            reasoning="冻结快照显示当日跌幅 3.5%，同时缺少换手率和封板强度，因此不满足资金接力条件。",
+            override_rule_engine=True,
+            override_reason="根据冻结行情修正规则骨架。",
+        )
+
+        self.assertEqual(vote.headline, "当前阶段暂不参与交易")
+
+    def test_explicit_skip_can_ground_abstention_in_verdict(self) -> None:
+        vote = AgentRoleplayVote(
+            investor_id="zhang_mz",
+            signal="skip",
+            score=0,
+            headline="当前条件不进入交易评估",
+            reasoning="依照该评委的交易纪律，本轮保持规则骨架给出的结论并停止方向判断。",
+            comment="规则结果保持原样。",
+            verdict="不追",
+            override_rule_engine=False,
+            override_reason=None,
+        )
+
+        self.assertEqual(vote.signal, "skip")
+
+    def test_non_abstaining_vote_still_requires_grounded_evidence(self) -> None:
+        with self.assertRaises(ValidationError):
+            AgentRoleplayVote(
+                investor_id="zhang_mz",
+                signal="bullish",
+                score=80,
+                headline="当前阶段可以积极参与",
+                reasoning="依照该评委的方法论，本轮形成明确的方向性判断并建议继续观察。",
+                comment="保持原有观点。",
+                verdict="看多",
+                override_rule_engine=False,
+                override_reason=None,
+            )
+
+    def test_group_code_alias_keeps_strict_membership_gate(self) -> None:
+        batch = AgentRoleplayBatch(
+            agent_reviewed=True,
+            group_label="G+H+I",
+            votes=[
+                AgentRoleplayVote(
+                    investor_id="shaw",
+                    signal="skip",
+                    score=0,
+                    headline="当前条件不进入交易评估",
+                    reasoning="依照该评委的交易纪律，本轮保持规则骨架给出的结论并停止方向判断。",
+                    verdict="skip",
+                    override_rule_engine=False,
+                    override_reason=None,
+                )
+            ],
+        )
+
+        _validate_batch_members(
+            batch,
+            ["shaw"],
+            expected_group_label="G+H+I · 量化、科技领袖与AI瓶颈",
+        )
+        with self.assertRaises(ValueError):
+            _validate_batch_members(
+                batch,
+                ["simons"],
+                expected_group_label="G+H+I · 量化、科技领袖与AI瓶颈",
+            )
 
     def test_medium_never_invokes_agent_roleplay(self) -> None:
         provider = _RoleplayProvider()

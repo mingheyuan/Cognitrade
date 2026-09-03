@@ -53,8 +53,8 @@ FUND_MARKET = "CN_FUND"
 FUND_EXCHANGE_TIMEZONE = "Asia/Shanghai"
 _FUND_CODE = re.compile(r"^(?:OF)?(?P<code>\d{6})(?:\.(?:OF|FUND))?$", re.IGNORECASE)
 _A_SHARE_SYMBOL = re.compile(r"^(?P<code>\d{6})\.(?P<exchange>SH|SZ|BJ)$")
-_FUND_LEASE_DURATION = timedelta(minutes=30)
-_FUND_LEASE_RENEW_INTERVAL_SECONDS = 60.0
+_FUND_LEASE_DURATION = timedelta(minutes=3)
+_FUND_LEASE_RENEW_INTERVAL_SECONDS = 10.0
 _FUND_DURABLE_SIGNAL_POLL_SECONDS = 0.25
 
 FundSnapshotLoader = Callable[..., Mapping[str, Any]]
@@ -103,14 +103,10 @@ class _CancellationView:
             return True
         deadline = None if timeout is None else monotonic() + max(timeout, 0.0)
         while not self.is_set():
-            remaining = (
-                None if deadline is None else max(deadline - monotonic(), 0.0)
-            )
+            remaining = None if deadline is None else max(deadline - monotonic(), 0.0)
             if remaining == 0.0:
                 return False
-            self._events[0].wait(
-                0.05 if remaining is None else min(0.05, remaining)
-            )
+            self._events[0].wait(0.05 if remaining is None else min(0.05, remaining))
         return True
 
 
@@ -119,9 +115,10 @@ class FundHoldingCollectionCoordinator:
 
     The parent owns exactly one ``fund_top_holdings`` task and one ``CN_FUND``
     bundle.  Its ten holdings are then grouped by their still-missing equity
-    dimensions and passed to the existing equity coordinator.  The fund skill
-    is only allowed on the current Shanghai date; historical executions must
-    resolve an already-persisted PIT snapshot.
+    dimensions and passed to the existing equity coordinator.  Historical
+    execution may reconstruct the parent only through dated official reports
+    published by the requested cutoff; current-state fund pages are never
+    backdated.
     """
 
     def __init__(
@@ -287,8 +284,7 @@ class FundHoldingCollectionCoordinator:
                         launch = session.execute(
                             update(MarketDataSubscription)
                             .where(
-                                MarketDataSubscription.id
-                                == normalized_subscription_id,
+                                MarketDataSubscription.id == normalized_subscription_id,
                                 MarketDataSubscription.tenant_id == tenant_id,
                                 MarketDataSubscription.user_id == user_id,
                                 MarketDataSubscription.enabled.is_(True),
@@ -1534,9 +1530,7 @@ class FundHoldingCollectionCoordinator:
                             else int(recovery.get("attempt") or 0) + 1
                         ),
                         "lease_owner": worker_id,
-                        "lease_until": iso(
-                            lease_state["until"]
-                        ),
+                        "lease_until": iso(lease_state["until"]),
                         "children": child_summaries,
                         "message": "正在逐只补采前十大持仓的 UZI 数据缺口",
                     }
@@ -2100,9 +2094,7 @@ class FundHoldingCollectionCoordinator:
         renew_at = monotonic() + min(
             _FUND_LEASE_RENEW_INTERVAL_SECONDS,
             max(
-                (
-                    parent_lease_state["until"] - self._now()
-                ).total_seconds(),
+                (parent_lease_state["until"] - self._now()).total_seconds(),
                 0.0,
             ),
         )
@@ -2231,13 +2223,26 @@ class FundHoldingCollectionCoordinator:
             ):
                 raise _FundExpansionLeaseLost()
             if snapshot.status != SnapshotStatus.AVAILABLE.value:
-                errors = list((snapshot.validation_json or {}).get("errors") or [])
+                validation = dict(snapshot.validation_json or {})
+                errors = list(
+                    validation.get("semantic_errors") or validation.get("errors") or []
+                )
+                provider_errors = list(validation.get("provider_errors") or [])
+                reconstruction = dict(validation.get("historical_reconstruction") or {})
+                historical_retryable = bool(reconstruction.get("retryable"))
                 raise _FundExpansionFailure(
                     "fund_top_holdings_contract_gap",
-                    "; ".join(str(item) for item in errors)[:4000]
+                    "; ".join(str(item) for item in [*errors, *provider_errors])[:4000]
                     or "基金快照未形成精确十只 A 股持仓",
-                    provider_status=snapshot.status,
-                    retryable=claimed["as_of_date"] == self._local_today(),
+                    provider_status=(
+                        "historical_provider_error"
+                        if historical_retryable
+                        else snapshot.status
+                    ),
+                    retryable=(
+                        claimed["as_of_date"] == self._local_today()
+                        or historical_retryable
+                    ),
                     snapshot_id=snapshot.id,
                 )
             bundle = (
@@ -2430,15 +2435,16 @@ class FundHoldingCollectionCoordinator:
         if snapshot is not None:
             return snapshot
         current_date = self._local_today()
-        allow_existing = (
-            claimed["mode"] == "missing_or_stale"
-            or claimed["as_of_date"] != current_date
-        )
+        # ``force_all`` means a real provider refresh for current and
+        # historical dates alike.  Only a checkpoint from this same durable
+        # job may short-circuit it (after the audit validation above).
+        allow_existing = claimed["mode"] == "missing_or_stale"
         if allow_existing:
             with self.database.session() as session:
                 now = self._now()
+                repository = MarketDataRepository(session)
                 snapshot = SnapshotResolver(
-                    MarketDataRepository(session), registry=self.registry
+                    repository, registry=self.registry
                 ).resolve_snapshot(
                     symbol=claimed["fund_code"],
                     market=FUND_MARKET,
@@ -2448,22 +2454,25 @@ class FundHoldingCollectionCoordinator:
                     exchange_timezone=FUND_EXCHANGE_TIMEZONE,
                     now=now,
                 )
-                if snapshot is not None:
+                if snapshot is not None and self._parent_snapshot_audit_valid(
+                    repository, snapshot
+                ):
                     return snapshot
-        if claimed["as_of_date"] != current_date:
-            raise _FundExpansionFailure(
-                "fund_historical_pit_unavailable",
-                "历史日没有当时已落库的基金持仓快照，禁止用当前披露回填",
-                provider_status="pit_not_supported",
-                retryable=False,
-            )
+        historical = claimed["as_of_date"] != current_date
         if cancellation.is_set():
             raise _FundExpansionCancelled()
         try:
             collection_started_at = self._now()
-            raw = self._collect_current_fund_snapshot(
-                claimed,
-                cancellation=cancellation,
+            raw = (
+                self._collect_historical_fund_snapshot(
+                    claimed,
+                    cancellation=cancellation,
+                )
+                if historical
+                else self._collect_current_fund_snapshot(
+                    claimed,
+                    cancellation=cancellation,
+                )
             )
             self._raise_if_parent_cancelled(
                 claimed["job_id"],
@@ -2487,7 +2496,9 @@ class FundHoldingCollectionCoordinator:
                 # A live response belongs to the Shanghai date on which the
                 # provider call completed.  Never backdate data observed after
                 # midnight into the previous day's PIT snapshot.
-                as_of_date=observed_as_of_date,
+                as_of_date=(
+                    claimed["as_of_date"] if historical else observed_as_of_date
+                ),
                 exchange_timezone=FUND_EXCHANGE_TIMEZONE,
                 top_n=10,
                 observed_at=observed_at,
@@ -2513,7 +2524,7 @@ class FundHoldingCollectionCoordinator:
                 persisted = SnapshotIngestionService(
                     MarketDataRepository(session), registry=self.registry
                 ).ingest(ingest)
-            if observed_as_of_date != claimed["as_of_date"]:
+            if not historical and observed_as_of_date != claimed["as_of_date"]:
                 raise _FundExpansionFailure(
                     "fund_collection_crossed_market_day",
                     "基金实时采集跨越上海午夜；结果已按次日落库，禁止回填到前一日",
@@ -2535,6 +2546,50 @@ class FundHoldingCollectionCoordinator:
                 provider_status="provider_error",
                 retryable=True,
             ) from exc
+
+    def _collect_historical_fund_snapshot(
+        self,
+        claimed: dict[str, Any],
+        *,
+        cancellation: Event | _CancellationView,
+    ) -> Mapping[str, Any]:
+        loader = self.fund_snapshot_loader
+        if loader is None:
+            from domain_packs.finance_ashare.skills.fund_snapshot.skill import (
+                FundSnapshotSkill,
+            )
+
+            loader = FundSnapshotSkill()
+        call = getattr(loader, "run_holdings_as_of", None)
+        if not callable(call):
+            raise _FundExpansionFailure(
+                "fund_historical_pit_unavailable",
+                "历史日没有已落库快照，且基金数据源不支持带公告证据的历史重建",
+                provider_status="pit_not_supported",
+                retryable=False,
+            )
+        call_kwargs: dict[str, Any] = {
+            "query": (
+                f"重建基金 {claimed['fund_code']} 在 "
+                f"{claimed['as_of_date'].isoformat()} 可见的前十大持仓"
+            ),
+            "fund_code": claimed["fund_code"],
+            "as_of_date": claimed["as_of_date"],
+            "investment_cycle": claimed["investment_cycle"],
+        }
+        try:
+            parameters = tuple(signature(call).parameters.values())
+        except (TypeError, ValueError):
+            parameters = ()
+        if any(
+            parameter.name == "cancellation" or parameter.kind == Parameter.VAR_KEYWORD
+            for parameter in parameters
+        ):
+            call_kwargs["cancellation"] = cancellation
+        payload = call(**call_kwargs)
+        if not isinstance(payload, Mapping):
+            raise TypeError("historical fund snapshot loader must return a mapping")
+        return payload
 
     def _collect_current_fund_snapshot(
         self,
@@ -2565,8 +2620,7 @@ class FundHoldingCollectionCoordinator:
         except (TypeError, ValueError):
             parameters = ()
         if any(
-            parameter.name == "cancellation"
-            or parameter.kind == Parameter.VAR_KEYWORD
+            parameter.name == "cancellation" or parameter.kind == Parameter.VAR_KEYWORD
             for parameter in parameters
         ):
             call_kwargs["cancellation"] = cancellation
@@ -2580,7 +2634,8 @@ class FundHoldingCollectionCoordinator:
         if not snapshot_id:
             return None
         with self.database.session() as session:
-            snapshot = MarketDataRepository(session).get_snapshot(snapshot_id)
+            repository = MarketDataRepository(session)
+            snapshot = repository.get_snapshot(snapshot_id)
             if snapshot is None:
                 return None
             if (
@@ -2593,7 +2648,30 @@ class FundHoldingCollectionCoordinator:
                 or snapshot.revoked_at is not None
             ):
                 return None
+            if not self._parent_snapshot_audit_valid(repository, snapshot):
+                return None
             return snapshot
+
+    @staticmethod
+    def _parent_snapshot_audit_valid(
+        repository: MarketDataRepository,
+        snapshot: Any,
+    ) -> bool:
+        """Revalidate persisted lineage/evidence before expanding child jobs."""
+
+        from research_system.market_data.fund_holdings_contracts import (
+            FundHoldingsSemanticError,
+            validate_persisted_fund_top_holdings,
+        )
+
+        try:
+            validate_persisted_fund_top_holdings(
+                snapshot,
+                evidence=repository.list_snapshot_evidence(snapshot.id),
+            )
+        except (FundHoldingsSemanticError, TypeError, ValueError):
+            return False
+        return True
 
     def _ensure_parent_bundle(self, claimed: dict[str, Any], snapshot):
         bundle_id = str(claimed["checkpoint"].get("parent_bundle_id") or "").strip()
@@ -2727,7 +2805,9 @@ class FundHoldingCollectionCoordinator:
                 else claimed["equity_dimensions"]
             )
             missing = tuple(
-                self._missing_equity_dimensions(
+                requested_dimensions
+                if claimed["mode"] == "force_all"
+                else self._missing_equity_dimensions(
                     symbol,
                     claimed["as_of_date"],
                     requested_dimensions,
@@ -2756,7 +2836,7 @@ class FundHoldingCollectionCoordinator:
                 start_date=claimed["as_of_date"],
                 end_date=claimed["as_of_date"],
                 dimensions=list(dimensions),
-                mode="missing_or_stale",
+                mode=claimed["mode"],
                 max_concurrency=claimed["max_concurrency"],
                 publish_when_complete=bool(claimed["publish_when_complete"]),
                 idempotency_key=idempotency_key,
@@ -2936,8 +3016,7 @@ class FundHoldingCollectionCoordinator:
                     )
                 )
                 live = bool(
-                    child.status == CollectionStatus.RUNNING.value
-                    and not reclaimable
+                    child.status == CollectionStatus.RUNNING.value and not reclaimable
                 )
                 if not live:
                     child.status = CollectionStatus.QUEUED.value
@@ -3934,9 +4013,7 @@ class FundHoldingCollectionCoordinator:
                     as_of_date=bundle_as_of,
                     contract_version=contract_version,
                 )
-            fund_publisher = BundlePublisher(
-                repository, registry=self.registry
-            )
+            fund_publisher = BundlePublisher(repository, registry=self.registry)
             equity_publisher = BundlePublisher(
                 repository, registry=self.equity_collection.registry
             )

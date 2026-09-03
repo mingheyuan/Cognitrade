@@ -4,59 +4,179 @@ import re
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
 HistoricalStrategy = Literal[
     "current_only",
     "dated_series",
     "published_archive",
+    "derived_from_pit",
 ]
 
 
 @dataclass(frozen=True)
 class HistoricalCapability:
-    """Historical reconstruction policy owned by one provider adapter.
+    """Point-in-time reconstruction policy for one data-centre dimension.
 
-    The native UZI root route is a live collector.  Only dimensions whose
-    returned records carry independently checkable dates are eligible for an
-    automatic reconstruction attempt.  Every other dimension is resolved as
-    an explicit, scoring-excluded disclosure instead of being backdated.
+    ``recoverable_fields`` and ``current_only_fields`` deliberately keep the
+    decision at field level.  The previous implementation reduced the whole
+    dimension to one boolean and consequently skipped providers before they
+    could return dated K-line, valuation, disclosure or holder data.
     """
 
     dimension: str
     snapshot_type: str
     strategy: HistoricalStrategy
     window_days: int = 0
+    recoverable_fields: tuple[str, ...] = ()
+    current_only_fields: tuple[str, ...] = ()
 
     @property
     def can_reconstruct(self) -> bool:
-        return self.strategy != "current_only"
+        return self.strategy != "current_only" or bool(self.recoverable_fields)
+
+
+@dataclass(frozen=True)
+class PointInTimeContext:
+    """Immutable collection cutoff propagated to skills and providers."""
+
+    as_of_date: date
+    cutoff_at: datetime
+    exchange_timezone: str
+
+    def __post_init__(self) -> None:
+        if self.cutoff_at.tzinfo is None or self.cutoff_at.utcoffset() is None:
+            raise ValueError("cutoff_at must be timezone-aware")
+
+    @property
+    def historical(self) -> bool:
+        return (
+            self.as_of_date
+            != datetime.now(timezone.utc).astimezone(self.cutoff_at.tzinfo).date()
+        )
 
 
 _CAPABILITIES: tuple[HistoricalCapability, ...] = (
-    HistoricalCapability("0_basic", "market", "current_only"),
-    HistoricalCapability("1_financials", "fundamental", "current_only"),
-    HistoricalCapability("2_kline", "kline", "current_only"),
-    HistoricalCapability("3_macro", "macro", "published_archive", 365),
-    HistoricalCapability("4_peers", "peers", "current_only"),
-    HistoricalCapability("5_chain", "chain", "current_only"),
-    HistoricalCapability("6_research", "research", "published_archive", 365),
-    HistoricalCapability("7_industry", "industry", "current_only"),
-    HistoricalCapability("8_materials", "materials", "current_only"),
-    HistoricalCapability("9_futures", "futures", "current_only"),
-    HistoricalCapability("10_valuation", "valuation", "current_only"),
-    HistoricalCapability("11_governance", "governance", "current_only"),
-    HistoricalCapability("12_capital_flow", "capital_flow", "dated_series", 365),
-    HistoricalCapability("13_policy", "policy", "published_archive", 365),
-    HistoricalCapability("14_moat", "moat", "current_only"),
-    HistoricalCapability("15_events", "events", "published_archive", 180),
-    HistoricalCapability("16_lhb", "lhb", "dated_series", 30),
-    HistoricalCapability("17_sentiment", "sentiment", "published_archive", 30),
-    HistoricalCapability("18_trap", "trap", "current_only"),
-    HistoricalCapability("19_contests", "contests", "current_only"),
-    HistoricalCapability("6_fund_holders", "fund_holders", "current_only"),
-    HistoricalCapability("similar_stocks", "similar_stocks", "current_only"),
+    HistoricalCapability(
+        "0_basic",
+        "market",
+        "derived_from_pit",
+        550,
+        ("name", "price", "industry", "market_cap", "pe_ttm", "pb"),
+    ),
+    HistoricalCapability(
+        "1_financials",
+        "fundamental",
+        "published_archive",
+        3650,
+        ("roe_history", "revenue_history", "net_profit_history", "financial_health"),
+    ),
+    HistoricalCapability(
+        "2_kline",
+        "kline",
+        "dated_series",
+        550,
+        ("ohlcv", "stage", "ma_align", "macd"),
+    ),
+    HistoricalCapability(
+        "3_macro", "macro", "published_archive", 365, ("observations",)
+    ),
+    HistoricalCapability("4_peers", "peers", "derived_from_pit", 550, ("peers",)),
+    HistoricalCapability(
+        "5_chain",
+        "chain",
+        "published_archive",
+        3650,
+        ("segments", "upstream", "downstream", "concentration"),
+    ),
+    HistoricalCapability(
+        "6_research", "research", "published_archive", 365, ("reports",)
+    ),
+    HistoricalCapability(
+        "7_industry",
+        "industry",
+        "derived_from_pit",
+        550,
+        ("classification", "valuation", "growth", "cycle"),
+    ),
+    HistoricalCapability(
+        "8_materials", "materials", "dated_series", 550, ("exposure", "prices")
+    ),
+    HistoricalCapability(
+        "9_futures", "futures", "dated_series", 180, ("contract_mapping", "prices")
+    ),
+    HistoricalCapability(
+        "10_valuation",
+        "valuation",
+        "dated_series",
+        5 * 366,
+        ("pe", "pb", "history", "percentiles"),
+    ),
+    HistoricalCapability(
+        "11_governance",
+        "governance",
+        "published_archive",
+        365,
+        ("controller", "pledges", "ownership_changes", "penalties"),
+    ),
+    HistoricalCapability(
+        "12_capital_flow",
+        "capital_flow",
+        "dated_series",
+        365,
+        (
+            "money_flow",
+            "northbound",
+            "margin",
+            "shareholder_counts",
+            "institutions",
+            "events",
+        ),
+    ),
+    HistoricalCapability(
+        "13_policy", "policy", "published_archive", 365, ("policies",)
+    ),
+    HistoricalCapability(
+        "14_moat",
+        "moat",
+        "derived_from_pit",
+        3650,
+        ("factors", "research_and_development"),
+    ),
+    HistoricalCapability("15_events", "events", "published_archive", 180, ("events",)),
+    HistoricalCapability("16_lhb", "lhb", "dated_series", 30, ("records",)),
+    HistoricalCapability(
+        "17_sentiment",
+        "sentiment",
+        "published_archive",
+        30,
+        ("items",),
+        ("heat", "rank", "live_mentions"),
+    ),
+    HistoricalCapability("18_trap", "trap", "derived_from_pit", 365, ("signals",)),
+    HistoricalCapability(
+        "19_contests",
+        "contests",
+        "current_only",
+        0,
+        (),
+        ("rankings", "portfolio_state", "authorization_status"),
+    ),
+    HistoricalCapability(
+        "6_fund_holders",
+        "fund_holders",
+        "published_archive",
+        5 * 366,
+        ("reporting_period", "funds", "top_holders", "nav_history"),
+    ),
+    HistoricalCapability(
+        "similar_stocks",
+        "similar_stocks",
+        "derived_from_pit",
+        550,
+        ("classification_version", "stocks"),
+    ),
 )
 
 HISTORICAL_CAPABILITIES = {item.dimension: item for item in _CAPABILITIES}
@@ -90,9 +210,7 @@ def capability_for_dimension(dimension: str) -> HistoricalCapability:
 
 
 def is_safe_degradation_manifest(manifest: Mapping[str, Any] | None) -> bool:
-    degradation = (
-        manifest.get("degradation") if isinstance(manifest, Mapping) else None
-    )
+    degradation = manifest.get("degradation") if isinstance(manifest, Mapping) else None
     return bool(
         isinstance(degradation, Mapping)
         and degradation.get("safe_for_report") is True
@@ -149,7 +267,9 @@ def reconstruct_historical_snapshot(
         "safe": True,
         "strategy": capability.strategy,
         "requested_as_of_date": as_of_date.isoformat(),
-        "window_start": (as_of_date - timedelta(days=capability.window_days)).isoformat(),
+        "window_start": (
+            as_of_date - timedelta(days=capability.window_days)
+        ).isoformat(),
         "window_end": as_of_date.isoformat(),
         "dated_record_count": dated_count,
         "earliest_record_date": earliest.isoformat() if earliest else None,
@@ -258,7 +378,9 @@ def _project_dimension(
             "events": rows,
             "disclosures_count": sum(_looks_like_notice(row) for row in rows),
             "news_count": sum(not _looks_like_notice(row) for row in rows),
-            "truncation": dict(raw.get("truncation") or {"historical_reconstruction": True}),
+            "truncation": dict(
+                raw.get("truncation") or {"historical_reconstruction": True}
+            ),
         }
     elif dimension == "16_lhb":
         rows = _bounded_items(
@@ -389,7 +511,11 @@ def _institutional_history_rows(value: Mapping[str, Any]) -> list[dict[str, Any]
 
 
 def _looks_like_notice(value: Any) -> bool:
-    text = str(value.get("type") or value.get("category") or "") if isinstance(value, Mapping) else str(value)
+    text = (
+        str(value.get("type") or value.get("category") or "")
+        if isinstance(value, Mapping)
+        else str(value)
+    )
     return "公告" in text or "notice" in text.lower()
 
 

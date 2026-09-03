@@ -5,7 +5,8 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from datetime import date, datetime, timedelta, timezone
-from threading import Event, RLock, Thread
+from threading import Event, Lock, RLock, Thread
+from time import monotonic
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -27,6 +28,7 @@ from research_system.market_data.contracts import (
     CollectionStatus,
     SnapshotStatus,
     canonical_hash,
+    cutoff_at_for_date,
 )
 from research_system.market_data.dimension_contracts import (
     DEFAULT_DIMENSION_REGISTRY,
@@ -60,8 +62,10 @@ SnapshotCollector = Callable[..., list[dict[str, Any]]]
 MIN_COLLECTION_CONCURRENCY = 1
 MAX_COLLECTION_CONCURRENCY = 5
 DEFAULT_COLLECTION_CONCURRENCY = 5
-COLLECTION_LEASE_DURATION = timedelta(minutes=30)
-COLLECTION_LEASE_HEARTBEAT_SECONDS = 60.0
+# Long provider calls keep ownership alive through a dedicated heartbeat. A
+# short lease bounds how long a crashed process can leave a task looking active.
+COLLECTION_LEASE_DURATION = timedelta(minutes=3)
+COLLECTION_LEASE_HEARTBEAT_SECONDS = 10.0
 UZI_BASIC_DEPENDENT_SNAPSHOT_TYPES = frozenset(
     {"macro", "industry", "futures", "policy"}
 )
@@ -1789,6 +1793,65 @@ class MarketDataCollectionCoordinator:
                     # Native UZI dimensions such as industry/futures consume
                     # dimension 0 as a dependency inside the same provider wave.
                     snapshot_types.insert(0, "market")
+                provider_progress_lock = Lock()
+                provider_progress_state: dict[str, Any] = {
+                    "completed": -1,
+                    "persisted_at": 0.0,
+                }
+                provider_total = len(provider_specs)
+                provider_as_of = as_of
+
+                def record_provider_progress(
+                    progress: Mapping[str, Any],
+                    *,
+                    _total: int = provider_total,
+                    _as_of: date = provider_as_of,
+                    _lock: Lock = provider_progress_lock,
+                    _state: dict[str, Any] = provider_progress_state,
+                ) -> None:
+                    completed = max(0, int(progress.get("completed") or 0))
+                    total = max(1, int(progress.get("total") or _total))
+                    phase = str(progress.get("phase") or "collecting")
+                    snapshot_type = str(progress.get("snapshot_type") or "") or None
+                    tick = monotonic()
+                    with _lock:
+                        previous_completed = int(_state.get("completed") or 0)
+                        previous_tick = float(_state.get("persisted_at") or 0.0)
+                        # Five symbol pipelines emit concurrently.  Persist a
+                        # useful heartbeat without turning every fetch event
+                        # into a database write.
+                        if (
+                            completed < total
+                            and completed <= previous_completed
+                            and tick - previous_tick < 1.0
+                        ):
+                            return
+                        if (
+                            completed < total
+                            and completed > previous_completed
+                            and completed - previous_completed < 2
+                            and tick - previous_tick < 0.75
+                        ):
+                            return
+                        _state.update({"completed": completed, "persisted_at": tick})
+                    self._record_provider_progress(
+                        job_id,
+                        worker_id=worker_id,
+                        as_of_date=_as_of,
+                        completed=completed,
+                        total=total,
+                        phase=phase,
+                        snapshot_type=snapshot_type,
+                    )
+
+                record_provider_progress(
+                    {
+                        "phase": "starting",
+                        "snapshot_type": snapshot_types[0] if snapshot_types else None,
+                        "completed": 0,
+                        "total": len(provider_specs),
+                    }
+                )
                 try:
                     snapshots = self.collector(
                         query=(
@@ -1812,6 +1875,34 @@ class MarketDataCollectionCoordinator:
                         uzi_root_route_mode="single",
                         no_resume=use_uzi_root_route,
                         cancellation=worker_cancellation,
+                        progress_callback=record_provider_progress,
+                        as_of_date=(
+                            as_of
+                            if any(
+                                as_of != self._local_today(spec["exchange_timezone"])
+                                for spec in provider_specs
+                            )
+                            else None
+                        ),
+                        cutoff_at=(
+                            cutoff_at_for_date(
+                                as_of,
+                                provider_specs[0]["exchange_timezone"],
+                            )
+                            if any(
+                                as_of != self._local_today(spec["exchange_timezone"])
+                                for spec in provider_specs
+                            )
+                            else None
+                        ),
+                    )
+                    record_provider_progress(
+                        {
+                            "phase": "persisting",
+                            "snapshot_type": None,
+                            "completed": len(provider_specs),
+                            "total": len(provider_specs),
+                        }
                     )
                 except Exception as exc:  # noqa: BLE001 - provider failure becomes task state
                     provider_errors[as_of] = exc
@@ -1835,10 +1926,19 @@ class MarketDataCollectionCoordinator:
                     if historical:
                         if dimension is None:
                             continue
-                        reconstructed = reconstruct_historical_snapshot(
-                            prepared,
-                            dimension=dimension,
-                            as_of_date=as_of,
+                        reconstruction = dict(
+                            prepared.get("historical_reconstruction") or {}
+                        )
+                        reconstructed = (
+                            prepared
+                            if reconstruction.get("safe") is True
+                            and reconstruction.get("requested_as_of_date")
+                            == as_of.isoformat()
+                            else reconstruct_historical_snapshot(
+                                prepared,
+                                dimension=dimension,
+                                as_of_date=as_of,
+                            )
                         )
                         if reconstructed is None:
                             continue
@@ -1933,9 +2033,34 @@ class MarketDataCollectionCoordinator:
                     if row.dimension == task.dimension
                 )
                 job = session.get(MarketDataCollectionJob, task.job_id)
+                capability = capability_for_dimension(task.dimension)
+                existing_snapshot = (
+                    session.get(MarketDataSnapshot, existing_item.snapshot_id)
+                    if existing_item.snapshot_id is not None
+                    else None
+                )
+                existing_outcome = str(
+                    (
+                        (existing_snapshot.query_manifest_json or {}).get(
+                            "collection_outcome"
+                        )
+                    )
+                    if existing_snapshot is not None
+                    else ""
+                ).strip()
+                historical_recovery_due = bool(
+                    historical
+                    and capability.can_reconstruct
+                    and existing_outcome
+                    in {"partial", "retryable_failure", "unavailable"}
+                )
                 if (
                     existing_item.snapshot_id is not None
-                    and (existing_item.eligible or existing_item.degraded)
+                    and not historical_recovery_due
+                    and (
+                        existing_item.eligible
+                        or (existing_item.degraded and not capability.can_reconstruct)
+                    )
                     and job is not None
                     and job.mode == "missing_or_stale"
                 ):
@@ -1954,6 +2079,11 @@ class MarketDataCollectionCoordinator:
                             metrics_json={
                                 "reason": "existing_safe_resolution",
                                 "degraded": existing_item.degraded,
+                                "collection_outcome": (
+                                    "unavailable"
+                                    if existing_item.degraded
+                                    else "available"
+                                ),
                             },
                             retryable=False,
                             started_at=started_at,
@@ -1962,7 +2092,6 @@ class MarketDataCollectionCoordinator:
                     results.append("skipped")
                     finished_dates.append(as_of.isoformat())
                     continue
-                capability = capability_for_dimension(task.dimension)
                 if historical and not capability.can_reconstruct:
                     ingest = self.adapter.disclosed_gap(
                         symbol=task.symbol,
@@ -1987,6 +2116,9 @@ class MarketDataCollectionCoordinator:
                             metrics_json={
                                 "excluded_from_scoring": True,
                                 "historical_strategy": capability.strategy,
+                                "collection_outcome": "unavailable",
+                                "reason_code": "historical_source_current_only",
+                                "message": "该数据源没有历史归档；当前值未被写入历史快照",
                             },
                             retryable=False,
                             started_at=started_at,
@@ -2022,6 +2154,15 @@ class MarketDataCollectionCoordinator:
                             error_code=provider_error.__class__.__name__,
                             error_message="采集器调用失败；详细上游文本未持久化以避免泄露敏感信息",
                             snapshot_id=persisted.id,
+                            metrics_json={
+                                "raw_data_present": False,
+                                "collection_outcome": "retryable_failure",
+                                "reason_code": "collector_provider_error",
+                                "message": (
+                                    f"采集器调用失败（{provider_error.__class__.__name__}）；"
+                                    "可在上游恢复后定向重试"
+                                ),
+                            },
                             retryable=True,
                             started_at=started_at,
                         )
@@ -2046,8 +2187,8 @@ class MarketDataCollectionCoordinator:
                             exchange_timezone=task.exchange_timezone,
                             dimension=task.dimension,
                             as_of_date=as_of,
-                            reason_code="historical_reconstruction_no_proof",
-                            message="历史来源已自动查询，但没有返回可验证的目标日记录；已从评分中排除",
+                            reason_code="collector_result_missing",
+                            message="历史采集器未返回该维度结果；可定向重试",
                             collection_task_id=task.id,
                             provider_attempt_id=f"{task.id}:{attempt}",
                             attempted_reconstruction=True,
@@ -2058,19 +2199,26 @@ class MarketDataCollectionCoordinator:
                                 task_id=task.id,
                                 as_of_date=as_of,
                                 attempt=attempt,
-                                status="degraded",
-                                provider_status="historical_unavailable",
+                                status="failed",
+                                provider_status="missing_result",
+                                error_code="collector_result_missing",
+                                error_message="历史采集器未返回该维度结果；可定向重试",
                                 snapshot_id=persisted.id,
                                 metrics_json={
-                                    "excluded_from_scoring": True,
+                                    "excluded_from_scoring": False,
                                     "attempted_reconstruction": True,
+                                    "collection_outcome": "retryable_failure",
+                                    "reason_code": "collector_result_missing",
                                 },
-                                retryable=False,
+                                retryable=True,
                                 started_at=started_at,
                             )
                         )
-                        results.append("degraded")
+                        results.append("failed")
                         finished_dates.append(as_of.isoformat())
+                        retryable = True
+                        last_error_code = "collector_result_missing"
+                        last_error_message = "历史采集器未返回该维度结果；可定向重试"
                         continue
                     session.add(
                         MarketDataCollectionTaskResult(
@@ -2125,12 +2273,26 @@ class MarketDataCollectionCoordinator:
                             SnapshotStatus.AVAILABLE.value,
                             SnapshotStatus.VERIFIED_EMPTY.value,
                         }
-                        result_status = "succeeded" if complete else "data_gap"
+                        query_manifest = dict(persisted.query_manifest_json or {})
+                        outcome = str(
+                            query_manifest.get("collection_outcome") or ""
+                        ).strip()
+                        if not outcome:
+                            outcome = "available" if complete else "unavailable"
+                        result_status = (
+                            "succeeded"
+                            if outcome in {"available", "verified_empty"}
+                            else "partial"
+                            if outcome == "partial"
+                            else "failed"
+                            if outcome == "retryable_failure"
+                            else "degraded"
+                            if outcome == "unavailable"
+                            else "data_gap"
+                        )
                         safe_degradation = is_safe_degradation_manifest(
                             persisted.query_manifest_json
                         )
-                        if safe_degradation:
-                            result_status = "degraded"
                         semantic_errors = list(
                             (persisted.validation_json or {}).get("errors") or []
                         )
@@ -2140,17 +2302,34 @@ class MarketDataCollectionCoordinator:
                         native_quality = str(native.get("quality_status") or "")
                         raw_payload = ingest.payload.get("raw")
                         raw_data_present = bool(raw_payload)
+                        outcome_disclosure = (
+                            query_manifest.get("partial_disclosure")
+                            or query_manifest.get("verified_empty_disclosure")
+                            or query_manifest.get("provider_failure")
+                            or query_manifest.get("degradation")
+                            or {}
+                        )
+                        outcome_reason = outcome_disclosure.get("reason_code")
+                        outcome_message = outcome_disclosure.get("message")
+                        if not outcome_message and result_status != "succeeded":
+                            outcome_message = "; ".join(
+                                semantic_errors or audit_errors
+                            )[:4000]
                         can_retry = (
-                            not complete
-                            and not safe_degradation
-                            and native_quality
-                            in {
-                                "provider_unavailable",
-                                "rate_limited",
-                                "parse_failed",
-                                "degraded",
-                                "data_gap",
-                            }
+                            outcome == "retryable_failure"
+                            or outcome_disclosure.get("retryable") is True
+                            or (
+                                not complete
+                                and not safe_degradation
+                                and native_quality
+                                in {
+                                    "provider_unavailable",
+                                    "rate_limited",
+                                    "parse_failed",
+                                    "degraded",
+                                    "data_gap",
+                                }
+                            )
                         )
                         session.add(
                             MarketDataCollectionTaskResult(
@@ -2158,7 +2337,13 @@ class MarketDataCollectionCoordinator:
                                 as_of_date=as_of,
                                 attempt=attempt,
                                 status=result_status,
-                                provider_status=native_quality or persisted.status,
+                                provider_status={
+                                    "available": "available",
+                                    "partial": "partial",
+                                    "verified_empty": "verified_empty",
+                                    "retryable_failure": "provider_unavailable",
+                                    "unavailable": "historical_unavailable",
+                                }.get(outcome, native_quality or persisted.status),
                                 snapshot_id=persisted.id,
                                 metrics_json={
                                     "content_hash": persisted.content_hash,
@@ -2174,16 +2359,29 @@ class MarketDataCollectionCoordinator:
                                     "audit_errors": audit_errors[:50],
                                     "degraded": safe_degradation,
                                     "excluded_from_scoring": safe_degradation,
+                                    "collection_outcome": outcome,
+                                    "reason_code": outcome_reason,
+                                    "message": outcome_message,
+                                    "field_coverage": query_manifest.get(
+                                        "field_coverage"
+                                    )
+                                    or {},
+                                    "source_trace": query_manifest.get("source_trace")
+                                    or [],
                                 },
                                 error_code=(
                                     None
-                                    if complete or safe_degradation
-                                    else "provider_data_gap"
+                                    if result_status == "succeeded"
+                                    else "historical_partial"
+                                    if result_status == "partial"
+                                    else "historical_unavailable"
+                                    if safe_degradation
+                                    else outcome_reason or "provider_data_gap"
                                 ),
                                 error_message=(
                                     None
-                                    if complete or safe_degradation
-                                    else "; ".join(semantic_errors)[:4000]
+                                    if result_status == "succeeded"
+                                    else outcome_message
                                 ),
                                 retryable=can_retry,
                                 started_at=started_at,
@@ -2215,15 +2413,24 @@ class MarketDataCollectionCoordinator:
                 results.append(result_status)
                 finished_dates.append(as_of.isoformat())
                 retryable = retryable or can_retry
-                if not complete and not safe_degradation:
-                    last_error_code = "provider_data_gap"
-                    last_error_message = "; ".join(semantic_errors)[:4000]
+                if result_status != "succeeded":
+                    last_error_code = (
+                        "historical_partial"
+                        if result_status == "partial"
+                        else "historical_unavailable"
+                        if safe_degradation
+                        else outcome_reason or "provider_data_gap"
+                    )
+                    last_error_message = outcome_message
             task.retryable = retryable
             if results and all(
-                result in {"succeeded", "skipped", "degraded"} for result in results
+                result in {"succeeded", "skipped"} for result in results
             ):
                 task.status = CollectionStatus.SUCCEEDED.value
-            elif any(result in {"succeeded", "skipped"} for result in results):
+            elif any(
+                result in {"succeeded", "skipped", "partial", "degraded"}
+                for result in results
+            ):
                 task.status = CollectionStatus.PARTIAL.value
             else:
                 task.status = CollectionStatus.FAILED.value
@@ -2273,7 +2480,14 @@ class MarketDataCollectionCoordinator:
                 for item in coverage.dimensions
                 if item.dimension == spec["dimension"]
             )
-            return not (existing.eligible or existing.degraded)
+            if existing.eligible:
+                return False
+            if (
+                existing.degraded
+                and not capability_for_dimension(spec["dimension"]).can_reconstruct
+            ):
+                return False
+            return True
 
     def _finish_job(
         self,
@@ -2598,6 +2812,48 @@ class MarketDataCollectionCoordinator:
             True,
         )
 
+    def _record_provider_progress(
+        self,
+        job_id: str,
+        *,
+        worker_id: str,
+        as_of_date: date,
+        completed: int,
+        total: int,
+        phase: str,
+        snapshot_type: str | None,
+    ) -> None:
+        """Expose acquisition progress before task results are persisted.
+
+        A 22-dimension provider wave used to leave every durable task in
+        ``running`` and the UI at 0/N until the whole wave returned.  This
+        checkpoint is diagnostic only; terminal task counts remain the source
+        of truth for settlement and publication.
+        """
+
+        now = datetime.now(timezone.utc)
+        provider = {
+            "as_of_date": as_of_date.isoformat(),
+            "phase": str(phase or "collecting"),
+            "snapshot_type": str(snapshot_type or "") or None,
+            "completed": max(0, int(completed)),
+            "total": max(0, int(total)),
+            "updated_at": iso(now),
+        }
+        with self.database.session() as session:
+            if not self._fence_collection_worker(session, job_id, worker_id):
+                return
+            job = session.get(MarketDataCollectionJob, job_id)
+            if job is None:
+                return
+            progress = dict(job.progress_json or {})
+            progress["provider"] = provider
+            job.progress_json = progress
+            checkpoint = dict(job.checkpoint_json or {})
+            checkpoint["provider_progress"] = provider
+            job.checkpoint_json = checkpoint
+            job.updated_at = now
+
     @staticmethod
     def _set_job_progress(
         job: MarketDataCollectionJob,
@@ -2609,11 +2865,15 @@ class MarketDataCollectionCoordinator:
         finished = [
             task.id for task in tasks if task.status in TERMINAL_COLLECTION_STATUSES
         ]
-        job.progress_json = {
+        progress = {
             "completed": len(finished),
             "total": len(tasks),
             "by_status": dict(counts),
         }
+        provider_progress = dict(job.progress_json or {}).get("provider")
+        if isinstance(provider_progress, Mapping):
+            progress["provider"] = dict(provider_progress)
+        job.progress_json = progress
         checkpoint = dict(job.checkpoint_json or {})
         checkpoint["finished_task_ids"] = finished
         job.checkpoint_json = checkpoint
@@ -3108,6 +3368,24 @@ class MarketDataCollectionCoordinator:
                 ),
             }
 
+        def task_result_metadata(
+            task: MarketDataCollectionTask,
+        ) -> dict[str, Any]:
+            result = latest_result_by_task.get(task.id)
+            metrics = dict(result.metrics_json or {}) if result is not None else {}
+            return {
+                "collection_outcome": metrics.get("collection_outcome"),
+                "reason_code": metrics.get("reason_code"),
+                "result_message": metrics.get("message"),
+                "field_coverage": dict(metrics.get("field_coverage") or {}),
+                "source_trace": [
+                    dict(row)
+                    for row in list(metrics.get("source_trace") or [])
+                    if isinstance(row, Mapping)
+                ],
+                "provider_status": result.provider_status if result else None,
+            }
+
         checkpoint = dict(job.checkpoint_json or {})
         return {
             "id": job.id,
@@ -3161,6 +3439,7 @@ class MarketDataCollectionCoordinator:
                     "error_code": task.last_error_code,
                     "error_message": task.last_error_message,
                     **task_failure(task),
+                    **task_result_metadata(task),
                     "resolution_status": (
                         "audit_only"
                         if task.last_error_code == "strict_contract_gap"

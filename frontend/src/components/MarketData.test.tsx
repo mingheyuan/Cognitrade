@@ -283,6 +283,23 @@ describe('MarketDataCenter', () => {
     expect(requests.every((request) => request.url.includes('/api/v2/finance/market-data/'))).toBe(true)
   })
 
+  it('keeps the toolbar submit label horizontal while preserving visible form labels', async () => {
+    window.history.replaceState({}, '', '/market-data?symbol=020464&asset_family=fund&as_of_date=2026-08-20&cutoff=eod&tab=coverage')
+    installFundApi()
+    renderPage()
+
+    await screen.findByText('测试权益基金')
+    expect(screen.getByLabelText('代码或基金查询')).toBeVisible()
+    expect(screen.getByLabelText('资产类型')).toBeVisible()
+    expect(screen.getByLabelText('可见日期')).toBeVisible()
+    expect(screen.getByLabelText('截止时点')).toBeVisible()
+
+    const submit = screen.getByRole('button', { name: '解析并读取' })
+    const label = within(submit).getByText('解析并读取')
+    expect(submit).toHaveClass('mdc-toolbar-submit')
+    expect(label).toHaveClass('mdc-toolbar-submit-label')
+  })
+
   it('restores URL state and exposes verified-empty evidence without treating it as a timeout', async () => {
     window.history.replaceState({}, '', '/market-data?symbol=600519.SH&as_of_date=2026-08-20&cutoff=eod&tab=evidence&dimension=d2')
     installApi()

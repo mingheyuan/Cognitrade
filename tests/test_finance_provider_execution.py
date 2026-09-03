@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import date
 from pathlib import Path
 from threading import Event
 from time import monotonic
@@ -500,6 +501,79 @@ class FinanceProviderExecutionTests(unittest.TestCase):
         self.assertEqual(calls, ["industry"])
         self.assertEqual(timeout.call_count, 2)
         self.assertEqual(len(rows), 3)
+
+    def test_historical_skill_installs_request_and_total_timeout_guard(self) -> None:
+        class _HistoricalMarketSkill:
+            def run(self, *, query, symbol, as_of_date, cutoff_at=None):
+                return {
+                    "snapshot_type": "market",
+                    "symbol": symbol,
+                    "query": query,
+                    "facts": {"availability": "available"},
+                    "quality_status": "available",
+                    "retrieved_at": "2026-09-02T00:00:00+00:00",
+                    "snapshot_date": as_of_date.isoformat(),
+                }
+
+        class _Guard:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        with (
+            patch.dict(
+                snapshot_collector._SYMBOL_SKILLS,
+                {"market": _HistoricalMarketSkill},
+            ),
+            patch.object(
+                snapshot_collector,
+                "uzi_request_timeout_scope",
+                return_value=_Guard(),
+            ) as guard,
+        ):
+            result = snapshot_collector._run_snapshot_skill(
+                "历史采集",
+                "600519.SH",
+                "market",
+                as_of_date=date(2026, 9, 1),
+            )
+
+        self.assertEqual(result["snapshot_date"], "2026-09-01")
+        guard.assert_called_once_with(
+            total_timeout_seconds=snapshot_collector._uzi_per_fetcher_timeout_seconds(
+                "market"
+            )
+        )
+
+    def test_historical_financial_projection_matches_uzi_numeric_contract(self) -> None:
+        projected = snapshot_collector._point_in_time_financial_projection(
+            {
+                "financial_abstract_history": [
+                    {
+                        "报告期": "2024-12-31",
+                        "营业总收入": "6.10亿",
+                        "归母净利润": "2991.87万",
+                        "净资产收益率": "7.48%",
+                    },
+                    {
+                        "报告期": "2025-12-31",
+                        "营业总收入": "123.85亿",
+                        "归母净利润": "21.11亿",
+                        "净资产收益率": False,
+                    },
+                ]
+            }
+        )
+
+        self.assertEqual(projected["financial_years"], ["2024-12-31", "2025-12-31"])
+        self.assertEqual(projected["revenue_history"], [6.1, 123.85])
+        self.assertEqual(projected["net_profit_history"], [0.299187, 21.11])
+        self.assertEqual(projected["roe_history"], [7.48, 0.0])
+        self.assertTrue(
+            all(isinstance(value, float) for value in projected["revenue_history"])
+        )
 
 
 if __name__ == "__main__":

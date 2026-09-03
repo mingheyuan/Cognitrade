@@ -9,8 +9,10 @@ import akshare as ak
 class CninfoNoticeAdapter:
     vendor_name = "cninfo"
 
-    def get_notice_snapshot(self, *, symbol: str) -> dict[str, Any]:
-        end_date = date.today()
+    def get_notice_snapshot(
+        self, *, symbol: str, as_of_date: date | None = None
+    ) -> dict[str, Any]:
+        end_date = as_of_date or date.today()
         begin_date = end_date - timedelta(days=30)
         notice_df = ak.stock_zh_a_disclosure_report_cninfo(
             symbol=symbol,
@@ -25,7 +27,9 @@ class CninfoNoticeAdapter:
             "symbol": symbol,
             "window_start": begin_date.isoformat(),
             "window_end": end_date.isoformat(),
-            "latest_notice": {str(k): self._normalize_value(v) for k, v in latest.items()},
+            "latest_notice": {
+                str(k): self._normalize_value(v) for k, v in latest.items()
+            },
             "recent_notices": [
                 {str(k): self._normalize_value(v) for k, v in row.items()}
                 for row in notice_df.head(5).to_dict(orient="records")

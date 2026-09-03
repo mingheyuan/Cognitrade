@@ -6,6 +6,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from research_system.market_data.historical import is_safe_degradation_manifest
+
 
 _UZI_UNAVAILABLE_QUALITIES = frozenset(
     {
@@ -40,18 +42,33 @@ def _native_integrity_module():
 def native_quality(snapshot: Any) -> str:
     query_manifest = dict(getattr(snapshot, "query_manifest_json", None) or {})
     validation = dict(getattr(snapshot, "validation_json", None) or {})
-    quality = str(
-        query_manifest.get("native_quality_status")
-        or validation.get("native_quality_status")
-        or validation.get("requested_status")
-        or getattr(snapshot, "status", "")
-        or ""
-    ).strip().lower()
+    quality = (
+        str(
+            query_manifest.get("native_quality_status")
+            or validation.get("native_quality_status")
+            or validation.get("requested_status")
+            or getattr(snapshot, "status", "")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     return quality or "data_gap"
 
 
 def native_payload(snapshot: Any) -> dict[str, Any]:
     payload = dict(getattr(snapshot, "payload_json", None) or {})
+    query_manifest = dict(getattr(snapshot, "query_manifest_json", None) or {})
+    outcome = str(query_manifest.get("collection_outcome") or "").strip().lower()
+    if outcome == "verified_empty":
+        observation = query_manifest.get("native_empty_observation")
+        return (
+            dict(observation)
+            if isinstance(observation, Mapping)
+            else {"observation_status": "verified_empty"}
+        )
+    if outcome in {"retryable_failure", "unavailable"}:
+        return {}
     # ``raw`` is the persisted computation payload and may contain missing-only
     # recovery fields. The envelope below is retained for native metadata and
     # exact self-review error placement.
@@ -93,6 +110,12 @@ def _native_result(snapshot: Any) -> dict[str, Any]:
     result.setdefault(
         "source", str(getattr(snapshot, "source_version", None) or "database")
     )
+    query_manifest = dict(getattr(snapshot, "query_manifest_json", None) or {})
+    if query_manifest.get("collection_outcome") == "retryable_failure":
+        failure = query_manifest.get("provider_failure")
+        message = failure.get("message") if isinstance(failure, Mapping) else None
+        if not result.get("error"):
+            result["error"] = str(message or "historical provider failure")
     result.setdefault("fallback", quality in _UZI_UNAVAILABLE_QUALITIES)
     return result
 
@@ -127,9 +150,7 @@ def evaluate_uzi_collection_gate(
 
     profile_module = importlib.import_module("lib.analysis_profile")
     enabled = set(profile_module.get_profile(selected_profile).fetchers_enabled)
-    enabled_numbered = {
-        dimension for dimension in enabled if dimension[:1].isdigit()
-    }
+    enabled_numbered = {dimension for dimension in enabled if dimension[:1].isdigit()}
     enabled_numbers = {
         int(dimension.split("_", 1)[0]) for dimension in enabled_numbered
     }
@@ -164,12 +185,21 @@ def evaluate_uzi_collection_gate(
             continue
         native_result = raw["dimensions"].get(dimension) or {}
         has_error = bool(native_result.get("_timeout") or native_result.get("error"))
+        safe_historical_gap = is_safe_degradation_manifest(
+            getattr(snapshot, "query_manifest_json", None)
+        )
         issues.append(
             {
-                "severity": "warning" if has_error else "critical",
+                "severity": (
+                    "warning" if has_error or safe_historical_gap else "critical"
+                ),
                 "check": "empty_dims",
                 "dimension": dimension,
-                "message": "维度数据为空" + ("（上游失败）" if has_error else ""),
+                "message": (
+                    "维度历史数据不可恢复，已从评分排除"
+                    if safe_historical_gap
+                    else "维度数据为空" + ("（上游失败）" if has_error else "")
+                ),
             }
         )
 
@@ -179,18 +209,24 @@ def evaluate_uzi_collection_gate(
     # below (empty dimensions and profile-aware coverage).
     selected_market = str(market or "").strip().upper()
     if not selected_market:
-        selected_market = str(
-            next(
-                (
-                    getattr(snapshot, "market", "")
-                    for snapshot in snapshots.values()
-                    if snapshot is not None
-                ),
-                "",
+        selected_market = (
+            str(
+                next(
+                    (
+                        getattr(snapshot, "market", "")
+                        for snapshot in snapshots.values()
+                        if snapshot is not None
+                    ),
+                    "",
+                )
             )
-        ).strip().upper()
+            .strip()
+            .upper()
+        )
     if selected_market in {"H", "HK", "HK_EQUITY"}:
-        kline = native_payload(snapshots.get("2_kline")) if snapshots.get("2_kline") else {}
+        kline = (
+            native_payload(snapshots.get("2_kline")) if snapshots.get("2_kline") else {}
+        )
         kline_count = kline.get("kline_count", 0)
         stage = kline.get("stage", "—")
         if kline_count == 0:
@@ -235,14 +271,12 @@ def evaluate_uzi_collection_gate(
                 }
             )
 
-    checks = [
-        row
-        for row in list(module.CRITICAL_CHECKS)
-        if row[0] in enabled
-    ]
+    checks = [row for row in list(module.CRITICAL_CHECKS) if row[0] in enabled]
     passed = 0
     for dimension, path, _label, _critical in checks:
-        value = module._get((raw["dimensions"].get(dimension) or {}).get("data") or {}, path)
+        value = module._get(
+            (raw["dimensions"].get(dimension) or {}).get("data") or {}, path
+        )
         if not module._is_missing(value):
             passed += 1
     coverage_pct = round(passed / len(checks) * 100, 0) if checks else 0

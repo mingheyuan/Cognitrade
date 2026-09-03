@@ -32,11 +32,12 @@
 
 落地边界与原方案的保守差异：
 
-- 原生 UZI 当前快照 adapter 没有统一历史 `as_of` 参数，因此历史 Job 改为逐维度
-  判断来源能力。带独立日期记录的来源自动查询并裁剪到 cutoff；通过严格契约时落为
-  B 级历史重建，无法取得目标日证明或仅提供当前状态时落为
-  `safe_for_report + excluded_from_scoring` 的终态披露。系统不再因一个瞬时来源对
-  整个历史日期做全局硬阻断，也绝不拿当前值回填历史。
+- UZI 当前态 root router 没有统一历史 `as_of` 参数，因此历史 Job 走独立的字段级 PIT
+  路由，把 `as_of_date/cutoff_at` 贯穿到支持它的 Skill 与 provider。带独立日期记录的
+  来源在请求侧限定到 cutoff；结果区分完整、部分可用、查证为空、可重试来源失败和真正
+  无历史档案。只有最后一种写为 `safe_for_report + excluded_from_scoring`；部分可用继续
+  进入 UZI 原生评分并披露可选缺口。系统不再因一个瞬时来源对整个历史日期做全局硬阻断，
+  也绝不拿当前值回填历史。
 - 采集任务在数据库中仍是“标的 × 维度”逻辑 Task；当前 UZI adapter 物理上可合并为
   一次 full-batch wave，然后再按维度验收和落库。这是 provider 调度优化，不改变
   逐维重试和完整度语义。
@@ -46,8 +47,10 @@
   “配置就绪”解释为“实时数据可用”。
 - `POST .../report-manifests` 只冻结并持久化输入，不直接启动报告 run；
   报告仍从 Agent OS、持仓报告或日报编排入口发起。
-- 基金外部持仓采集只在上海时区当日的显式 Job 中执行；历史日
-  只使用已落库且通过 PIT 验证的快照/Bundle，不 live 回填。
+- 基金历史日优先使用已落库且通过 PIT 验证的快照/Bundle；缺失时只允许历史持仓
+  专用适配器按 cutoff 重建。它以官方定期报告的发布日期、PDF 内容哈希和逐项持仓
+  核对证明可见性，保留真实 observed_at，不调用当前净值/排名或拿最新页面回填。
+  当前覆盖直接持股权益基金与单目标 ETF 联接基金，不承诺普通多目标 FOF 的历史穿透。
 - 真实 provider 条件下的历史 22/22 覆盖率与 Lite/Medium/Deep 新基线 P50/P95
   需随 PIT-aware adapter 和实际数据继续验收；本方案中的性能值是验收目标，
   不是已宣称的 SLA。
@@ -111,7 +114,8 @@ similar_stocks
   发布动作不再访问外部数据源。
 - 基金父任务只有一个 `fund_top_holdings` 槽。当日用户显式 Job，或由双
   opt-in 订阅授权的 Job，可以采集它；
-  历史日只查询已落库、符合 PIT 的快照/Bundle，缺失时不 live 回填。
+  历史日优先复用已落库、符合 PIT 的快照/Bundle，缺失时按官方报告重建 B 级父快照；
+  不能证明截止日前可见时保持契约缺口，不使用当前页面回填。
 - 父快照落库后写入 checkpoint；子股采集失败时复用父快照和父 Bundle，
   仅为尚缺失的股票槽创建 child Job。
 
@@ -527,8 +531,8 @@ POST   /api/v2/finance/market-data/report-manifests
 - 报告执行日志中外部采集调用数为 0。
 - 十大持仓 child 获得冻结快照而不是仅获得 symbol；父 Bundle/快照
   ID/hash 被持久化为 manifest dependency 并进入最终 hash。
-- 基金历史日缺快照/Bundle 时硬失败，不 live 回填；当日父快照成功后的
-  失败恢复复用父输入，只补缺失持仓股槽。
+- 基金历史日缺快照/Bundle 时仅允许官方报告证据重建；无法匹配发布日期、PDF 或
+  持仓内容时失败，不 live 回填。父快照成功后的失败恢复复用父输入，只补缺失持仓股槽。
 - 同一 manifest 重试只重跑失败节点；force full rerun 可用。
 
 ### 14.3 性能与并发

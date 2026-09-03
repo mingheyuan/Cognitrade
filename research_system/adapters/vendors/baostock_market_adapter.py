@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from importlib import import_module
 from typing import Any
 
@@ -63,7 +63,13 @@ class BaoStockMarketAdapter:
             "bar_count": len(bars),
         }
 
-    def get_market_overview(self, *, symbol: str, latest_bar: dict[str, Any] | None = None) -> dict[str, Any]:
+    def get_market_overview(
+        self,
+        *,
+        symbol: str,
+        latest_bar: dict[str, Any] | None = None,
+        as_of_date: date | None = None,
+    ) -> dict[str, Any]:
         bar = dict(latest_bar or {})
         close = coerce_numeric(bar.get("close"))
         previous = coerce_numeric(bar.get("preclose"))
@@ -84,7 +90,13 @@ class BaoStockMarketAdapter:
 
     @staticmethod
     def _code(symbol: str) -> str:
-        raw = str(symbol).lower().replace("sh", "").replace("sz", "").replace(".", "")[-6:]
+        raw = (
+            str(symbol)
+            .lower()
+            .replace("sh", "")
+            .replace("sz", "")
+            .replace(".", "")[-6:]
+        )
         exchange = "sh" if raw.startswith(("5", "6", "9")) else "sz"
         return f"{exchange}.{raw}"
 

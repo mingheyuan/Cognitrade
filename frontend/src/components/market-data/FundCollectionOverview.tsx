@@ -5,7 +5,7 @@ import {
   RotateCcw,
 } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { isActiveCollectionJob, jobStatusMeta } from './status'
+import { collectionOutcomeMeta, isActiveCollectionJob, jobStatusMeta } from './status'
 import { StatusBadge } from './shared'
 import type { CollectionDiagnosticBucket, CollectionJob, CollectionTask, FundPortfolioSummary } from './types'
 
@@ -301,14 +301,18 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
                           <div className="mdc-holding-task-grid">{tasks.map((task) => {
                             const status = jobStatusMeta(task.status)
                             const failure = taskFailurePresentation(task)
+                            const outcome = collectionOutcomeMeta(
+                              task.collection_outcome,
+                              task.result_message,
+                            )
                             const taskRetryable = Boolean(
                               task.retryable
                               && ['failed', 'partial'].includes(task.status)
                               && task.attempt < (task.max_attempts ?? Number.POSITIVE_INFINITY)
                             )
                             return <article key={`${holding.symbol}-${task.dimension_id}`}>
-                              <div><code>{task.dimension_id}</code><StatusBadge label={task.resolution_status === 'degraded' ? '降级披露' : failure?.label || status.label} tone={task.resolution_status === 'degraded' ? 'warning' : failure?.tone || status.tone} /></div>
-                              <p>{task.resolution_status === 'degraded' ? '历史不可恢复，已排除评分' : failure?.summary || task.error_message || (task.snapshot_id ? `快照 ${task.snapshot_id}` : '等待采集结果')}</p>
+                              <div><code>{task.dimension_id}</code><StatusBadge label={outcome?.label || failure?.label || status.label} tone={outcome?.tone || failure?.tone || status.tone} /></div>
+                              <p>{outcome?.summary || failure?.summary || task.error_message || (task.snapshot_id ? `快照 ${task.snapshot_id}` : '等待采集结果')}</p>
                               {failure && task.error_message ? <small className="mdc-holding-task-diagnostic" title={task.error_message}>{task.error_message}</small> : null}
                               <footer>
                                 <small>Attempt {task.attempt}{task.max_attempts ? ` / ${task.max_attempts}` : ''}{taskRetryable ? ' · 可重试' : ''}</small>
@@ -336,7 +340,13 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
             <article key={child.job_id}>
               <StatusBadge label={status.label} tone={status.tone} />
               <div><strong>{child.symbols.length} 只股票 · {dimensionCount(child)} 个维度</strong><code>{child.job_id}</code></div>
-              <div><span>成功 {child.progress.completed}</span><span>失败 {child.progress.failed}</span><small>{settled}/{child.progress.total} 已结算</small></div>
+              <div>
+                <span>成功 {child.progress.completed}</span><span>失败 {child.progress.failed}</span>
+                <small>{settled}/{child.progress.total} 已结算</small>
+                {child.progress.provider && settled < child.progress.total ? (
+                  <small>上游 {child.progress.provider.completed}/{child.progress.provider.total} · {child.progress.provider.phase}</small>
+                ) : null}
+              </div>
             </article>
           )
         }) : job.child_collection_job_ids.map((jobId) => <code className="mdc-child-job-code" key={jobId}>{jobId}</code>)}

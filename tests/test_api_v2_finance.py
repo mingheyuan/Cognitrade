@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
@@ -280,6 +280,16 @@ class ApiV2FinanceTests(unittest.TestCase):
                 {"symbol": "600519", "as_of_date": None},
                 {"symbol": "600519", "as_of_date": None},
             ],
+        )
+
+        historical = self.market.get_market_data(
+            "600519",
+            as_of_date=date(2026, 7, 14),
+        )
+        self.assertEqual(historical["symbol"], "600519")
+        self.assertEqual(
+            center.calls[-1],
+            {"symbol": "600519", "as_of_date": date(2026, 7, 14)},
         )
 
     def test_explicit_live_quote_still_uses_the_execution_collector(self) -> None:

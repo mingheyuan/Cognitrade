@@ -101,8 +101,11 @@ def direct_skill_output(
         "id": f"eastmoney.fund_archives:020464:{DISCLOSURE}",
     }
     if immutable_history:
+        report_url = "https://pdf.dfcfw.com/pdf/H2_AN202607201827154067_1.pdf"
         source_ref.update(
             {
+                "id": report_url,
+                "content_ref": report_url,
                 "published_at": "2026-07-20T08:00:00Z",
                 "immutable_proof": True,
                 "content_hash": "a" * 64,
@@ -397,7 +400,76 @@ class FundTopHoldingsContractTests(unittest.TestCase):
             snapshot.payload["cutoff_at"],
             "2026-08-01T15:59:59.999999Z",
         )
+        source_ref = snapshot.query_manifest["native_source_refs"][0]
+        self.assertEqual(snapshot.evidence[0].content_hash, source_ref["content_hash"])
+        self.assertEqual(snapshot.evidence[0].content_ref, source_ref["content_ref"])
+        self.assertEqual(snapshot.evidence[0].source_url, source_ref["content_ref"])
         validate_fund_top_holdings_ingest(snapshot)
+
+    def test_historical_evidence_rejects_non_official_or_malformed_proof(self) -> None:
+        output = direct_skill_output(immutable_history=True)
+        output["source_refs"][0]["content_ref"] = "https://example.test/report.pdf"
+        output["source_refs"][0]["id"] = "https://example.test/report.pdf"
+
+        non_official = FundTopHoldingsSnapshotAdapter().adapt(
+            output,
+            fund_code="020464",
+            as_of_date=date(2026, 8, 1),
+            observed_at=OBSERVED,
+        )
+
+        self.assertEqual(non_official.status, SnapshotStatus.DATA_GAP)
+        self.assertIn(
+            "historical_pit_reconstruction_not_proven",
+            non_official.validation["semantic_errors"],
+        )
+
+        malformed = direct_skill_output(immutable_history=True)
+        malformed["source_refs"][0]["content_hash"] = "not-a-sha256"
+        malformed_snapshot = FundTopHoldingsSnapshotAdapter().adapt(
+            malformed,
+            fund_code="020464",
+            as_of_date=date(2026, 8, 1),
+            observed_at=OBSERVED,
+        )
+        self.assertEqual(malformed_snapshot.status, SnapshotStatus.DATA_GAP)
+
+    def test_persisted_historical_validator_detects_pdf_and_payload_binding_tamper(self) -> None:
+        ingest = FundTopHoldingsSnapshotAdapter().adapt(
+            direct_skill_output(immutable_history=True),
+            fund_code="020464",
+            as_of_date=date(2026, 8, 1),
+            observed_at=OBSERVED,
+        )
+        persisted = SimpleNamespace(
+            symbol=ingest.symbol,
+            market=ingest.market,
+            exchange_timezone=ingest.exchange_timezone,
+            dimension=ingest.dimension,
+            contract_version=ingest.contract_version,
+            as_of_date=ingest.as_of_date,
+            status=ingest.status.value,
+            published_at=ingest.published_at,
+            effective_at=ingest.effective_at,
+            payload_json=ingest.payload,
+            query_manifest_json=ingest.query_manifest,
+        )
+
+        tampered_hash = ingest.evidence[0].model_copy(update={"content_hash": "b" * 64})
+        with self.assertRaisesRegex(FundHoldingsSemanticError, "lacks eligible"):
+            validate_persisted_fund_top_holdings(persisted, evidence=[tampered_hash])
+
+        missing_source_url = ingest.evidence[0].model_copy(update={"source_url": None})
+        with self.assertRaisesRegex(FundHoldingsSemanticError, "lacks eligible"):
+            validate_persisted_fund_top_holdings(
+                persisted,
+                evidence=[missing_source_url],
+            )
+
+        tampered_binding = ingest.evidence[0].model_copy(deep=True)
+        tampered_binding.metadata["normalized_holdings_binding_hash"] = "c" * 64
+        with self.assertRaisesRegex(FundHoldingsSemanticError, "lacks eligible"):
+            validate_persisted_fund_top_holdings(persisted, evidence=[tampered_binding])
 
     def test_semantic_validator_rejects_weight_and_parent_identity_tampering(self) -> None:
         snapshot = FundTopHoldingsSnapshotAdapter().adapt(

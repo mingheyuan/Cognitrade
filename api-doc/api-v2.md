@@ -320,13 +320,21 @@ Agent evidence 和完整性复检顺序追加新 Snapshot，并重新计算候�
 运行中 Job 与 Agent stage 会续租并用 owner token 防止过期 worker 覆盖新 worker；
 服务重启只接管已过期租约。内部调度或父子任务重放同一 idempotency key 时，只有
 规范化请求完全一致才会复用原 Job，否则返回 `409 collection_idempotency_conflict`。
-原生 UZI provider 对无 `as_of` 的历史日期不会拿当前值回填，而是记录
-`pit_not_supported` / `data_gap`；该缺口需带不可变证据的人工 B 级快照，或新的
-PIT-aware adapter。
-基金持仓 provider 更严格：只有上海时区当日的采集 Job（用户显式创建，
-或由双 opt-in 订阅授权调度）才会访问外部来源；
-历史日只查询已落库且通过 PIT 契约的快照/Bundle，缺失时返回
-Job 错误 `fund_historical_pit_unavailable`，不 live 采集、不用最新披露回填。
+股票历史采集把 `as_of_date/cutoff_at` 传入支持 PIT 的 Skill 与 provider adapter，
+并逐字段返回 `collection_outcome`：`available`、`partial`、`verified_empty`、
+`retryable_failure` 或 `unavailable`。其中 `partial` 表示 UZI payload 可用但可选字段或
+扩展审计有缺口，不自动排除评分；`verified_empty` 表示有界查询成功且确实为零条；
+`retryable_failure` 才进入定向重试；`unavailable` 只用于已确认没有历史档案的
+current-only 数据。仍不支持历史参数的 provider 不会拿当前值回填，而是记录明确能力缺口。
+基金持仓 provider 更严格：历史日先查询已落库且通过 PIT 契约的快照/Bundle；缺失时
+只调用历史持仓专用适配器，不调用当前净值、排名或最新页面。适配器按 cutoff 选择
+官方定期报告，下载并保存 PDF SHA-256，并逐项核对归档持仓的报告期、代码、名称和
+权重。受支持的直接持股权益基金需一条持仓 lineage；单目标 ETF 联接基金需父基金
+目标配置与目标 ETF 持仓两条 lineage，全部 `published_at <= cutoff` 才形成 B 级
+历史快照，且保留真实
+`observed_at`。临时 provider/PDF 故障标记为可重试；数据源不支持历史重建时仍返回
+`fund_historical_pit_unavailable`，无匹配公告或内容不一致则以不可重试契约缺口披露。
+普通多目标 FOF 的历史穿透当前不在该适配器覆盖范围内。
 
 ### 人工证据、冲突与撤销
 
@@ -687,6 +695,31 @@ carry 天数、MA 执行规则、三类资产费率/确认规则、模型与 UZI
 调用量。任务持久化 lease、attempt 和进度，可通过 `/retry` 只重试失败股票，或在
 `full_rerun=true, confirmed=true` 时创建新 revision；`/pause` 与 `/resume` 不删除旧 attempt。
 
+重试的数据绑定语义是刻意区分的：节点级/失败股票重试复用原 attempt 的不可变 report
+manifest，保证同一输入可重放；已补采并发布新版 Bundle 后，只有确认过的 `full_rerun`
+会重新解析目标日可用的最新 Bundle revision，并为新 attempt 冻结新的 report manifest。
+因此补采后的验证请求必须使用完整重跑；系统不会悄悄替换普通重试的历史输入。
+
+持仓批次外层等待预算按研究档位为 Lite 60 分钟、Medium 120 分钟、Deep 180 分钟；多日
+历史补跑每个交易日仍至少使用独立的 6 小时预算。该预算不同于单个模型请求的超时，避免
+Deep 十大持仓仍在正常生成时被旧的固定 30 分钟截止时间整批取消。
+
+历史 report manifest 中若六类定性维度存在结构化 PIT 快照、但没有目标日可审计网页 URL，
+`qualitative_execution.status` 会保留为 `evidence_preflight_failed`，自检同时生成
+`agent-os-boundary` warning，说明“目标日没有足够 PIT-safe URL，六维定性研究已降级披露”。
+这只豁免完全由 `*:requires_two_cited_sources` 构成的历史证据预检失败；UZI 编号维度、
+66 席角色评审、核心评分门禁以及其他 Agent/来源错误仍按 critical 处理。当前日报告也不
+应用该豁免，以免把真实抓取或模型故障误报成可交付结果。
+
+角色评审使用 root transport 的 `full/market/code` 校正 UZI 上游 suffix-only 市场推断，
+Agent 的逐席覆盖成功后会重新计算 `panel.consensus_valid`、`hollow_verdicts`、`hollow_pct`
+和 `hollow_ids`。同一 critical 的重复恢复以 `category + dim + issue` 判重；变化的 evidence
+只进入 `recovery_history[].critical_issues` 供诊断，不会被误认为新问题而无限重跑。
+角色票在 headline、reasoning、comment、verdict 的合并解释中校验证据；明确
+`skip/insufficient_evidence` 的弃权说明是合法结果，非弃权票仍必须包含数字、观测事实或
+明确数据缺口。`G+H+I` 与 `G+H+I · 量化、科技领袖与AI瓶颈` 视为同一展示标签，成员集合
+仍严格校验，不能增删评委。
+
 每个 `DailyReportSet` 固定 `as_of_date`、`effective_date`、revision、input/source/content
 hash、coverage 和 Artifact 引用。基金公开信息必须在回测日期当时可获得；没有可信
 `published_at/first_seen_at` 的历史证据输出 `BLOCKED`，不会借用当前数据。当前严格
@@ -735,6 +768,12 @@ NAV 确认日账本；`holdings_portfolio` 以基金信号作为总门禁，以�
 规则形成 A 股目标权重。每笔成交必须包含 strategy/version hash、report set、signal ID、
 资产适配器、费用模型和数据 snapshot hash。结果曲线进入内容寻址对象存储，数据库保存
 指标、状态、hash 与 URI。失败/取消任务可 `/retry`，排队或运行任务可 `/cancel`。
+
+持仓与场内基金回测把请求的 `as_of_date` 原样传给数据中心，只读取该回放日已发布的
+Bundle，不再隐式读取服务器“今天”的 Bundle。K 线兼容 Bundle 原生 `ohlcv` 与旧版
+`bars/history` 投影；目标交易日缺少 Bundle 或没有该日可审计 bar 时仍按门禁失败。报告
+信号从 `effective_date` 起才能参与回放，因此收盘报告不能用于同日交易，late revision
+也不会回写到其生效日前的历史区间。
 
 `GET /strategy-backtests` 支持 `strategy_id`、`strategy_version_id`、`fund_code`、`mode`、
 `status` 和 `limit=1..200`。前端只查询当前策略，再按当前基金与模式展示；相同输入的重复

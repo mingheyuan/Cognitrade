@@ -53,6 +53,11 @@ class ReportOrchestrationService:
     """Persistent daily-report coordinator; threads execute work but never own state."""
 
     _DAILY_REPORT_BATCH_TIMEOUT_SECONDS = 30 * 60
+    _PROFILE_BATCH_TIMEOUT_SECONDS = {
+        "lite": 60 * 60,
+        "medium": 2 * 60 * 60,
+        "deep": 3 * 60 * 60,
+    }
 
     def __init__(
         self,
@@ -234,6 +239,7 @@ class ReportOrchestrationService:
                 "source_run_id": source_run_id,
                 "manual": manual,
                 "top_n": document.report_inputs.top_n,
+                "research_profile": document.report_inputs.research_profile,
                 "pin_set_hash": self._pin_hash(document),
             }
             job = OrchestrationJob(
@@ -308,6 +314,8 @@ class ReportOrchestrationService:
                 raise StrategyConflict("job_not_paused", "任务当前不是暂停状态")
             job.pause_requested = False
             job.status = JobStatus.QUEUED.value
+            job.error_summary = None
+            job.completed_at = None
             attempt = self._new_attempt(session, job, selected_nodes=[])
             payload = self._job_payload(session, job)
         self._submit(job.id, attempt.id)
@@ -347,6 +355,8 @@ class ReportOrchestrationService:
             job.pause_requested = False
             job.cancel_requested = False
             job.status = JobStatus.QUEUED.value
+            job.error_summary = None
+            job.completed_at = None
             attempt = self._new_attempt(session, job, selected_nodes=selected)
             payload = self._job_payload(session, job)
         self._submit(job.id, attempt.id)
@@ -465,11 +475,35 @@ class ReportOrchestrationService:
             report_ids = list(progress.get("report_set_ids") or [])
             batches = dict(progress.get("batches") or {})
             report_outcomes = dict(progress.get("report_outcomes") or {})
-            errors = list(progress.get("errors") or [])
+            attempted_dates = {value.isoformat() for value in dates}
+            # Errors belong to a date attempt, not to the lifetime of the job.
+            # A successful retry/resume must not keep an old timeout visible or
+            # use it as the new attempt's error_summary.
+            errors = [
+                dict(row)
+                for row in list(progress.get("errors") or [])
+                if isinstance(row, dict)
+                and str(row.get("as_of_date") or "") not in attempted_dates
+            ]
             failed_symbols: set[str] = set(progress.get("failed_symbols") or [])
             retry_symbols = set(str(value) for value in request.get("retry_symbols") or [])
             if request.get("full_rerun"):
                 failed_symbols.clear()
+            with self.database.session() as session:
+                job = session.get(OrchestrationJob, job_id)
+                if job is None:
+                    return
+                current_progress = dict(job.progress_json or {})
+                current_progress.update(
+                    {
+                        "total": len(dates),
+                        "completed": 0,
+                        "failed": 0,
+                        "errors": errors,
+                        "failed_symbols": sorted(failed_symbols),
+                    }
+                )
+                job.progress_json = current_progress
             for as_of in dates:
                 control = self._heartbeat(job_id)
                 if control != JobStatus.RUNNING.value:
@@ -811,7 +845,16 @@ class ReportOrchestrationService:
             "frozen_report_manifest",
             None,
         )
-        if previous_batch_id and callable(load_frozen_manifest):
+        # A node-level retry must stay bound to the original immutable
+        # manifest.  A confirmed full rerun has different semantics: resolve
+        # and freeze the newest eligible Bundles, otherwise repaired market
+        # data can never enter the replacement report and the rerun merely
+        # repeats the old failure forever.
+        if (
+            previous_batch_id
+            and not request.get("full_rerun")
+            and callable(load_frozen_manifest)
+        ):
             report_manifest = load_frozen_manifest(
                 previous_batch_id,
                 **self._runtime_scope(scope),
@@ -878,7 +921,10 @@ class ReportOrchestrationService:
             scope,
             job_id=job_id,
             canonical_keys=set(owned_canonical.values()),
-            timeout_seconds=self._batch_timeout_seconds(request),
+            timeout_seconds=self._batch_timeout_seconds(
+                request,
+                profile=document.report_inputs.research_profile,
+            ),
         )
         self._publish_canonical_results(
             scope,
@@ -1708,11 +1754,26 @@ class ReportOrchestrationService:
             f"holding report batch timed out and cancellation was requested: {batch_id}"
         )
 
-    def _batch_timeout_seconds(self, request: dict[str, Any]) -> int:
+    def _batch_timeout_seconds(
+        self,
+        request: dict[str, Any],
+        *,
+        profile: str | None = None,
+    ) -> int:
+        normalized_profile = str(
+            profile or request.get("research_profile") or ""
+        ).strip().lower()
+        profile_timeout = self._PROFILE_BATCH_TIMEOUT_SECONDS.get(
+            normalized_profile,
+            self._DAILY_REPORT_BATCH_TIMEOUT_SECONDS,
+        )
         dates = list(request.get("dates") or [])
         if len(dates) > 1:
-            return self.historical_backfill_batch_timeout_seconds
-        return self._DAILY_REPORT_BATCH_TIMEOUT_SECONDS
+            return max(
+                self.historical_backfill_batch_timeout_seconds,
+                profile_timeout,
+            )
+        return profile_timeout
 
     def _run_artifacts(
         self,

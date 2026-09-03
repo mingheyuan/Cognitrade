@@ -411,7 +411,12 @@ class AgentBuyZonePayload(BaseModel):
     zone: AgentBuyZone
 
 
-def _profile_native_panel(panel: dict[str, Any], profile: str) -> dict[str, Any]:
+def _profile_native_panel(
+    panel: dict[str, Any],
+    profile: str,
+    *,
+    grounded_override_ids: set[str] | None = None,
+) -> dict[str, Any]:
     """Validate the complete panel emitted by fixed UZI 3.9.4.
 
     ``generate_panel`` iterates all 66 registered investors for every profile;
@@ -473,7 +478,11 @@ def _profile_native_panel(panel: dict[str, Any], profile: str) -> dict[str, Any]
     def polarize(value: float) -> float:
         return max(0.0, min(100.0, 50.0 + (value - 50.0) * polarize_k))
 
-    active = [row for row in consensus_investors if row.get("signal") != "skip"]
+    active = [
+        row
+        for row in consensus_investors
+        if row.get("signal") not in {"skip", "insufficient_evidence"}
+    ]
     bullish = signal_distribution["bullish"]
     neutral = signal_distribution["neutral"]
     bearish = signal_distribution["bearish"]
@@ -507,7 +516,11 @@ def _profile_native_panel(panel: dict[str, Any], profile: str) -> dict[str, Any]
         grouped.setdefault(str(investor.get("group") or "?"), []).append(investor)
     for group in sorted(grouped):
         members = grouped[group]
-        active_members = [row for row in members if row.get("signal") != "skip"]
+        active_members = [
+            row
+            for row in members
+            if row.get("signal") not in {"skip", "insufficient_evidence"}
+        ]
         counts = Counter(str(row.get("signal") or "skip") for row in members)
         if active_members:
             group_score_mean = sum(
@@ -550,10 +563,44 @@ def _profile_native_panel(panel: dict[str, Any], profile: str) -> dict[str, Any]
             "dominant_signal": dominant_signal,
         }
 
+    grounded_ids = {str(value) for value in (grounded_override_ids or set())}
+    active_long = [
+        row
+        for row in investors
+        if row.get("mandate") != "short"
+        and row.get("signal") not in {"skip", "insufficient_evidence"}
+    ]
+    hollow_ids = [
+        str(row.get("investor_id") or "")
+        for row in active_long
+        if (row.get("score") or 0) == 0
+        and not row.get("pass")
+        and not row.get("fail")
+        and not (
+            str(row.get("investor_id") or "") in grounded_ids
+            and len(str(row.get("headline") or "").strip()) >= 8
+            and len(str(row.get("reasoning") or "").strip()) >= 20
+        )
+    ]
+    hollow_pct = round(len(hollow_ids) / len(active_long) * 100, 0) if active_long else 0
+    consensus_valid = hollow_pct < 20
+
     recomputed = dict(panel)
     recomputed.update({
         "ticker": panel.get("ticker"),
         "panel_consensus": round(consensus, 1),
+        "consensus_valid": consensus_valid,
+        "hollow_verdicts": len(hollow_ids),
+        "hollow_pct": hollow_pct,
+        "hollow_ids": hollow_ids,
+        "consensus_warning": (
+            None
+            if consensus_valid
+            else (
+                f"共识分不可采信：{len(hollow_ids)}/{len(active_long)} 位多头评委"
+                f"（{hollow_pct:.0f}%）没有任何有效规则或 Agent 证据。"
+            )
+        ),
         "vote_distribution": vote_distribution,
         "signal_distribution": signal_distribution,
         "investors": investors,
@@ -598,6 +645,7 @@ def _panel_with_roleplay_overrides(
         for row in list(result.get("investors") or [])
         if isinstance(row, dict)
     }
+    applied_ids: set[str] = set()
     for investor_id, override in dict(overrides or {}).items():
         row = by_id.get(str(investor_id))
         if row is None or not isinstance(override, dict):
@@ -607,7 +655,45 @@ def _panel_with_roleplay_overrides(
                 row[field] = override[field]
         if not row.get("comment") and row.get("headline"):
             row["comment"] = row["headline"]
-    return _profile_native_panel(result, profile)
+        applied_ids.add(str(investor_id))
+    return _profile_native_panel(
+        result,
+        profile,
+        grounded_override_ids=applied_ids,
+    )
+
+
+def _align_feature_identity(
+    features: dict[str, Any],
+    raw: dict[str, Any],
+) -> dict[str, Any]:
+    """Prefer the parsed UZI root identity over suffix-only feature inference.
+
+    ``stock_features.extract_features`` infers the market from ``raw.ticker``.
+    Pipeline root transport can legitimately keep ``ticker=688041`` beside
+    ``full=688041.SH`` and ``market=A``; suffix-only inference would therefore
+    label the A-share as US and make every A-share-only persona skip it.
+    """
+
+    aligned = dict(features)
+    market = str(raw.get("market") or "").strip().upper()
+    normalized_market = {
+        "A": "A",
+        "CN_EQUITY": "A",
+        "H": "HK",
+        "HK": "HK",
+        "U": "US",
+        "US": "US",
+    }.get(market)
+    if normalized_market:
+        aligned["market"] = normalized_market
+    full = str(raw.get("full") or "").strip()
+    if full:
+        aligned["ticker"] = full
+    code = str(raw.get("code") or "").strip()
+    if code:
+        aligned["code"] = code
+    return aligned
 
 
 def execute_native_analysis(
@@ -851,6 +937,7 @@ def _execute_symbol(
 ) -> dict[str, Any]:
     _initialize_native_imports()
     symbol_snapshot_rows = _snapshot_rows_for_symbol(snapshot_rows, symbol)
+    historical_pit = _historical_pit_snapshot_rows(symbol_snapshot_rows)
     raw = build_uzi_raw(symbol_snapshot_rows, symbol)
     data_integrity = importlib.import_module("lib.data_integrity")
     enabled_dimension_keys = set(_workflow_dimension_keys(
@@ -867,9 +954,12 @@ def _execute_symbol(
 
     computation_error: str | None = None
     try:
-        features = importlib.import_module("lib.stock_features").extract_features(
+        features = _align_feature_identity(
+            importlib.import_module("lib.stock_features").extract_features(
+                raw,
+                raw.get("dimensions", {}),
+            ),
             raw,
-            raw.get("dimensions", {}),
         )
         deep_methods = importlib.import_module("compute_deep_methods")
         dim20 = deep_methods.compute_dim_20(features, raw)
@@ -919,7 +1009,7 @@ def _execute_symbol(
     review: dict[str, Any] = {}
     review_feedback: list[dict[str, Any]] = []
     seen_critical_signatures: set[
-        tuple[tuple[str, str, str, str, str], ...]
+        tuple[tuple[str, str, str], ...]
     ] = set()
     reusable_agent_analysis: dict[str, Any] | None = None
     reusable_roleplay: dict[str, Any] | None = None
@@ -1090,7 +1180,15 @@ def _execute_symbol(
             # ``generate_synthesis`` mutates investor rows with role-play
             # overrides but leaves upstream's top-level consensus/schools at
             # their skeleton values.  Persist one internally consistent panel.
-            panel = _profile_native_panel(panel, profile)
+            panel = (
+                _panel_with_roleplay_overrides(
+                    panel,
+                    panel_overrides,
+                    profile=profile,
+                )
+                if panel_overrides
+                else _profile_native_panel(panel, profile)
+            )
             synthesis["data_gaps"] = _data_gap_document(
                 recovery_tasks,
                 agent_analysis,
@@ -1112,6 +1210,7 @@ def _execute_symbol(
             qualitative_execution=qualitative_execution,
             computation_error=computation_error,
             full_agent_workflow=full_agent_workflow,
+            historical_pit=historical_pit,
         )
         _notify_progress(
             progress_callback,
@@ -1125,6 +1224,13 @@ def _execute_symbol(
             row for row in list(review.get("issues") or [])
             if isinstance(row, dict) and row.get("severity") == "critical"
         ]
+        critical_diagnostics = [
+            {
+                key: str(row.get(key) or "")
+                for key in ("category", "dim", "issue", "evidence", "suggested_fix")
+            }
+            for row in critical_rows
+        ]
         recovery_history.append({
             "stage": "agent_recompute_self_review",
             "symbol": symbol,
@@ -1132,6 +1238,7 @@ def _execute_symbol(
             "critical_count": len(critical_rows),
             "status": "passed" if not critical_rows else "quality_gate_blocked",
             "suggested_fixes": [str(row.get("suggested_fix") or "") for row in critical_rows],
+            "critical_issues": critical_diagnostics,
             "reused_agent_analysis": reused_agent_analysis,
         })
         if not critical_rows:
@@ -1141,8 +1248,6 @@ def _execute_symbol(
                 str(row.get("category") or ""),
                 str(row.get("dim") or ""),
                 str(row.get("issue") or ""),
-                str(row.get("evidence") or ""),
-                str(row.get("suggested_fix") or ""),
             )
             for row in critical_rows
         ))
@@ -1197,7 +1302,16 @@ def _execute_symbol(
         "report_allowed": review["critical_count"] == 0,
         "quality_status": (
             "degraded"
-            if review["critical_count"] == 0 and _scoring_excluded_dimensions(raw)
+            if review["critical_count"] == 0
+            and (
+                _scoring_excluded_dimensions(raw)
+                or (
+                    historical_pit
+                    and _historical_qualitative_evidence_unavailable(
+                        qualitative_execution
+                    )
+                )
+            )
             else "available"
             if review["critical_count"] == 0
             else "quality_gate_blocked"
@@ -2665,6 +2779,7 @@ def _profile_empty_dimension_issues(
 ) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     dimensions = dict(raw.get("dimensions") or {})
+    excluded_dimensions = _scoring_excluded_dimensions(raw)
     enabled_numbers = {
         int(key.split("_", 1)[0])
         for key in enabled_dimension_keys
@@ -2684,20 +2799,52 @@ def _profile_empty_dimension_issues(
             continue
         is_timeout = bool(dimension.get("_timeout"))
         error = str(dimension.get("error") or "")
+        excluded = key in excluded_dimensions
         issues.append(
             {
-                "severity": "warning" if is_timeout or error else "critical",
+                "severity": "warning" if is_timeout or error or excluded else "critical",
                 "category": "data",
                 "dim": key,
                 "issue": (
                     f"维度 {key} data 为空"
                     + (" (timeout)" if is_timeout else (" (crash)" if error else ""))
+                    + ("（历史不可恢复，已排除评分）" if excluded else "")
                 ),
                 "evidence": f"_timeout={is_timeout}, error={error[:60]}",
-                "suggested_fix": "Agent OS 按当前档位恢复该真实数据源后重新自审",
+                "suggested_fix": (
+                    "该缺口已终态披露；如取得历史证据，可重新采集并替换"
+                    if excluded
+                    else "Agent OS 按当前档位恢复该真实数据源后重新自审"
+                ),
             }
         )
     return issues
+
+
+def _historical_pit_snapshot_rows(rows: list[dict[str, Any]]) -> bool:
+    return any(
+        str((row.get("query_manifest") or {}).get("pit_mode") or "")
+        == "historical_reconstruction"
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("query_manifest"), dict)
+    )
+
+
+def _historical_qualitative_evidence_unavailable(
+    execution: dict[str, Any],
+) -> bool:
+    """Recognize a proven PIT evidence absence, not an Agent/transport failure."""
+
+    if str(execution.get("status") or "") != "evidence_preflight_failed":
+        return False
+    errors = [
+        str(error).strip()
+        for error in list(execution.get("errors") or [])
+        if str(error).strip()
+    ]
+    return bool(errors) and all(
+        error.endswith(":requires_two_cited_sources") for error in errors
+    )
 
 
 def _self_review_compatible_raw(raw: dict[str, Any]) -> dict[str, Any]:
@@ -2757,6 +2904,7 @@ def run_native_self_review(
     qualitative_execution: dict[str, Any],
     computation_error: str | None,
     full_agent_workflow: bool = False,
+    historical_pit: bool = False,
 ) -> dict[str, Any]:
     """Run exact UZI checks plus non-bypassable Agent OS boundary checks."""
 
@@ -2880,12 +3028,27 @@ def run_native_self_review(
         qualitative_execution.get("status") != "completed"
         or qualitative_execution.get("agent_reviewed") is not True
     ):
-        add_critical(
-            "qualitative_deep_dive",
-            "六维定性研究未满足 UZI 证据门",
-            str(qualitative_execution),
-            "补充每维至少两个真实 URL 并完成三组分析后重算",
-        )
+        if (
+            historical_pit
+            and _historical_qualitative_evidence_unavailable(
+                qualitative_execution
+            )
+        ):
+            issues.append({
+                "severity": "warning",
+                "category": "agent-os-boundary",
+                "dim": "qualitative_deep_dive",
+                "issue": "目标日没有足够 PIT-safe URL，六维定性研究已降级披露",
+                "evidence": str(qualitative_execution),
+                "suggested_fix": "后续取得目标日可见的归档来源后重新采集；不得用当前网页回填",
+            })
+        else:
+            add_critical(
+                "qualitative_deep_dive",
+                "六维定性研究未满足 UZI 证据门",
+                str(qualitative_execution),
+                "补充每维至少两个真实 URL 并完成三组分析后重算",
+            )
     # Match UZI: Lite/CLI may export with warnings, while medium/deep retain
     # the critical integrity floor required by the interactive Agent workflow.
     coverage, _missing_critical = _profile_integrity_coverage(

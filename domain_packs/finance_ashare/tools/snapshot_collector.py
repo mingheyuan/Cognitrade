@@ -164,9 +164,7 @@ _UNAVAILABLE_QUALITY_STATUSES = {
     "rate_limited",
     "parse_failed",
 }
-_UZI_MINI_RACER_FETCHERS = frozenset(
-    {"7_industry", "10_valuation", "12_capital_flow"}
-)
+_UZI_MINI_RACER_FETCHERS = frozenset({"7_industry", "10_valuation", "12_capital_flow"})
 _UZI_MINI_RACER_LOCK = Lock()
 _UZI_MINI_RACER_TIMEOUT_ACTIVE = Event()
 _UZI_MAX_WORKERS = 6
@@ -342,6 +340,8 @@ def collect_snapshots(
     uzi_root_route: bool = False,
     uzi_root_route_mode: str = "single",
     no_resume: bool = False,
+    as_of_date: date | None = None,
+    cutoff_at: datetime | None = None,
 ) -> list[dict[str, Any]]:
     requested = tuple(
         dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip())
@@ -356,7 +356,10 @@ def collect_snapshots(
     has_uzi = any(_uses_uzi_fetcher(snapshot_type) for snapshot_type in requested)
     if has_uzi:
         with _uzi_profile_environment(research_profile, provider_registry):
-            if uzi_root_route and routed_types:
+            # The pinned UZI root router is a current-state workflow.  Historical
+            # jobs must enter the source-bounded PIT path below; running the root
+            # route and trimming its output afterwards can leak today's values.
+            if uzi_root_route and routed_types and as_of_date is None:
                 return _collect_snapshots_with_uzi_root_router(
                     query=query,
                     symbols=resolved_symbols,
@@ -374,45 +377,97 @@ def collect_snapshots(
             # Preserve the established on-demand path: each explicit symbol
             # receives an independent native wave budget.
             if not sector and len(resolved_symbols) > 1:
-                collected: list[dict[str, Any]] = []
                 per_symbol_total = sum(
                     snapshot_type in _SYMBOL_SKILLS for snapshot_type in requested
                 )
                 aggregate_total = per_symbol_total * len(resolved_symbols)
-                for symbol_index, symbol in enumerate(resolved_symbols):
-                    if _cancelled(cancellation):
-                        break
+                requested_symbol_workers = (
+                    _UZI_DEFAULT_SYMBOL_WORKERS
+                    if max_workers is None
+                    else max(1, int(max_workers))
+                )
+                symbol_workers = min(
+                    requested_symbol_workers,
+                    _UZI_MAX_SYMBOL_WORKERS,
+                    len(resolved_symbols),
+                )
+                progress_lock = Lock()
+                completed_by_symbol: dict[int, int] = {}
+                collected_by_symbol: dict[int, list[dict[str, Any]]] = {}
 
-                    def emit_symbol_progress(
-                        progress: dict[str, Any],
-                        *,
-                        offset: int = symbol_index * per_symbol_total,
-                    ) -> None:
-                        if callable(progress_callback):
+                def collect_symbol(
+                    symbol_index: int,
+                    symbol: str,
+                ) -> list[dict[str, Any]]:
+                    def emit_symbol_progress(progress: dict[str, Any]) -> None:
+                        if not callable(progress_callback):
+                            return
+                        with progress_lock:
+                            completed_by_symbol[symbol_index] = max(
+                                completed_by_symbol.get(symbol_index, 0),
+                                int(progress.get("completed") or 0),
+                            )
                             progress_callback(
                                 {
                                     **progress,
-                                    "completed": offset
-                                    + int(progress.get("completed") or 0),
+                                    "completed": sum(completed_by_symbol.values()),
                                     "total": aggregate_total,
                                 }
                             )
 
-                    collected.extend(
-                        _collect_snapshots(
-                            query=query,
-                            symbols=[symbol],
-                            snapshot_types=requested,
-                            sector=None,
-                            cancellation=cancellation,
-                            cache_root=cache_root,
-                            research_profile=research_profile,
-                            max_workers=max_workers,
-                            provider_registry=provider_registry,
-                            progress_callback=emit_symbol_progress,
-                        )
+                    return _collect_snapshots(
+                        query=query,
+                        symbols=[symbol],
+                        snapshot_types=requested,
+                        sector=None,
+                        cancellation=cancellation,
+                        cache_root=cache_root,
+                        research_profile=research_profile,
+                        # ``max_workers`` controls concurrent stock
+                        # pipelines.  UZI's inside-one-stock acquisition
+                        # budget remains six, matching the current root
+                        # workflow and avoiding the former accidental
+                        # serialisation of fund holdings.
+                        max_workers=_UZI_MAX_WORKERS,
+                        provider_registry=provider_registry,
+                        progress_callback=emit_symbol_progress,
+                        as_of_date=as_of_date,
+                        cutoff_at=cutoff_at,
                     )
-                return collected
+
+                executor = ThreadPoolExecutor(
+                    max_workers=symbol_workers,
+                    thread_name_prefix="uzi-pit-symbol",
+                )
+                futures = {
+                    executor.submit(collect_symbol, symbol_index, symbol): symbol_index
+                    for symbol_index, symbol in enumerate(resolved_symbols)
+                }
+                try:
+                    for future in as_completed(futures):
+                        symbol_index = futures[future]
+                        if _cancelled(cancellation):
+                            for pending in futures:
+                                pending.cancel()
+                            break
+                        collected_by_symbol[symbol_index] = future.result()
+                finally:
+                    # Historical PIT fetchers are governed by explicit
+                    # per-dimension deadlines below.  A timed-out third-party
+                    # HTTPS handshake cannot be killed by Python, so waiting
+                    # here would turn the five-minute wave ceiling into an
+                    # unbounded job.  Keep the native/current path's lifetime
+                    # semantics unchanged while allowing historical jobs to
+                    # settle their timeout snapshots immediately.
+                    executor.shutdown(
+                        wait=as_of_date is None,
+                        cancel_futures=True,
+                    )
+                return [
+                    row
+                    for symbol_index in range(len(resolved_symbols))
+                    for row in collected_by_symbol.get(symbol_index, [])
+                ]
             return _collect_snapshots(
                 query=query,
                 symbols=resolved_symbols,
@@ -424,6 +479,8 @@ def collect_snapshots(
                 max_workers=max_workers,
                 provider_registry=provider_registry,
                 progress_callback=progress_callback,
+                as_of_date=as_of_date,
+                cutoff_at=cutoff_at,
             )
     return _collect_snapshots(
         query=query,
@@ -436,6 +493,8 @@ def collect_snapshots(
         max_workers=max_workers,
         provider_registry=provider_registry,
         progress_callback=progress_callback,
+        as_of_date=as_of_date,
+        cutoff_at=cutoff_at,
     )
 
 
@@ -521,9 +580,7 @@ def _collect_snapshots_with_uzi_root_router(
     total = len(resolved_symbols) * len(symbol_types)
     completed = 0
     requested_symbol_workers = (
-        _UZI_DEFAULT_SYMBOL_WORKERS
-        if max_workers is None
-        else max(int(max_workers), 1)
+        _UZI_DEFAULT_SYMBOL_WORKERS if max_workers is None else max(int(max_workers), 1)
     )
     symbol_workers = min(
         requested_symbol_workers,
@@ -559,7 +616,7 @@ def _collect_snapshots_with_uzi_root_router(
         "cognitrade_xueqiu_policy": {
             "enabled": xueqiu_enabled,
             "cookie": settings.xueqiu_cookie if xueqiu_enabled else None,
-        }
+        },
     }
 
     def emit(*, phase: str, snapshot_type: str) -> None:
@@ -611,7 +668,8 @@ def _collect_snapshots_with_uzi_root_router(
                         query=query,
                         symbol=symbol,
                         snapshot_type=snapshot_type,
-                        exc=route_failure or RuntimeError("UZI symbol collection failed"),
+                        exc=route_failure
+                        or RuntimeError("UZI symbol collection failed"),
                         symbol_route_failed=route_mode == "multi",
                     )
                 else:
@@ -657,13 +715,16 @@ def _collect_snapshots_with_uzi_root_router(
         # provider child processes.  The runtime installs process-global UZI
         # wrappers once before these threads start, avoiding lock inversion and
         # preserving one profile/source policy for the whole request.
-        with runtime.parallel_symbol_collection_scope(
-            options=route_options,
-            cancellation=cancellation,
-        ) as scoped_route_options, ThreadPoolExecutor(
-            max_workers=symbol_workers,
-            thread_name_prefix="uzi-symbol",
-        ) as pool:
+        with (
+            runtime.parallel_symbol_collection_scope(
+                options=route_options,
+                cancellation=cancellation,
+            ) as scoped_route_options,
+            ThreadPoolExecutor(
+                max_workers=symbol_workers,
+                thread_name_prefix="uzi-symbol",
+            ) as pool,
+        ):
             next_index = 0
             in_flight = {}
 
@@ -736,9 +797,13 @@ def _collect_snapshots(
     max_workers: int | None = None,
     provider_registry: VendorProviderRegistry | None = None,
     progress_callback=None,
+    as_of_date: date | None = None,
+    cutoff_at: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Collect the Finance Pack's declared snapshots through shared vendor adapters."""
-    requested = list(dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip()))
+    requested = list(
+        dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip())
+    )
     providers = provider_registry or _default_provider_registry()
     resolved_symbols = _unique_symbols(symbols)
     snapshots: list[dict[str, Any]] = []
@@ -752,7 +817,9 @@ def _collect_snapshots(
             profile=research_profile,
         )
         if sector_snapshot is None:
-            sector_snapshot = _instantiate_skill(SectorSnapshotSkill, providers).run(query=sector)
+            sector_snapshot = _instantiate_skill(SectorSnapshotSkill, providers).run(
+                query=sector
+            )
             _save_snapshot_cache(
                 cache_root=cache_root,
                 snapshot_type="sector",
@@ -801,9 +868,14 @@ def _collect_snapshots(
     tasks = [
         (index, symbol, snapshot_type)
         for index, (symbol, snapshot_type) in enumerate(
-            (pair for symbol in resolved_symbols for pair in ((symbol, item) for item in requested))
+            (
+                pair
+                for symbol in resolved_symbols
+                for pair in ((symbol, item) for item in requested)
+            )
         )
-        if snapshot_type in _SYMBOL_SKILLS and not (snapshot_type == "policy" and sector)
+        if snapshot_type in _SYMBOL_SKILLS
+        and not (snapshot_type == "policy" and sector)
     ]
     if not tasks:
         snapshots.extend(
@@ -816,15 +888,19 @@ def _collect_snapshots(
     pending_tasks: list[tuple[int, str, str]] = []
     total_tasks = len(tasks)
 
-    def emit_progress(*, phase: str, snapshot_type: str, completed: int | None = None) -> None:
+    def emit_progress(
+        *, phase: str, snapshot_type: str, completed: int | None = None
+    ) -> None:
         if not callable(progress_callback):
             return
-        progress_callback({
-            "phase": phase,
-            "snapshot_type": snapshot_type,
-            "completed": len(results) if completed is None else completed,
-            "total": total_tasks,
-        })
+        progress_callback(
+            {
+                "phase": phase,
+                "snapshot_type": snapshot_type,
+                "completed": len(results) if completed is None else completed,
+                "total": total_tasks,
+            }
+        )
 
     for index, symbol, snapshot_type in tasks:
         # Match UZI raw_data resume: basic and both top-level bonus collectors
@@ -881,14 +957,27 @@ def _collect_snapshots(
             if _cancelled(cancellation):
                 break
             emit_progress(phase="collecting", snapshot_type=snapshot_type)
-            result = _run_snapshot_skill(
-                query,
-                symbol,
-                snapshot_type,
-                providers,
-                None,
-                research_profile,
-            )
+            if as_of_date is not None:
+                result = _run_snapshot_skill_with_deadline(
+                    query=query,
+                    symbol=symbol,
+                    snapshot_type=snapshot_type,
+                    provider_registry=providers,
+                    dependencies=None,
+                    research_profile=research_profile,
+                    timeout_seconds=_uzi_per_fetcher_timeout_seconds(snapshot_type),
+                    as_of_date=as_of_date,
+                    cutoff_at=cutoff_at,
+                )
+            else:
+                result = _run_snapshot_skill(
+                    query,
+                    symbol,
+                    snapshot_type,
+                    providers,
+                    None,
+                    research_profile,
+                )
             store_result(index, symbol, snapshot_type, result)
         pending_tasks = [task for task in pending_tasks if task[2] != "market"]
         basic_by_symbol = {
@@ -930,7 +1019,7 @@ def _collect_snapshots(
             )
             invocation_symbol = invocation_symbol_by_symbol.get(symbol, symbol)
             emit_progress(phase="collecting", snapshot_type=snapshot_type)
-            if snapshot_type == "capital_flow":
+            if snapshot_type == "capital_flow" and as_of_date is None:
                 # A scoped retry is allowed to differ from UZI's full Agent
                 # workflow.  The native fetcher scans several all-market
                 # institutional datasets before it reaches the target-stock
@@ -964,6 +1053,8 @@ def _collect_snapshots(
                     research_profile=research_profile,
                     timeout_seconds=_UZI_SERIAL_FETCHER_TIMEOUT_SECONDS,
                     occupies_mini_racer_lane=True,
+                    as_of_date=as_of_date,
+                    cutoff_at=cutoff_at,
                 )
             store_result(index, symbol, snapshot_type, result)
         wave2_tasks = [task for task in wave2_tasks if task not in serial_tasks]
@@ -971,7 +1062,9 @@ def _collect_snapshots(
         # UZI's numbered fetchers all belong to one six-worker wave.  Futures
         # remains in that wave but consumes the materials future for the same
         # symbol, so its native call receives the intended dimension-8 input.
-        requested_workers = _UZI_MAX_WORKERS if max_workers is None else max(int(max_workers), 1)
+        requested_workers = (
+            _UZI_MAX_WORKERS if max_workers is None else max(int(max_workers), 1)
+        )
         if wave2_tasks:
             executor = ThreadPoolExecutor(
                 max_workers=min(requested_workers, len(wave2_tasks)),
@@ -992,7 +1085,8 @@ def _collect_snapshots(
                     else symbol
                 )
                 if (
-                    _UZI_FETCHER_BY_SNAPSHOT_TYPE.get(snapshot_type)
+                    as_of_date is not None
+                    or _UZI_FETCHER_BY_SNAPSHOT_TYPE.get(snapshot_type)
                     in _UZI_INDIVIDUAL_DEADLINE_FETCHERS
                 ):
                     future = executor.submit(
@@ -1004,6 +1098,8 @@ def _collect_snapshots(
                         dependencies=dependencies or None,
                         research_profile=research_profile,
                         timeout_seconds=_UZI_SERIAL_FETCHER_TIMEOUT_SECONDS,
+                        as_of_date=as_of_date,
+                        cutoff_at=cutoff_at,
                     )
                 else:
                     future = executor.submit(
@@ -1014,6 +1110,7 @@ def _collect_snapshots(
                         providers,
                         dependencies or None,
                         research_profile,
+                        *((as_of_date, cutoff_at) if as_of_date is not None else ()),
                     )
                 futures[future] = (index, symbol, snapshot_type)
                 if snapshot_type == "materials":
@@ -1046,6 +1143,7 @@ def _collect_snapshots(
                     providers,
                     dependencies or None,
                     research_profile,
+                    *((as_of_date, cutoff_at) if as_of_date is not None else ()),
                 )
 
             for index, symbol, snapshot_type in futures_tasks:
@@ -1100,7 +1198,9 @@ def _collect_snapshots(
                         if future.done() and not future.cancelled():
                             try:
                                 result = future.result(
-                                    timeout=_uzi_per_fetcher_timeout_seconds(snapshot_type)
+                                    timeout=_uzi_per_fetcher_timeout_seconds(
+                                        snapshot_type
+                                    )
                                 )
                             except FutureTimeoutError:
                                 result = _fetcher_timeout_snapshot(
@@ -1131,7 +1231,10 @@ def _collect_snapshots(
                 # Pinned UZI uses a ThreadPoolExecutor context manager, which
                 # waits for already-running calls before the profile env can be
                 # restored.  Keep the same lifetime guarantee here.
-                executor.shutdown(wait=True, cancel_futures=True)
+                executor.shutdown(
+                    wait=as_of_date is None,
+                    cancel_futures=True,
+                )
 
         # Wave 3 is deliberately separate from the 19 numbered fetchers.  The
         # two bonus collectors run for every profile with two workers and the
@@ -1148,15 +1251,30 @@ def _collect_snapshots(
                     if symbol in basic_by_symbol
                     else None
                 )
-                future = executor.submit(
-                    _run_snapshot_skill,
-                    query,
-                    invocation_symbol_by_symbol.get(symbol, symbol),
-                    snapshot_type,
-                    providers,
-                    dependencies,
-                    research_profile,
-                )
+                invocation_symbol = invocation_symbol_by_symbol.get(symbol, symbol)
+                if as_of_date is not None:
+                    future = executor.submit(
+                        _run_snapshot_skill_with_deadline,
+                        query=query,
+                        symbol=invocation_symbol,
+                        snapshot_type=snapshot_type,
+                        provider_registry=providers,
+                        dependencies=dependencies,
+                        research_profile=research_profile,
+                        timeout_seconds=_UZI_BONUS_FETCHER_TIMEOUT_SECONDS,
+                        as_of_date=as_of_date,
+                        cutoff_at=cutoff_at,
+                    )
+                else:
+                    future = executor.submit(
+                        _run_snapshot_skill,
+                        query,
+                        invocation_symbol,
+                        snapshot_type,
+                        providers,
+                        dependencies,
+                        research_profile,
+                    )
                 futures[future] = (index, symbol, snapshot_type)
             emit_progress(phase="collecting", snapshot_type=bonus_tasks[0][2])
             try:
@@ -1218,8 +1336,13 @@ def _collect_snapshots(
                             )
                         store_result(index, symbol, snapshot_type, result)
             finally:
-                executor.shutdown(wait=True, cancel_futures=True)
-    snapshots.extend(results[index] for index, _symbol, _snapshot_type in tasks if index in results)
+                executor.shutdown(
+                    wait=as_of_date is None,
+                    cancel_futures=True,
+                )
+    snapshots.extend(
+        results[index] for index, _symbol, _snapshot_type in tasks if index in results
+    )
     snapshots.extend(
         _missing_scope_snapshot(query=query, snapshot_type=snapshot_type)
         for snapshot_type in requested
@@ -1238,8 +1361,13 @@ def _run_snapshot_skill_with_deadline(
     timeout_seconds: float,
     research_profile: str | None = None,
     occupies_mini_racer_lane: bool = False,
+    as_of_date: date | None = None,
+    cutoff_at: datetime | None = None,
 ) -> dict[str, Any]:
-    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="uzi-serial-fetcher")
+    executor = ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="uzi-serial-fetcher"
+    )
+    context_args = (as_of_date, cutoff_at) if as_of_date is not None else ()
     future = executor.submit(
         _run_snapshot_skill,
         query,
@@ -1248,6 +1376,7 @@ def _run_snapshot_skill_with_deadline(
         provider_registry,
         dependencies,
         research_profile,
+        *context_args,
     )
     try:
         return future.result(timeout=timeout_seconds)
@@ -1283,11 +1412,48 @@ def _run_snapshot_skill(
     provider_registry: VendorProviderRegistry | None = None,
     dependencies: dict[str, dict[str, Any]] | None = None,
     research_profile: str | None = None,
+    as_of_date: date | None = None,
+    cutoff_at: datetime | None = None,
 ) -> dict[str, Any]:
     try:
+        if as_of_date is not None:
+            skill_cls = _SYMBOL_SKILLS[snapshot_type]
+            skill = _instantiate_skill(skill_cls, provider_registry)
+            kwargs: dict[str, Any] = {"query": query, "symbol": symbol}
+            parameters = inspect.signature(skill.run).parameters
+            if "as_of_date" not in parameters:
+                return _historical_capability_gap_snapshot(
+                    query=query,
+                    symbol=symbol,
+                    snapshot_type=snapshot_type,
+                    as_of_date=as_of_date,
+                    cutoff_at=cutoff_at,
+                )
+            if "dependencies" in parameters:
+                kwargs["dependencies"] = dependencies or {}
+            kwargs["as_of_date"] = as_of_date
+            if "cutoff_at" in parameters:
+                kwargs["cutoff_at"] = cutoff_at
+            # Historical adapters often delegate to AkShare functions whose
+            # internal requests omit a timeout.  The current/native root route
+            # already installs this guard; PIT collection must do the same or
+            # one TLS handshake can keep a whole 220-slot fund job alive
+            # indefinitely.
+            with uzi_request_timeout_scope(
+                total_timeout_seconds=_uzi_per_fetcher_timeout_seconds(snapshot_type)
+            ):
+                snapshot = dict(normalize_json_value(skill.run(**kwargs)))
+            return _annotate_point_in_time_snapshot(
+                snapshot,
+                snapshot_type=snapshot_type,
+                as_of_date=as_of_date,
+                cutoff_at=cutoff_at,
+            )
         if _uses_uzi_fetcher(snapshot_type):
             raw_basic = (dependencies or {}).get("0_basic") or {}
-            industry = str((raw_basic.get("data") or {}).get("industry") or "").strip() or None
+            industry = (
+                str((raw_basic.get("data") or {}).get("industry") or "").strip() or None
+            )
             request_scope_kwargs = (
                 {
                     "timeout_seconds": _UZI_SIMILAR_STOCKS_HTTP_TIMEOUT_SECONDS,
@@ -1325,11 +1491,417 @@ def _run_snapshot_skill(
         )
 
 
-def _uses_uzi_fetcher(snapshot_type: str) -> bool:
-    return (
-        snapshot_type in _UZI_FETCHER_BY_SNAPSHOT_TYPE
-        and _SYMBOL_SKILLS.get(snapshot_type) is _CANONICAL_SYMBOL_SKILLS.get(snapshot_type)
+def _historical_capability_gap_snapshot(
+    *,
+    query: str,
+    symbol: str,
+    snapshot_type: str,
+    as_of_date: date,
+    cutoff_at: datetime | None,
+) -> dict[str, Any]:
+    """Return an explicit non-fabricated result for a live-only skill.
+
+    A historical request must never run a live-only provider and then stamp
+    its response with the requested date.  Keeping this as a normal snapshot
+    lets collection diagnostics explain the capability gap without losing the
+    attempted slot.
+    """
+
+    dimension = _UZI_FETCHER_BY_SNAPSHOT_TYPE.get(snapshot_type, snapshot_type)
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+    return {
+        "snapshot_type": snapshot_type,
+        "symbol": symbol,
+        "query": query,
+        "snapshot_date": as_of_date.isoformat(),
+        "retrieved_at": retrieved_at,
+        "facts": {
+            "availability": "data_gap",
+            "data_gap": ["historical_provider_contract_missing"],
+            "_uzi_raw_result": {
+                "ticker": symbol,
+                "data": {},
+                "source": dimension,
+                "fallback": True,
+                "error": "historical_provider_contract_missing",
+            },
+        },
+        "quality_status": "data_gap",
+        "degraded": True,
+        "degrade_reason": "historical_provider_contract_missing",
+        "missing_fields": [f"{snapshot_type}.historical_provider_contract"],
+        "source_trace": [
+            {
+                "source_id": dimension,
+                "status": "not_supported",
+                "reason_code": "historical_provider_contract_missing",
+                "query_window": {
+                    "start": as_of_date.isoformat(),
+                    "end": as_of_date.isoformat(),
+                },
+                "cutoff_at": cutoff_at.isoformat() if cutoff_at else None,
+            }
+        ],
+        "historical_reconstruction": {
+            "safe": True,
+            "strategy": "current_only",
+            "requested_as_of_date": as_of_date.isoformat(),
+            "cutoff_at": cutoff_at.isoformat() if cutoff_at else None,
+            "window_start": as_of_date.isoformat(),
+            "window_end": as_of_date.isoformat(),
+            "proof_basis": "provider_did_not_run_live_only_contract",
+        },
+    }
+
+
+def _annotate_point_in_time_snapshot(
+    snapshot: dict[str, Any],
+    *,
+    snapshot_type: str,
+    as_of_date: date,
+    cutoff_at: datetime | None,
+) -> dict[str, Any]:
+    """Attach a verifiable PIT envelope to a source-bounded skill result.
+
+    Historical collection deliberately bypasses the live UZI process router.
+    The compatibility envelope below keeps the exact field names consumed by
+    UZI's integrity gate while retaining the richer provider facts alongside
+    it for Cognitrade auditing.
+    """
+
+    from research_system.market_data.historical import capability_for_dimension
+
+    prepared = dict(snapshot)
+    facts = dict(prepared.get("facts") or {})
+    projected = _point_in_time_uzi_projection(snapshot_type, facts)
+    source = dict(prepared.get("source") or {})
+    provider_id = str(
+        source.get("provider_id") or source.get("source_id") or snapshot_type
     )
+    dimension = _UZI_FETCHER_BY_SNAPSHOT_TYPE.get(snapshot_type, snapshot_type)
+    capability = capability_for_dimension(dimension)
+    start = as_of_date - timedelta(days=max(0, capability.window_days))
+    retrieved_at = datetime.now(timezone.utc).isoformat()
+    availability = str(facts.get("availability") or "").strip().lower()
+    if availability not in _UNAVAILABLE_QUALITY_STATUSES and projected:
+        availability = "available"
+    elif not availability:
+        availability = "data_gap"
+    existing_envelope = facts.get("_uzi_raw_result")
+    if not isinstance(existing_envelope, dict):
+        facts["_uzi_raw_result"] = {
+            "ticker": prepared.get("symbol"),
+            "data": projected,
+            "source": provider_id,
+            "fallback": bool(prepared.get("fallback_applied")),
+            **(
+                {}
+                if availability == "available"
+                else {"error": prepared.get("degrade_reason") or availability}
+            ),
+        }
+    facts["availability"] = availability
+    trace = []
+    for row in list(prepared.get("source_trace") or []):
+        if not isinstance(row, dict):
+            continue
+        trace.append(
+            {
+                **row,
+                "query_window": {
+                    "start": start.isoformat(),
+                    "end": as_of_date.isoformat(),
+                },
+                "cutoff_at": cutoff_at.isoformat() if cutoff_at else None,
+            }
+        )
+    prepared.update(
+        {
+            "snapshot_date": as_of_date.isoformat(),
+            "retrieved_at": retrieved_at,
+            "facts": facts,
+            "source_trace": trace,
+            "quality_status": (
+                "partial"
+                if availability == "available" and capability.current_only_fields
+                else availability
+            ),
+            "degraded": availability != "available"
+            or bool(capability.current_only_fields),
+            "degrade_reason": (
+                "historical_optional_fields_unavailable"
+                if availability == "available" and capability.current_only_fields
+                else prepared.get("degrade_reason")
+            ),
+            "missing_fields": list(prepared.get("missing_fields") or [])
+            + [f"{snapshot_type}.{field}" for field in capability.current_only_fields],
+            "historical_reconstruction": {
+                "safe": True,
+                "strategy": capability.strategy,
+                "requested_as_of_date": as_of_date.isoformat(),
+                "cutoff_at": cutoff_at.isoformat() if cutoff_at else None,
+                "window_start": start.isoformat(),
+                "window_end": as_of_date.isoformat(),
+                "recoverable_fields": list(capability.recoverable_fields),
+                "current_only_fields": list(capability.current_only_fields),
+                "proof_basis": "source_bounded_point_in_time_query",
+            },
+            "field_coverage": {
+                "recoverable_fields": list(capability.recoverable_fields),
+                "current_only_fields": list(capability.current_only_fields),
+                "present_fields": sorted(
+                    field
+                    for field in capability.recoverable_fields
+                    if not _missing_dimension_value(projected.get(field))
+                ),
+            },
+        }
+    )
+    return _apply_dimension_quality_contract(prepared)
+
+
+def _point_in_time_uzi_projection(
+    snapshot_type: str, facts: dict[str, Any]
+) -> dict[str, Any]:
+    """Project provider facts into UZI's public per-dimension data shape."""
+
+    if snapshot_type == "market":
+        overview = dict(facts.get("market_overview") or {})
+        history = dict(facts.get("market_hist") or {})
+        latest = dict(history.get("latest_bar") or {})
+        return {
+            "code": facts.get("symbol") or overview.get("symbol"),
+            "name": overview.get("security_name") or latest.get("name"),
+            "price": overview.get("latest_price") or latest.get("close"),
+            "change_pct": overview.get("pct_change") or latest.get("pct_change"),
+            "industry": overview.get("industry"),
+            "market_cap_raw": overview.get("market_cap"),
+            "circulating_cap_raw": overview.get("float_market_cap"),
+            "pe_ttm": overview.get("pe_ttm"),
+            "pe_dynamic": overview.get("pe_dynamic"),
+            "pb": overview.get("pb"),
+            "total_shares": overview.get("total_shares"),
+            "open": latest.get("open"),
+            "high": latest.get("high"),
+            "low": latest.get("low"),
+            "prev_close": latest.get("pre_close"),
+        }
+    if snapshot_type == "fundamental":
+        return _point_in_time_financial_projection(facts)
+    if snapshot_type == "kline":
+        history = dict(facts.get("history") or facts.get("market_hist") or {})
+        bars = [
+            dict(row)
+            for row in list(history.get("bars") or [])
+            if isinstance(row, dict)
+        ]
+        return {
+            **_point_in_time_kline_indicators(bars),
+            "ohlcv": bars,
+            "ohlcv_adjustment": str(history.get("adjust") or "none"),
+        }
+    if snapshot_type == "valuation":
+        valuation = dict(facts.get("valuation") or {})
+        history = list(
+            valuation.get("history")
+            or valuation.get("valuation_history")
+            or facts.get("valuation_history")
+            or []
+        )
+        pe = valuation.get("pe") or valuation.get("pe_ttm") or valuation.get("PE(TTM)")
+        pb = valuation.get("pb") or valuation.get("市净率")
+        return {
+            **valuation,
+            "pe": pe,
+            "pb": pb,
+            "pe_history": history,
+            "history": history,
+            "pe_quantile": _historical_percentile(history, pe, "pe_ttm"),
+            "pb_quantile": _historical_percentile(history, pb, "pb"),
+        }
+    return {
+        key: value
+        for key, value in facts.items()
+        if not str(key).startswith("_") and key != "availability"
+    }
+
+
+def _point_in_time_financial_projection(facts: dict[str, Any]) -> dict[str, Any]:
+    history = [
+        dict(row)
+        for row in list(facts.get("financial_abstract_history") or [])
+        if isinstance(row, dict)
+    ]
+    years: list[str] = []
+    revenue: list[Any] = []
+    profit: list[Any] = []
+    roe: list[Any] = []
+    aliases = {
+        "year": ("报告期", "报告日期", "report_date", "period", "年份"),
+        "revenue": ("营业总收入", "营业收入", "revenue"),
+        "profit": ("归母净利润", "净利润", "net_profit"),
+        "roe": ("净资产收益率", "加权净资产收益率", "roe"),
+    }
+
+    def first(row: dict[str, Any], keys: tuple[str, ...]) -> Any:
+        return next(
+            (row.get(key) for key in keys if row.get(key) not in (None, "")), None
+        )
+
+    for row in history:
+        period = first(row, aliases["year"])
+        if period is None:
+            continue
+        years.append(str(period)[:10])
+        # The historical THS endpoint returns display strings such as
+        # ``123.85亿``/``2991.87万``/``9.97%``.  UZI's fetch_financials contract,
+        # however, exposes the two monetary histories in 亿 and ROE as plain
+        # floats; its score_dimensions implementation performs arithmetic on
+        # those lists without coercion.  Normalize at the PIT projection
+        # boundary while retaining the untouched provider rows in ``facts``.
+        revenue.append(
+            _point_in_time_financial_number(
+                first(row, aliases["revenue"]),
+                monetary_yi=True,
+            )
+        )
+        profit.append(
+            _point_in_time_financial_number(
+                first(row, aliases["profit"]),
+                monetary_yi=True,
+            )
+        )
+        roe.append(_point_in_time_financial_number(first(row, aliases["roe"])))
+    return {
+        "financial_years": years,
+        "revenue_history": revenue,
+        "net_profit_history": profit,
+        "roe_history": roe,
+        "financial_health": facts.get("financial_health") or {},
+        "raw": facts.get("financial_abstract") or {},
+    }
+
+
+def _point_in_time_financial_number(
+    value: Any,
+    *,
+    monetary_yi: bool = False,
+) -> float:
+    """Project a provider display value into UZI's numeric history contract."""
+
+    if value in (None, "", "--", "—", "-") or isinstance(value, bool):
+        return 0.0
+    text = str(value).strip().replace(",", "").replace("%", "")
+    multiplier = 1.0
+    if monetary_yi:
+        if "万亿" in text or "兆" in text:
+            multiplier = 10_000.0
+            text = text.replace("万亿", "").replace("兆", "")
+        elif "亿" in text:
+            text = text.replace("亿", "")
+        elif "万" in text:
+            multiplier = 0.0001
+            text = text.replace("万", "")
+        elif "元" in text:
+            multiplier = 1e-8
+            text = text.replace("元", "")
+    try:
+        parsed = float(text) * multiplier
+    except (TypeError, ValueError):
+        return 0.0
+    return parsed if math.isfinite(parsed) else 0.0
+
+
+def _point_in_time_kline_indicators(bars: list[dict[str, Any]]) -> dict[str, Any]:
+    closes = [
+        value
+        for row in bars
+        if (value := _finite_float(row.get("close") or row.get("收盘"))) is not None
+    ]
+    if not closes:
+        return {"stage": None, "ma_align": None, "macd": None}
+
+    def average(size: int, *, offset: int = 0) -> float | None:
+        end = len(closes) - offset
+        start = end - size
+        if start < 0 or end <= 0:
+            return None
+        return sum(closes[start:end]) / size
+
+    ma20, ma60, ma200 = average(20), average(60), average(200)
+    ma200_previous = average(200, offset=60)
+    latest = closes[-1]
+    if ma200 is None or ma200_previous is None:
+        stage = "insufficient_history"
+    elif latest > ma200 and ma200 > ma200_previous:
+        stage = "Stage 2"
+    elif latest < ma200 and ma200 < ma200_previous:
+        stage = "Stage 4"
+    elif ma200 >= ma200_previous:
+        stage = "Stage 1"
+    else:
+        stage = "Stage 3"
+    if ma20 is None or ma60 is None or ma200 is None:
+        alignment = "insufficient_history"
+    elif ma20 > ma60 > ma200:
+        alignment = "bullish"
+    elif ma20 < ma60 < ma200:
+        alignment = "bearish"
+    else:
+        alignment = "mixed"
+
+    def ema(values: list[float], period: int) -> list[float]:
+        multiplier = 2 / (period + 1)
+        output = [values[0]]
+        for value in values[1:]:
+            output.append(value * multiplier + output[-1] * (1 - multiplier))
+        return output
+
+    ema12, ema26 = ema(closes, 12), ema(closes, 26)
+    dif = [left - right for left, right in zip(ema12, ema26, strict=True)]
+    signal = ema(dif, 9)
+    return {
+        "stage": stage,
+        "ma_align": alignment,
+        "ma20": ma20,
+        "ma60": ma60,
+        "ma200": ma200,
+        "macd": {
+            "dif": dif[-1],
+            "dea": signal[-1],
+            "histogram": (dif[-1] - signal[-1]) * 2,
+        },
+    }
+
+
+def _finite_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _historical_percentile(rows: list[Any], current: Any, field: str) -> float | None:
+    current_value = _finite_float(current)
+    if current_value is None:
+        return None
+    values = [
+        parsed
+        for row in rows
+        if isinstance(row, dict)
+        and (parsed := _finite_float(row.get(field))) is not None
+        and parsed > 0
+    ]
+    if not values:
+        return None
+    return round(100 * sum(value <= current_value for value in values) / len(values), 2)
+
+
+def _uses_uzi_fetcher(snapshot_type: str) -> bool:
+    return snapshot_type in _UZI_FETCHER_BY_SNAPSHOT_TYPE and _SYMBOL_SKILLS.get(
+        snapshot_type
+    ) is _CANONICAL_SYMBOL_SKILLS.get(snapshot_type)
 
 
 def _uses_uzi_resume_cache(snapshot_type: str) -> bool:
@@ -1406,15 +1978,11 @@ def _project_uzi_symbol_snapshot(
         else {}
     )
     error = str(
-        (raw_result or {}).get("error")
-        or pipeline_meta.get("error")
-        or ""
+        (raw_result or {}).get("error") or pipeline_meta.get("error") or ""
     ).strip()
     if raw_result is not None:
         availability = "available" if data and not error else "data_gap"
-        source_text = str(
-            raw_result.get("source") or f"uzi:{fetcher_id}"
-        ).strip()
+        source_text = str(raw_result.get("source") or f"uzi:{fetcher_id}").strip()
         dimension_fallback = bool(raw_result.get("fallback"))
     elif bonus_field is not None:
         # Legacy has no bonus dimension envelopes; pipeline also spills
@@ -1433,7 +2001,9 @@ def _project_uzi_symbol_snapshot(
 
     quality_floor, pipeline_gaps, pipeline_reasons = _uzi_pipeline_quality_floor(
         snapshot_type=snapshot_type,
-        symbol=str(root_fields.get("full") or root_fields.get("ticker") or requested_symbol),
+        symbol=str(
+            root_fields.get("full") or root_fields.get("ticker") or requested_symbol
+        ),
         data=data,
         pipeline_meta=pipeline_meta,
         error=error,
@@ -1493,20 +2063,24 @@ def _project_uzi_symbol_snapshot(
     return {
         "snapshot_type": snapshot_type,
         "symbol": requested_symbol,
-        "sector": industry if snapshot_type in {"macro", "industry", "policy"} else None,
+        "sector": industry
+        if snapshot_type in {"macro", "industry", "policy"}
+        else None,
         "query": query,
         "snapshot_date": retrieved_at[:10],
         "retrieved_at": retrieved_at,
         "facts": facts,
         "quality_status": availability,
         "degraded": availability != "available",
-        "degrade_reason": error or (pipeline_reasons[0] if pipeline_reasons else (
-            None if availability == "available" else f"{fetcher_id}_data_missing"
-        )),
-        "degrade_reasons": pipeline_reasons,
-        "missing_fields": pipeline_gaps or (
-            [] if availability == "available" else [snapshot_type]
+        "degrade_reason": error
+        or (
+            pipeline_reasons[0]
+            if pipeline_reasons
+            else (None if availability == "available" else f"{fetcher_id}_data_missing")
         ),
+        "degrade_reasons": pipeline_reasons,
+        "missing_fields": pipeline_gaps
+        or ([] if availability == "available" else [snapshot_type]),
         "fallback_applied": fallback_applied,
         "source": {
             "skill": f"uzi_{snapshot_type}_snapshot_skill",
@@ -1555,7 +2129,9 @@ def _run_uzi_fetcher_snapshot(
             )
         }
     elif fetcher_id == "19_contests":
-        allowlist = {str(item).strip().lower() for item in settings.sensitive_source_allowlist}
+        allowlist = {
+            str(item).strip().lower() for item in settings.sensitive_source_allowlist
+        }
         xueqiu_enabled = (
             settings.sensitive_sources_enabled
             and "xueqiu" in allowlist
@@ -1581,7 +2157,9 @@ def _run_uzi_fetcher_snapshot(
             result = runtime.collect(fetcher_id, **collect_kwargs)
     else:
         result = runtime.collect(fetcher_id, **collect_kwargs)
-    data = dict(result.get("data") or {}) if isinstance(result.get("data"), dict) else {}
+    data = (
+        dict(result.get("data") or {}) if isinstance(result.get("data"), dict) else {}
+    )
     error = str(result.get("error") or "").strip()
     availability = "available" if data and not error else "data_gap"
     source_text = str(result.get("source") or f"uzi:{fetcher_id}").strip()
@@ -1621,7 +2199,9 @@ def _run_uzi_fetcher_snapshot(
     snapshot = {
         "snapshot_type": snapshot_type,
         "symbol": target_symbol,
-        "sector": industry if snapshot_type in {"macro", "industry", "policy"} else None,
+        "sector": industry
+        if snapshot_type in {"macro", "industry", "policy"}
+        else None,
         "query": query,
         "snapshot_date": retrieved_at[:10],
         "retrieved_at": retrieved_at,
@@ -1657,12 +2237,11 @@ def _run_uzi_fetcher_snapshot(
             symbol=target_symbol,
             provider_registry=provider_registry,
         )
-    elif snapshot_type == "kline" and len(
-        data.get("ohlcv")
-        or data.get("bars")
-        or data.get("candles_60d")
-        or []
-    ) < 260:
+    elif (
+        snapshot_type == "kline"
+        and len(data.get("ohlcv") or data.get("bars") or data.get("candles_60d") or [])
+        < 260
+    ):
         snapshot = _recover_kline_snapshot(
             snapshot=snapshot,
             query=query,
@@ -1880,7 +2459,11 @@ def _run_recovery_with_deadline(
     future = executor.submit(loader)
     try:
         result = future.result(timeout=timeout_seconds)
-        return (dict(result), None) if isinstance(result, dict) else (None, "InvalidRecoveryPayload")
+        return (
+            (dict(result), None)
+            if isinstance(result, dict)
+            else (None, "InvalidRecoveryPayload")
+        )
     except FutureTimeoutError:
         future.cancel()
         return None, "RecoveryTimeout"
@@ -1915,8 +2498,12 @@ def _recover_market_snapshot(
         lambda: MarketSnapshotSkill(fallback_registry).run(query=query, symbol=symbol)
     )
     if recovery is None:
-        return _append_recovery_failure(snapshot, "market_fallback", error_type or "ProviderError")
-    recovery_facts = recovery.get("facts") if isinstance(recovery.get("facts"), dict) else {}
+        return _append_recovery_failure(
+            snapshot, "market_fallback", error_type or "ProviderError"
+        )
+    recovery_facts = (
+        recovery.get("facts") if isinstance(recovery.get("facts"), dict) else {}
+    )
     if str(recovery_facts.get("availability") or "").lower() != "available":
         return _append_recovery_trace(snapshot, recovery)
 
@@ -1945,7 +2532,8 @@ def _recover_market_snapshot(
         "pb": overview.get("pb"),
         "pe_dynamic": overview.get("pe_dynamic"),
         "open": (overview.get("spot") or {}).get("今开") or latest_bar.get("open"),
-        "prev_close": (overview.get("spot") or {}).get("昨收") or latest_bar.get("pre_close"),
+        "prev_close": (overview.get("spot") or {}).get("昨收")
+        or latest_bar.get("pre_close"),
         "high": (overview.get("spot") or {}).get("最高") or latest_bar.get("high"),
         "low": (overview.get("spot") or {}).get("最低") or latest_bar.get("low"),
     }
@@ -2016,9 +2604,7 @@ def _recover_kline_snapshot(
             error_type or "ProviderError",
         )
     recovery_facts = (
-        recovery.get("facts")
-        if isinstance(recovery.get("facts"), dict)
-        else {}
+        recovery.get("facts") if isinstance(recovery.get("facts"), dict) else {}
     )
     history = (
         recovery_facts.get("history")
@@ -2047,7 +2633,9 @@ def _recover_valuation_snapshot(
     dependencies: dict[str, dict[str, Any]] | None,
 ) -> dict[str, Any]:
     basic_result = (dependencies or {}).get("0_basic") or {}
-    basic = basic_result.get("data") if isinstance(basic_result.get("data"), dict) else {}
+    basic = (
+        basic_result.get("data") if isinstance(basic_result.get("data"), dict) else {}
+    )
     if not basic:
         return snapshot
     pe = basic.get("pe_ttm")
@@ -2057,7 +2645,9 @@ def _recover_valuation_snapshot(
         pe_basis = "dynamic"
     projected = {
         "pe": str(pe) if not _missing_dimension_value(pe) else None,
-        "pb": str(basic.get("pb")) if not _missing_dimension_value(basic.get("pb")) else None,
+        "pb": str(basic.get("pb"))
+        if not _missing_dimension_value(basic.get("pb"))
+        else None,
         "current_price": basic.get("price"),
         "market_cap_raw": basic.get("market_cap_raw"),
         "industry": basic.get("industry"),
@@ -2107,8 +2697,12 @@ def _recover_lhb_snapshot(
         lambda: LHBSnapshotSkill(registry).run(query=query, symbol=symbol)
     )
     if recovery is None:
-        return _append_recovery_failure(snapshot, "lhb_fallback", error_type or "ProviderError")
-    recovery_facts = recovery.get("facts") if isinstance(recovery.get("facts"), dict) else {}
+        return _append_recovery_failure(
+            snapshot, "lhb_fallback", error_type or "ProviderError"
+        )
+    recovery_facts = (
+        recovery.get("facts") if isinstance(recovery.get("facts"), dict) else {}
+    )
     if str(recovery_facts.get("availability") or "").lower() != "available":
         return _append_recovery_trace(snapshot, recovery)
     detail_records = [
@@ -2173,7 +2767,9 @@ def _recover_governance_snapshot(
             "governance_fallback",
             error_type or "ProviderError",
         )
-    recovery_facts = recovery.get("facts") if isinstance(recovery.get("facts"), dict) else {}
+    recovery_facts = (
+        recovery.get("facts") if isinstance(recovery.get("facts"), dict) else {}
+    )
     projected = {
         "pledge": recovery_facts.get("pledge") or [],
         "insider_trades_1y": recovery_facts.get("insider_trades_1y") or [],
@@ -2236,7 +2832,9 @@ def _recover_capital_flow_snapshot(
             "capital_flow_fallback",
             error_type or "ProviderError",
         )
-    recovery_facts = recovery.get("facts") if isinstance(recovery.get("facts"), dict) else {}
+    recovery_facts = (
+        recovery.get("facts") if isinstance(recovery.get("facts"), dict) else {}
+    )
     if str(recovery_facts.get("availability") or "").lower() != "available":
         failed = dict(snapshot)
         failed["source_trace"] = [
@@ -2266,7 +2864,9 @@ def _recover_capital_flow_snapshot(
     raw_data = raw_result.get("data") if isinstance(raw_result, dict) else None
     uzi_has_other_data = bool(raw_data) if isinstance(raw_data, dict) else False
     recovery_source = dict(recovery.get("source") or {})
-    recovery_provider_id = str(recovery_source.get("provider_id") or "capital_flow_fallback")
+    recovery_provider_id = str(
+        recovery_source.get("provider_id") or "capital_flow_fallback"
+    )
 
     recovered = dict(snapshot)
     recovered.update(
@@ -2277,7 +2877,9 @@ def _recover_capital_flow_snapshot(
             "degrade_reason": None
             if uzi_has_other_data
             else "uzi_capital_flow_unavailable_core_flow_recovered",
-            "missing_fields": [] if uzi_has_other_data else ["capital_flow.uzi_extended_fields"],
+            "missing_fields": []
+            if uzi_has_other_data
+            else ["capital_flow.uzi_extended_fields"],
             "fallback_applied": True,
             "fallback_sources": [recovery_source] if recovery_source else [],
             "field_sources": {
@@ -2444,7 +3046,9 @@ def _merge_recovered_fields(
         else {}
     )
     recovery_provider_id = str(
-        recovery_source.get("provider_id") or recovery_source.get("source_id") or "provider_recovery"
+        recovery_source.get("provider_id")
+        or recovery_source.get("source_id")
+        or "provider_recovery"
     )
     fallback_sources = [
         *list(snapshot.get("fallback_sources") or []),
@@ -2490,12 +3094,16 @@ def _dimension_observations(snapshot: dict[str, Any]) -> dict[str, Any]:
 def _peer_observation_count(data: dict[str, Any]) -> int:
     rows = data.get("peer_table") or data.get("peer_comparison") or []
     if isinstance(rows, list):
-        non_self = [row for row in rows if not isinstance(row, dict) or not row.get("is_self")]
+        non_self = [
+            row for row in rows if not isinstance(row, dict) or not row.get("is_self")
+        ]
         # Some upstream tables omit is_self.  A table with at least two rows
         # necessarily contains a comparison even when it cannot label self.
-        local_count = len(non_self) if any(
-            isinstance(row, dict) and row.get("is_self") for row in rows
-        ) else max(0, len(rows) - 1)
+        local_count = (
+            len(non_self)
+            if any(isinstance(row, dict) and row.get("is_self") for row in rows)
+            else max(0, len(rows) - 1)
+        )
     else:
         local_count = 0
     global_comparison = data.get("global_peer_comparison")
@@ -2561,7 +3169,9 @@ def _apply_dimension_quality_contract(snapshot: dict[str, Any]) -> dict[str, Any
             gaps.append("materials.price_history_12m")
         hard_gap = not data
     elif snapshot_type == "futures":
-        no_direct_contract = str(data.get("linked_contract") or "").strip() == "无直接关联品种"
+        no_direct_contract = (
+            str(data.get("linked_contract") or "").strip() == "无直接关联品种"
+        )
         if not no_direct_contract:
             if not _positive_dimension_value(data.get("latest_price")):
                 gaps.append("futures.latest_price")
@@ -2571,12 +3181,17 @@ def _apply_dimension_quality_contract(snapshot: dict[str, Any]) -> dict[str, Any
     elif snapshot_type == "governance":
         observation_status = str(data.get("observation_status") or "")
         coverage = data.get("source_coverage")
-        structured_complete = observation_status in {
-            "verified_empty",
-            "verified_non_empty",
-        } and isinstance(coverage, dict) and all(
-            coverage.get(field) == "available"
-            for field in ("pledge", "insider_trades_1y")
+        structured_complete = (
+            observation_status
+            in {
+                "verified_empty",
+                "verified_non_empty",
+            }
+            and isinstance(coverage, dict)
+            and all(
+                coverage.get(field) == "available"
+                for field in ("pledge", "insider_trades_1y")
+            )
         )
         qualitative_available = bool(
             data.get("governance_evidence") or data.get("browser_evidence")
@@ -2637,9 +3252,8 @@ def _apply_dimension_quality_contract(snapshot: dict[str, Any]) -> dict[str, Any
         checked["missing_fields"] = []
     else:
         checked["degrade_reason"] = (
-            (";".join(gaps) if gaps else snapshot.get("degrade_reason"))
-            or quality
-        )
+            ";".join(gaps) if gaps else snapshot.get("degrade_reason")
+        ) or quality
     facts["availability"] = quality
     return checked
 
@@ -2664,7 +3278,9 @@ def _fetcher_failure_snapshot(
         "data": {},
         "fallback": True,
         "error": reason,
-        "source": "lib.pipeline.collect" if symbol_route_failed else fetcher_id or snapshot_type,
+        "source": "lib.pipeline.collect"
+        if symbol_route_failed
+        else fetcher_id or snapshot_type,
     }
     facts = {
         **failure_facts(status),
@@ -2682,9 +3298,13 @@ def _fetcher_failure_snapshot(
     provider_id = (
         "uzi_3_9_2.root_collection"
         if symbol_route_failed
-        else f"uzi_3_9_2.{fetcher_id}" if fetcher_id else snapshot_type
+        else f"uzi_3_9_2.{fetcher_id}"
+        if fetcher_id
+        else snapshot_type
     )
-    source_id = "root_symbol_route" if symbol_route_failed else fetcher_id or snapshot_type
+    source_id = (
+        "root_symbol_route" if symbol_route_failed else fetcher_id or snapshot_type
+    )
     return {
         "snapshot_type": snapshot_type,
         "symbol": symbol,
@@ -2698,7 +3318,9 @@ def _fetcher_failure_snapshot(
         "missing_fields": [snapshot_type],
         "fallback_applied": True,
         "source": {
-            "skill": "uzi_root_collection" if symbol_route_failed else f"uzi_{snapshot_type}_snapshot_skill",
+            "skill": "uzi_root_collection"
+            if symbol_route_failed
+            else f"uzi_{snapshot_type}_snapshot_skill",
             "vendor": "UZI-Skill" if fetcher_id else "finance_ashare",
             "provider_id": provider_id,
             "source_id": source_id,
@@ -2725,7 +3347,10 @@ def _uzi_raw_result(snapshot: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _instantiate_skill(skill_cls, provider_registry: VendorProviderRegistry | None):
-    if provider_registry is not None and "provider_registry" in inspect.signature(skill_cls).parameters:
+    if (
+        provider_registry is not None
+        and "provider_registry" in inspect.signature(skill_cls).parameters
+    ):
         return skill_cls(provider_registry=provider_registry)
     return skill_cls()
 
@@ -2750,9 +3375,13 @@ def _snapshot_cache_path(
         profile=profile,
     )
     digest = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("utf-8")
     ).hexdigest()
-    return Path(cache_root) / "finance_ashare" / "snapshot_partitions" / f"{digest}.json"
+    return (
+        Path(cache_root) / "finance_ashare" / "snapshot_partitions" / f"{digest}.json"
+    )
 
 
 def _snapshot_cache_schema_version(snapshot_type: str) -> str:
@@ -2789,12 +3418,16 @@ def _snapshot_cache_context(
 
 def _snapshot_quality(snapshot: dict[str, Any]) -> str:
     facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
-    declared = str(
-        snapshot.get("quality_status")
-        or snapshot.get("status")
-        or facts.get("availability")
-        or ""
-    ).strip().lower()
+    declared = (
+        str(
+            snapshot.get("quality_status")
+            or snapshot.get("status")
+            or facts.get("availability")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     if declared in _UNAVAILABLE_QUALITY_STATUSES:
         return declared
     return "degraded" if snapshot.get("degraded") else "available"
@@ -2806,7 +3439,10 @@ def _normalized_security_code(value: Any) -> str:
     text = str(value or "").strip().upper()
     if not text:
         return ""
-    for token in (text.split(".", 1)[0], text[2:] if text[:2] in {"SH", "SZ", "BJ"} else text):
+    for token in (
+        text.split(".", 1)[0],
+        text[2:] if text[:2] in {"SH", "SZ", "BJ"} else text,
+    ):
         digits = "".join(character for character in token if character.isdigit())
         if len(digits) >= 6:
             return digits[-6:]
@@ -2845,13 +3481,17 @@ def _capital_flow_has_target_observation(
     """
 
     main_flow = data.get("main_fund_flow_20d")
-    if isinstance(main_flow, list) and any(isinstance(row, dict) and row for row in main_flow):
+    if isinstance(main_flow, list) and any(
+        isinstance(row, dict) and row for row in main_flow
+    ):
         return True
 
     northbound = data.get("northbound")
     if isinstance(northbound, dict):
         history = northbound.get("flow_history")
-        if isinstance(history, list) and any(isinstance(row, dict) and row for row in history):
+        if isinstance(history, list) and any(
+            isinstance(row, dict) and row for row in history
+        ):
             return True
 
     for field in (
@@ -2910,7 +3550,9 @@ def _uzi_pipeline_quality_floor(
         ):
             return (
                 "data_gap",
-                list(dict.fromkeys([*pipeline_gaps, "capital_flow_target_observation"])),
+                list(
+                    dict.fromkeys([*pipeline_gaps, "capital_flow_target_observation"])
+                ),
                 ["capital_flow_target_observation_missing", "uzi_pipeline_partial"],
             )
         return "degraded", pipeline_gaps, ["uzi_pipeline_partial"]
@@ -3051,14 +3693,19 @@ def collect_snapshot_bundle(
     progress_callback=None,
 ) -> dict[str, Any]:
     """Build a traceable candidate universe and its staged snapshot collection."""
-    requested = list(dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip()))
+    requested = list(
+        dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip())
+    )
     providers = provider_registry or _default_provider_registry()
     resolved_symbols = _unique_symbols(symbols)
     universe_rows: list[dict[str, Any]] = []
     snapshots: list[dict[str, Any]] = []
     universe_source = "structured_symbols" if resolved_symbols else ""
 
-    sector_requested = "sector" in requested or intent in {"stock_screen", "sector_research"}
+    sector_requested = "sector" in requested or intent in {
+        "stock_screen",
+        "sector_research",
+    }
     policy_requested = "policy" in requested
     sector_snapshot: dict[str, Any] | None = None
     if sector and sector_requested and not _cancelled(cancellation):
@@ -3069,7 +3716,9 @@ def collect_snapshot_bundle(
             profile=research_profile,
         )
         if sector_snapshot is None:
-            sector_snapshot = _instantiate_skill(SectorSnapshotSkill, providers).run(query=sector)
+            sector_snapshot = _instantiate_skill(SectorSnapshotSkill, providers).run(
+                query=sector
+            )
             _save_snapshot_cache(
                 cache_root=cache_root,
                 snapshot_type="sector",
@@ -3102,14 +3751,16 @@ def collect_snapshot_bundle(
                 profile=research_profile,
                 snapshot=policy_snapshot,
             )
-        snapshots.append(
-            policy_snapshot
-        )
+        snapshots.append(policy_snapshot)
 
     if intent == "sector_research":
         return _bundle_result(
             snapshots=snapshots,
-            symbols=[str(row.get("symbol") or "") for row in universe_rows if row.get("symbol")],
+            symbols=[
+                str(row.get("symbol") or "")
+                for row in universe_rows
+                if row.get("symbol")
+            ],
             requested=requested,
             universe_rows=universe_rows,
             universe_source=universe_source or "sector_unavailable",
@@ -3128,9 +3779,15 @@ def collect_snapshot_bundle(
             universe_rows = universe_rows[:pool_size]
         else:
             master = security_master or AShareSecurityMaster()
-            universe_rows = master.candidate_universe(limit=pool_size, supplied_symbols=resolved_symbols)
+            universe_rows = master.candidate_universe(
+                limit=pool_size, supplied_symbols=resolved_symbols
+            )
             if universe_rows:
-                universe_source = "structured_symbols" if resolved_symbols else "ashare_liquidity_ranked"
+                universe_source = (
+                    "structured_symbols"
+                    if resolved_symbols
+                    else "ashare_liquidity_ranked"
+                )
         if universe_rows:
             resolved_symbols = _unique_symbols(
                 [row.get("symbol") for row in universe_rows if row.get("symbol")]
@@ -3140,7 +3797,11 @@ def collect_snapshot_bundle(
 
     symbol_types = [item for item in requested if item in _SYMBOL_SKILLS]
     if intent == "stock_screen":
-        symbol_types = [item for item in _SCREEN_BASE_TYPES if item in symbol_types or not symbol_types]
+        symbol_types = [
+            item
+            for item in _SCREEN_BASE_TYPES
+            if item in symbol_types or not symbol_types
+        ]
         if not symbol_types:
             symbol_types = list(_SCREEN_BASE_TYPES)
     if symbol_types:
@@ -3164,7 +3825,11 @@ def collect_snapshot_bundle(
         )
 
     enrichment_targets: list[str] = []
-    if intent == "stock_screen" and not skip_enrichment and not _cancelled(cancellation):
+    if (
+        intent == "stock_screen"
+        and not skip_enrichment
+        and not _cancelled(cancellation)
+    ):
         enrichment_targets = resolved_symbols[: max(int(enrichment_top_n), 0)]
         if enrichment_targets:
             snapshots.extend(
@@ -3187,7 +3852,8 @@ def collect_snapshot_bundle(
         symbols=resolved_symbols,
         requested=requested,
         universe_rows=universe_rows,
-        universe_source=universe_source or ("structured_symbols" if resolved_symbols else "unavailable"),
+        universe_source=universe_source
+        or ("structured_symbols" if resolved_symbols else "unavailable"),
         enrichment_targets=enrichment_targets,
         query=query,
         intent=intent,
@@ -3215,7 +3881,9 @@ def _constituents(snapshot: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not isinstance(snapshot, dict):
         return []
     facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
-    rows = facts.get("top_constituents") or facts.get("constituent_breadth_source") or []
+    rows = (
+        facts.get("top_constituents") or facts.get("constituent_breadth_source") or []
+    )
     return [dict(row) for row in rows if isinstance(row, dict)]
 
 
@@ -3240,7 +3908,9 @@ def _normalize_constituents(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "name": str(row.get("name") or symbol),
                 "amount": row.get("amount") or row.get("成交额"),
                 "market_cap": row.get("market_cap") or row.get("总市值"),
-                "latest_price": row.get("latest_price") or row.get("price") or row.get("最新价"),
+                "latest_price": row.get("latest_price")
+                or row.get("price")
+                or row.get("最新价"),
                 "pct_change": row.get("pct_change") or row.get("涨跌幅"),
                 "source": "sector_snapshot",
             }
@@ -3266,16 +3936,15 @@ def _bundle_result(
     # Execute the pinned suggested-fix worklist until every real action either
     # resolves its target or records an explicit exhaustion reason.  There is
     # deliberately no fixed retry/round count.
-    normalized_snapshots = [_normalize_snapshot_quality(snapshot) for snapshot in snapshots]
+    normalized_snapshots = [
+        _normalize_snapshot_quality(snapshot) for snapshot in snapshots
+    ]
     integrity_before = assess_integrity(normalized_snapshots, symbols)
     selected_profile = str(research_profile or "").strip().lower()
     normalized_intent = str(intent or "").strip()
-    profileless_uzi_command = (
-        normalized_intent == "quick_scan"
-        or (
-            normalized_intent.startswith("uzi_")
-            and normalized_intent not in _UZI_ROOT_ROUTE_INTENTS
-        )
+    profileless_uzi_command = normalized_intent == "quick_scan" or (
+        normalized_intent.startswith("uzi_")
+        and normalized_intent not in _UZI_ROOT_ROUTE_INTENTS
     )
     if not selected_profile and not profileless_uzi_command:
         raise ValueError("research_profile is required; choose lite, medium or deep")
@@ -3309,7 +3978,9 @@ def _bundle_result(
             if str(snapshot.get("symbol") or "").strip() not in route_failed_symbols
         ]
         recovery_symbols = [
-            symbol for symbol in symbols if str(symbol).strip() not in route_failed_symbols
+            symbol
+            for symbol in symbols
+            if str(symbol).strip() not in route_failed_symbols
         ]
         has_native_payload = any(
             isinstance((snapshot.get("facts") or {}).get("_uzi_raw_result"), dict)
@@ -3391,7 +4062,9 @@ def _bundle_result(
         strict_recovery = dict(qualitative_recovery)
     else:
         raise ValueError("research_profile must be lite, medium or deep")
-    normalized_snapshots = [_normalize_snapshot_quality(snapshot) for snapshot in normalized_snapshots]
+    normalized_snapshots = [
+        _normalize_snapshot_quality(snapshot) for snapshot in normalized_snapshots
+    ]
     integrity_after = assess_integrity(normalized_snapshots, symbols)
     integrity = {
         **integrity_after,
@@ -3488,37 +4161,56 @@ def _recovery_summary(
         if not isinstance(snapshot, dict):
             continue
         facts = snapshot.get("facts") if isinstance(snapshot.get("facts"), dict) else {}
-        recovery = facts.get("_uzi_recovery") if isinstance(facts.get("_uzi_recovery"), dict) else None
+        recovery = (
+            facts.get("_uzi_recovery")
+            if isinstance(facts.get("_uzi_recovery"), dict)
+            else None
+        )
         if recovery is not None:
-            attempts.append({
-                "stage": "mx_ddgs",
-                "symbol": snapshot.get("symbol"),
-                "snapshot_type": snapshot.get("snapshot_type"),
-                "status": recovery.get("status"),
-                "source_id": recovery.get("source"),
-                "query": recovery.get("query"),
-            })
-        playwright_fact = facts.get("_uzi_playwright_recovery") if isinstance(facts.get("_uzi_playwright_recovery"), dict) else None
+            attempts.append(
+                {
+                    "stage": "mx_ddgs",
+                    "symbol": snapshot.get("symbol"),
+                    "snapshot_type": snapshot.get("snapshot_type"),
+                    "status": recovery.get("status"),
+                    "source_id": recovery.get("source"),
+                    "query": recovery.get("query"),
+                }
+            )
+        playwright_fact = (
+            facts.get("_uzi_playwright_recovery")
+            if isinstance(facts.get("_uzi_playwright_recovery"), dict)
+            else None
+        )
         if playwright_fact is not None:
-            attempts.append({
-                "stage": "playwright",
-                "symbol": snapshot.get("symbol"),
-                "snapshot_type": snapshot.get("snapshot_type"),
-                "status": playwright_fact.get("status"),
-                "source_ids": playwright_fact.get("source_ids"),
-                "trigger_reason": playwright_fact.get("trigger_reason"),
-            })
+            attempts.append(
+                {
+                    "stage": "playwright",
+                    "symbol": snapshot.get("symbol"),
+                    "snapshot_type": snapshot.get("snapshot_type"),
+                    "status": playwright_fact.get("status"),
+                    "source_ids": playwright_fact.get("source_ids"),
+                    "trigger_reason": playwright_fact.get("trigger_reason"),
+                }
+            )
     return {
         "schema_version": "uzi-3.9.4-agent-os-v1",
         "stage_order": [
-            "primary_providers", "integrity_check", "mx_api", "ddgs",
-            "playwright", "suggested_fix_loop", "qualitative_agent_evidence",
+            "primary_providers",
+            "integrity_check",
+            "mx_api",
+            "ddgs",
+            "playwright",
+            "suggested_fix_loop",
+            "qualitative_agent_evidence",
             "integrity_recheck",
         ],
         "order": ["mx_api", "ddgs", "playwright"],
         "attempted": int(strict_payload.get("attempted") or 0) + len(attempts),
-        "succeeded": int(strict_payload.get("succeeded") or 0) + sum(row.get("status") == "available" for row in attempts),
-        "failed": int(strict_payload.get("failed") or 0) + sum(row.get("status") != "available" for row in attempts),
+        "succeeded": int(strict_payload.get("succeeded") or 0)
+        + sum(row.get("status") == "available" for row in attempts),
+        "failed": int(strict_payload.get("failed") or 0)
+        + sum(row.get("status") != "available" for row in attempts),
         "attempts": [*list(strict_payload.get("attempts") or []), *attempts],
         "strict_stage": strict_payload,
         "qualitative_stage": dict(qualitative or {}),
@@ -3537,22 +4229,29 @@ def _normalize_snapshot_quality(snapshot: dict[str, Any]) -> dict[str, Any]:
         else {}
     )
     normalized["facts"] = facts
-    declared = str(
-        normalized.get("quality_status")
-        or normalized.get("status")
-        or facts.get("availability")
-        or ""
-    ).strip().lower()
+    declared = (
+        str(
+            normalized.get("quality_status")
+            or normalized.get("status")
+            or facts.get("availability")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     if declared not in {"available", *_UNAVAILABLE_QUALITY_STATUSES}:
         declared = "degraded" if bool(normalized.get("degraded")) else "available"
     if bool(normalized.get("degraded")) and declared == "available":
         declared = "degraded"
-    if declared in _UNAVAILABLE_QUALITY_STATUSES and not bool(normalized.get("degraded")):
+    if declared in _UNAVAILABLE_QUALITY_STATUSES and not bool(
+        normalized.get("degraded")
+    ):
         normalized["degraded"] = True
     raw_result = facts.get("_uzi_raw_result")
     pipeline_meta = (
         raw_result.get("_pipeline")
-        if isinstance(raw_result, dict) and isinstance(raw_result.get("_pipeline"), dict)
+        if isinstance(raw_result, dict)
+        and isinstance(raw_result.get("_pipeline"), dict)
         else {}
     )
     raw_data = (
@@ -3560,11 +4259,11 @@ def _normalize_snapshot_quality(snapshot: dict[str, Any]) -> dict[str, Any]:
         if isinstance(raw_result, dict) and isinstance(raw_result.get("data"), dict)
         else {}
     )
-    raw_error = str(
-        (raw_result or {}).get("error")
-        or pipeline_meta.get("error")
-        or ""
-    ).strip() if isinstance(raw_result, dict) else ""
+    raw_error = (
+        str((raw_result or {}).get("error") or pipeline_meta.get("error") or "").strip()
+        if isinstance(raw_result, dict)
+        else ""
+    )
     quality_floor, pipeline_gaps, pipeline_reasons = _uzi_pipeline_quality_floor(
         snapshot_type=str(normalized.get("snapshot_type") or ""),
         symbol=str(
@@ -3572,7 +4271,9 @@ def _normalize_snapshot_quality(snapshot: dict[str, Any]) -> dict[str, Any]:
             or (raw_result or {}).get("ticker")
             or normalized.get("symbol")
             or ""
-        ) if isinstance(raw_result, dict) else str(normalized.get("symbol") or ""),
+        )
+        if isinstance(raw_result, dict)
+        else str(normalized.get("symbol") or ""),
         data=dict(raw_data),
         pipeline_meta=dict(pipeline_meta),
         error=raw_error,
@@ -3583,7 +4284,11 @@ def _normalize_snapshot_quality(snapshot: dict[str, Any]) -> dict[str, Any]:
         str(item).strip()
         for item in (
             list(normalized.get("degrade_reasons") or [])
-            + ([normalized.get("degrade_reason")] if normalized.get("degrade_reason") else [])
+            + (
+                [normalized.get("degrade_reason")]
+                if normalized.get("degrade_reason")
+                else []
+            )
             + list(facts.get("data_gap") or [])
             + pipeline_reasons
         )
@@ -3594,8 +4299,7 @@ def _normalize_snapshot_quality(snapshot: dict[str, Any]) -> dict[str, Any]:
     normalized["missing_fields"] = list(
         dict.fromkeys(
             str(item).strip()
-            for item in list(normalized.get("missing_fields") or [])
-            + pipeline_gaps
+            for item in list(normalized.get("missing_fields") or []) + pipeline_gaps
             if str(item).strip()
         )
     )
@@ -3608,9 +4312,10 @@ def _normalize_snapshot_quality(snapshot: dict[str, Any]) -> dict[str, Any]:
         or str(normalized.get("snapshot_type") or "") in {"sector", "policy", "macro"}
         else "symbol"
     )
-    normalized["data_period"] = str(
-        normalized.get("data_period") or normalized.get("snapshot_date") or ""
-    ) or None
+    normalized["data_period"] = (
+        str(normalized.get("data_period") or normalized.get("snapshot_date") or "")
+        or None
+    )
     return normalized
 
 

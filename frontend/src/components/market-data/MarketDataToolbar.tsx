@@ -43,9 +43,9 @@ export function MarketDataToolbar({ controller, onManual, onReport }: {
         <label htmlFor="mdc-cutoff"><span>截止时点</span><select id="mdc-cutoff" value={urlState.cutoff} onChange={(event) => controller.setUrlState({ cutoff: event.target.value })}>
           <option value="eod">市场本地日终</option><option value="now">当前时点</option>
         </select></label>
-        <button className="primary-button" type="submit" disabled={loading.identity || loading.coverage || !symbolDraft.trim()}>
+        <button className="primary-button mdc-toolbar-submit" type="submit" disabled={loading.identity || loading.coverage || !symbolDraft.trim()}>
           {loading.identity || loading.coverage ? <RefreshCw className="is-spinning" size={15} aria-hidden="true" /> : <Database size={15} aria-hidden="true" />}
-          解析并读取
+          <span className="mdc-toolbar-submit-label">解析并读取</span>
         </button>
       </form>
 

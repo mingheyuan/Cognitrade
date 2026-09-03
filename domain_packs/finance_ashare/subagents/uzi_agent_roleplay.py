@@ -41,7 +41,15 @@ PERSONAS_DIR = (
     / "personas"
 )
 _SIGNALS = {"bullish", "bearish", "neutral", "skip", "insufficient_evidence"}
-_CONCRETE_FACT = re.compile(r"\d|数据缺口|能力圈|不适合|非A股|非 A 股|未取得|缺少|行业|市场")
+_CONCRETE_FACT = re.compile(
+    r"\d|数据缺口|能力圈|不适合|非A股|非 A 股|未取得|缺少|未见|未命中|"
+    r"无法确认|不可用|未披露|空缺|不足|行业|市场"
+)
+_EXPLICIT_ABSTENTION = re.compile(
+    r"\bskip\b|跳过|不追|不参与|暂不参与|放弃评估|规则结果|规则未命中|"
+    r"证据不足|数据不足|缺少|未取得|无法确认|不在能力圈",
+    re.IGNORECASE,
+)
 _GROUP_BATCHES: tuple[tuple[str, frozenset[str]], ...] = (
     ("A+B · 经典价值与成长", frozenset({"A", "B"})),
     ("C · 宏观对冲", frozenset({"C"})),
@@ -68,8 +76,20 @@ class AgentRoleplayVote(BaseModel):
     def validate_override(self) -> "AgentRoleplayVote":
         if self.override_rule_engine and not str(self.override_reason or "").strip():
             raise ValueError("override_reason is required when overriding the rule engine")
-        if not _CONCRETE_FACT.search(self.headline):
-            raise ValueError("headline must cite a concrete number, observed fact, or explicit data gap")
+        rationale = " ".join(
+            str(value or "")
+            for value in (self.headline, self.reasoning, self.comment, self.verdict)
+        )
+        has_grounding = bool(_CONCRETE_FACT.search(rationale))
+        has_explicit_abstention = (
+            self.signal in {"skip", "insufficient_evidence"}
+            and bool(_EXPLICIT_ABSTENTION.search(rationale))
+        )
+        if not has_grounding and not has_explicit_abstention:
+            raise ValueError(
+                "vote rationale must cite a concrete number, observed fact, explicit "
+                "data gap, or an explicit abstention for skip/insufficient_evidence"
+            )
         return self
 
 
@@ -515,7 +535,10 @@ def _validate_batch_members(
     actual_ids = [vote.investor_id for vote in batch.votes]
     if batch.group_label.strip() == "":
         raise ValueError("group_label is empty")
-    if expected_group_label is not None and batch.group_label != expected_group_label:
+    if expected_group_label is not None and not _equivalent_group_label(
+        batch.group_label,
+        expected_group_label,
+    ):
         raise ValueError(
             f"group label mismatch; expected={expected_group_label!r}; "
             f"actual={batch.group_label!r}"
@@ -527,6 +550,23 @@ def _validate_batch_members(
             f"batch membership mismatch; missing={sorted(set(expected_ids) - set(actual_ids))}; "
             f"extra={sorted(set(actual_ids) - set(expected_ids))}"
         )
+
+
+def _equivalent_group_label(actual: str, expected: str) -> bool:
+    """Accept the canonical label or its exact group-code prefix.
+
+    The prose after ``·`` is display metadata. Membership remains strictly
+    checked below, so an LLM returning ``G+H+I`` instead of the full Chinese
+    label cannot change which investors were evaluated.
+    """
+
+    normalized_actual = re.sub(r"\s+", "", actual.strip())
+    normalized_expected = re.sub(r"\s+", "", expected.strip())
+    if normalized_actual == normalized_expected:
+        return True
+    expected_code = normalized_expected.split("·", 1)[0]
+    actual_code = normalized_actual.split("·", 1)[0]
+    return bool(actual_code) and actual_code == expected_code
 
 
 def _roleplay_gap(

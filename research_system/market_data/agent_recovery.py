@@ -17,6 +17,8 @@ from research_system.market_data.dimension_contracts import (
     DimensionRegistry,
 )
 from research_system.market_data.ingestion import SnapshotIngestionService
+from research_system.market_data.historical import capability_for_dimension
+from research_system.market_data.contracts import cutoff_at_for_date
 from research_system.market_data.models import (
     MarketDataCollectionJob,
     MarketDataCollectionTask,
@@ -54,8 +56,8 @@ def recover_collection_job_draft(
     """Append Agent-recovered current-day snapshots for one collection job.
 
     The immutable rows selected by a previously published Bundle are never
-    changed.  Historical scopes are intentionally skipped because current web
-    search or browser evidence cannot prove what was visible at an old cutoff.
+    changed. Historical scopes retry only source-bounded PIT providers; live
+    WebSearch/browser recovery remains disabled for those scopes.
     """
 
     provider_recovery = (
@@ -77,21 +79,20 @@ def recover_collection_job_draft(
     )
     prepared = _load_draft_inputs(database, job_id=job_id, registry=registry)
     if not prepared["scopes"]:
-        # Current web/browser evidence cannot prove what was visible at an old
-        # cutoff.  Treat a historical-only request as an explicit, disclosed
-        # no-op so the immutable historical draft can still be frozen degraded.
+        historical_attempted = int(provider_recovery.get("attempted_dimensions") or 0)
+        historical_persisted = int(provider_recovery.get("persisted_snapshot_count") or 0)
         return {
             "schema_version": "uzi-3.9.4-data-center-agent-recovery-v1",
-            "attempted": 0,
-            "succeeded": 0,
-            "failed": 0,
-            "persisted_snapshot_count": 0,
-            "persisted_snapshots": [],
+            "attempted": historical_attempted,
+            "succeeded": historical_persisted,
+            "failed": max(0, historical_attempted - historical_persisted),
+            "persisted_snapshot_count": historical_persisted,
+            "persisted_snapshots": list(provider_recovery.get("persisted_snapshots") or []),
             "skipped_historical_scopes": prepared["skipped_historical_scopes"],
             "historical_only": True,
             "disclosure": (
-                "历史截面不能使用当前 WebSearch/MX/浏览器证据回填，"
-                "已保留现有快照并按降级质量披露"
+                "历史截面已重试可按截止日查询的结构化 provider；"
+                "当前 WebSearch/MX/浏览器证据未用于回填历史"
             ),
             "coverage": [],
             "provider_recovery": provider_recovery,
@@ -188,6 +189,10 @@ def _recover_with_scoped_providers(
         ):
             collector_types.insert(0, "market")
         try:
+            local_today = datetime.now(timezone.utc).astimezone(
+                ZoneInfo(scope["exchange_timezone"])
+            ).date()
+            historical = scope["as_of_date"] != local_today
             rows = collector(
                 query="数据中心 Agent 补采前置：按缺口重试 UZI 真实 provider",
                 symbols=[scope["symbol"]],
@@ -198,6 +203,16 @@ def _recover_with_scoped_providers(
                 uzi_root_route=False,
                 no_resume=False,
                 cancellation=cancellation,
+                **(
+                    {
+                        "as_of_date": scope["as_of_date"],
+                        "cutoff_at": cutoff_at_for_date(
+                            scope["as_of_date"], scope["exchange_timezone"]
+                        ),
+                    }
+                    if historical
+                    else {}
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - one provider wave must not hide Agent fallback
             failures.append(
@@ -296,50 +311,69 @@ def _provider_gap_scopes(
             current_local_date = datetime.now(timezone.utc).astimezone(
                 ZoneInfo(exemplar.exchange_timezone)
             ).date()
-            if not (exemplar.start_date <= current_local_date <= exemplar.end_date):
-                continue
-            coverage = resolver.coverage(
-                symbol=symbol,
-                market=exemplar.market,
-                as_of_date=current_local_date,
-                exchange_timezone=exemplar.exchange_timezone,
-            )
-            uzi_issue_dimensions = {
-                str(issue.get("dimension") or "")
-                for issue in list(coverage.uzi_integrity.get("issues") or [])
-                if isinstance(issue, dict)
-                and str(issue.get("dimension") or "") != "overall"
-            }
-            gap_dimensions = [
-                item.dimension
-                for item in coverage.dimensions
-                if item.dimension in {task.dimension for task in symbol_tasks}
-                and (
-                    not item.eligible
-                    or item.dimension in uzi_issue_dimensions
-                    or any(
-                        marker.endswith("_") and item.dimension.startswith(marker)
-                        for marker in uzi_issue_dimensions
-                    )
-                )
-            ]
-            if not gap_dimensions:
-                continue
-            task_ids = {task.dimension: task.id for task in symbol_tasks}
-            scopes.append(
+            dates = sorted(
                 {
-                    "symbol": symbol,
-                    "market": exemplar.market,
-                    "exchange_timezone": exemplar.exchange_timezone,
-                    "as_of_date": current_local_date,
-                    "dimensions": gap_dimensions,
-                    "snapshot_types": [
-                        registry.get(dimension).snapshot_type
-                        for dimension in gap_dimensions
-                    ],
-                    "task_ids": task_ids,
+                    task.start_date + timedelta(days=offset)
+                    for task in symbol_tasks
+                    for offset in range((task.end_date - task.start_date).days + 1)
                 }
             )
+            for as_of_date in dates:
+                scoped_tasks = [
+                    task
+                    for task in symbol_tasks
+                    if task.start_date <= as_of_date <= task.end_date
+                    and (
+                        as_of_date == current_local_date
+                        or capability_for_dimension(task.dimension).can_reconstruct
+                    )
+                ]
+                if not scoped_tasks:
+                    continue
+                coverage = resolver.coverage(
+                    symbol=symbol,
+                    market=exemplar.market,
+                    as_of_date=as_of_date,
+                    exchange_timezone=exemplar.exchange_timezone,
+                )
+                uzi_issue_dimensions = {
+                    str(issue.get("dimension") or "")
+                    for issue in list(coverage.uzi_integrity.get("issues") or [])
+                    if isinstance(issue, dict)
+                    and str(issue.get("dimension") or "") != "overall"
+                }
+                requested_dimensions = {task.dimension for task in scoped_tasks}
+                gap_dimensions = [
+                    item.dimension
+                    for item in coverage.dimensions
+                    if item.dimension in requested_dimensions
+                    and (
+                        not item.eligible
+                        or item.dimension in uzi_issue_dimensions
+                        or any(
+                            marker.endswith("_")
+                            and item.dimension.startswith(marker)
+                            for marker in uzi_issue_dimensions
+                        )
+                    )
+                ]
+                if not gap_dimensions:
+                    continue
+                task_ids = {task.dimension: task.id for task in scoped_tasks}
+                scopes.append(
+                    {
+                        "symbol": symbol,
+                        "market": exemplar.market,
+                        "exchange_timezone": exemplar.exchange_timezone,
+                        "as_of_date": as_of_date,
+                        "dimensions": gap_dimensions,
+                        "snapshot_types": [
+                            registry.get(dimension).snapshot_type
+                            for dimension in gap_dimensions
+                        ],
+                        "task_ids": task_ids,
+                    }
+                )
     return scopes
 
 

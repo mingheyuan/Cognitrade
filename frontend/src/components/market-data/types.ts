@@ -194,6 +194,14 @@ export interface CollectionProgress {
   skipped: number
   child_complete?: number
   child_total?: number
+  provider?: {
+    as_of_date?: string
+    phase: string
+    snapshot_type?: string | null
+    completed: number
+    total: number
+    updated_at?: string
+  }
 }
 
 export interface CollectionTask {
@@ -214,6 +222,12 @@ export interface CollectionTask {
   snapshot_id?: string | null
   resolution_status?: string
   degraded_count?: number
+  collection_outcome?: 'available' | 'partial' | 'verified_empty' | 'retryable_failure' | 'unavailable' | string | null
+  reason_code?: string | null
+  result_message?: string | null
+  provider_status?: string | null
+  field_coverage?: Record<string, unknown>
+  source_trace?: Array<Record<string, unknown>>
 }
 
 interface CollectionResolutionSummary {

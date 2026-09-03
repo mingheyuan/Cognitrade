@@ -63,6 +63,7 @@ class MarketDataGateway:
                 instrument,
                 start_date=start_date,
                 end_date=end_date,
+                as_of_date=as_of_date,
             )
         elif instrument.asset_type == AssetType.INDEX:
             rows, source = self._index_rows(
@@ -73,8 +74,12 @@ class MarketDataGateway:
         else:
             if self.market_data is None:
                 raise StrategyDomainError("market_data_gateway_unavailable", "行情服务不可用", status_code=503)
-            payload = self.market_data.get_market_data(instrument.code, refresh=False)
-            rows = list(payload.get("sections", {}).get("kline", {}).get("bars") or [])
+            payload = self.market_data.get_market_data(
+                instrument.code,
+                refresh=False,
+                as_of_date=as_of_date,
+            )
+            rows = self._kline_rows(payload)
             source = dict(payload.get("sources", {}).get("kline") or {})
         bars = self._normalise(rows, start_date=start_date, end_date=end_date, asset_type=instrument.asset_type)
         if not bars:
@@ -193,11 +198,16 @@ class MarketDataGateway:
         *,
         start_date: date,
         end_date: date,
+        as_of_date: date,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         if self.market_data is not None:
             try:
-                payload = self.market_data.get_market_data(instrument.code, refresh=False)
-                rows = list(payload.get("sections", {}).get("kline", {}).get("bars") or [])
+                payload = self.market_data.get_market_data(
+                    instrument.code,
+                    refresh=False,
+                    as_of_date=as_of_date,
+                )
+                rows = self._kline_rows(payload)
                 if rows:
                     return rows, dict(payload.get("sources", {}).get("kline") or {})
             except Exception:
@@ -241,6 +251,22 @@ class MarketDataGateway:
             status_code=409,
             details={"provider_attempts": diagnostics},
         )
+
+    @staticmethod
+    def _kline_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        """Read both legacy ``bars`` and Bundle-native ``ohlcv`` projections."""
+
+        sections = payload.get("sections") if isinstance(payload.get("sections"), dict) else {}
+        kline = sections.get("kline") if isinstance(sections.get("kline"), dict) else {}
+        history = kline.get("history") if isinstance(kline.get("history"), dict) else {}
+        rows = (
+            kline.get("bars")
+            or kline.get("ohlcv")
+            or history.get("bars")
+            or history.get("ohlcv")
+            or []
+        )
+        return [dict(row) for row in rows if isinstance(row, dict)]
 
     @staticmethod
     def _index_rows(

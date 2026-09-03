@@ -281,7 +281,22 @@ class ReportOrchestrationTests(unittest.TestCase):
             )
             self.assertEqual(
                 service._batch_timeout_seconds(
-                    {"dates": ["2026-08-13", "2026-08-14"]}
+                    {"dates": ["2026-08-14"]},
+                    profile="lite",
+                ),
+                60 * 60,
+            )
+            self.assertEqual(
+                service._batch_timeout_seconds(
+                    {"dates": ["2026-08-14"]},
+                    profile="deep",
+                ),
+                3 * 60 * 60,
+            )
+            self.assertEqual(
+                service._batch_timeout_seconds(
+                    {"dates": ["2026-08-13", "2026-08-14"]},
+                    profile="deep",
                 ),
                 28_800,
             )
@@ -586,14 +601,32 @@ class ReportOrchestrationTests(unittest.TestCase):
         self.assertEqual(first_report["status"], "final_partial")
         self.assertEqual(self.holding_service.model_calls, 10)
 
+        with self.database.session() as session:
+            stored_job = session.get(OrchestrationJob, first["id"])
+            self.assertIsNotNone(stored_job)
+            progress = dict(stored_job.progress_json or {})
+            progress["errors"] = [
+                {
+                    "as_of_date": "2026-08-03",
+                    "type": "TimeoutError",
+                    "message": "old attempt timed out",
+                }
+            ]
+            stored_job.progress_json = progress
+            stored_job.error_summary = "old attempt timed out"
+
         retried = self.orchestration.retry(
             self.owner,
             first["id"],
             symbols=["600003"],
         )
+        self.assertIsNone(retried["error_summary"])
+        self.assertIsNone(retried["completed_at"])
         second = self._wait_job(retried["id"])
         self.assertEqual(second["status"], "completed")
         self.assertEqual(second["progress"]["failed_symbols"], [])
+        self.assertEqual(second["progress"]["errors"], [])
+        self.assertIsNone(second["error_summary"])
         self.assertEqual(self.holding_service.model_calls, 11)
         self.assertEqual(len(second["attempts"]), 2)
         self.assertEqual(second["attempts"][1]["selected_nodes"], ["600003"])
@@ -614,6 +647,18 @@ class ReportOrchestrationTests(unittest.TestCase):
     def test_full_rerun_requires_confirmation_and_reuses_canonical_uzi(self) -> None:
         assignment = self._assignment("110011")
         first = self._run_job(assignment["id"], "source-a")
+        manifest_calls: list[str] = []
+
+        def frozen_report_manifest(_batch_id: str, **_scope):
+            manifest_calls.append("frozen")
+            return None
+
+        def freeze_report_inputs(_symbols, **_kwargs):
+            manifest_calls.append("freeze")
+            return None
+
+        self.holding_service.frozen_report_manifest = frozen_report_manifest
+        self.holding_service.freeze_report_inputs = freeze_report_inputs
         with self.assertRaises(StrategyDomainError) as captured:
             self.orchestration.retry(
                 self.owner,
@@ -631,6 +676,7 @@ class ReportOrchestrationTests(unittest.TestCase):
         )
         completed = self._wait_job(rerun["id"])
         self.assertEqual(completed["status"], "completed")
+        self.assertEqual(manifest_calls, ["freeze"])
         self.assertEqual(self.holding_service.model_calls, 10)
         self.assertEqual(len(completed["attempts"]), 2)
         latest = self.orchestration.get_report_set(

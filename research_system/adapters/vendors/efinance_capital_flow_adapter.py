@@ -17,15 +17,20 @@ class EFinanceCapitalFlowAdapter:
 
     vendor_name = "efinance"
 
-    def get_capital_flow_snapshot(self, *, symbol: str) -> dict[str, Any]:
+    def get_capital_flow_snapshot(
+        self, *, symbol: str, as_of_date: date | None = None
+    ) -> dict[str, Any]:
         provider_symbol = self._provider_symbol(symbol)
         bounded_error: Exception | None = None
         try:
-            rows = self._bounded_history_rows(provider_symbol)
+            rows = self._bounded_history_rows(
+                provider_symbol,
+                limit=420 if as_of_date is not None else 60,
+            )
         except Exception as exc:
             bounded_error = exc
             rows = []
-        if not rows:
+        if not rows and as_of_date is None:
             # Retain the installed efinance SDK as a compatibility fallback.
             # Current efinance versions request the complete history with
             # lmt=100000, which EastMoney may disconnect before returning.  A
@@ -44,6 +49,13 @@ class EFinanceCapitalFlowAdapter:
             rows = list(history.to_dict("records"))
 
         rows = [self._normalize_row(row) for row in rows]
+        if as_of_date is not None:
+            rows = [
+                row
+                for row in rows
+                if self._date_value(row) is not None
+                and self._date_value(row) <= as_of_date
+            ]
         rows.sort(key=self._date_sort_key)
         main_fund_flow_20d = rows[-20:]
         recent_flows = list(reversed(main_fund_flow_20d))
@@ -64,8 +76,20 @@ class EFinanceCapitalFlowAdapter:
             "main_flow_rank_status": "not_provided_by_efinance_history_bill",
         }
 
+    @classmethod
+    def _date_value(cls, row: dict[str, Any]) -> date | None:
+        normalized = cls._date_sort_key(row).replace("/", "-")
+        for fmt in ("%Y-%m-%d", "%Y%m%d"):
+            try:
+                return datetime.strptime(normalized[:10], fmt).date()
+            except ValueError:
+                continue
+        return None
+
     @staticmethod
-    def _bounded_history_rows(provider_symbol: str) -> list[dict[str, Any]]:
+    def _bounded_history_rows(
+        provider_symbol: str, *, limit: int = 60
+    ) -> list[dict[str, Any]]:
         market = "1" if provider_symbol.startswith(("5", "6", "9")) else "0"
         fields = {
             "f51": "日期",
@@ -85,7 +109,7 @@ class EFinanceCapitalFlowAdapter:
         response = requests.get(
             "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
             params={
-                "lmt": "60",
+                "lmt": str(max(20, min(int(limit), 500))),
                 "klt": "101",
                 "secid": f"{market}.{provider_symbol}",
                 "fields1": "f1,f2,f3,f7",

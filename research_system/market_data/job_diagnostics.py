@@ -10,6 +10,7 @@ _GAP_STATUSES = {"failed", "partial", "completed_partial", "data_gap"}
 _ACTIVE_STATUSES = {"queued", "pending", "running", "processing", "leased"}
 _SUCCESS_STATUSES = {"completed", "succeeded", "published"}
 _SKIPPED_STATUSES = {"skipped", "cancelled"}
+_NON_BLOCKING_GAP_CODES = {"strict_contract_gap", "historical_partial"}
 
 
 def classify_collection_failure(
@@ -34,7 +35,9 @@ def classify_collection_failure(
     metric_values = dict(metrics or {})
     raw_data_present = bool(metric_values.get("raw_data_present"))
 
-    if code == "strict_contract_gap" and raw_data_present:
+    if code == "historical_partial" and raw_data_present:
+        kind, stage, label = "partial_available", "acquisition", "UZI 核心可用 · 可选字段缺失"
+    elif code == "strict_contract_gap" and raw_data_present:
         kind, stage, label = "audit_only", "audit", "UZI 可用 · 扩展审计提示"
     elif "timeout" in code or "timeout" in provider or "timeout" in lowered:
         kind, stage, label = "source_timeout", "acquisition", "数据源超时"
@@ -102,7 +105,7 @@ def task_is_retryable(item: Any) -> bool:
     return bool(
         _status(item) in _GAP_STATUSES
         and str(_value(item, "last_error_code", "") or "").lower()
-        != "strict_contract_gap"
+        not in _NON_BLOCKING_GAP_CODES
         and _value(item, "retryable", False)
         and _attempt(item) < _max_attempts(item)
     )
@@ -112,7 +115,7 @@ def task_is_blocked(item: Any) -> bool:
     return bool(
         _status(item) in _GAP_STATUSES
         and str(_value(item, "last_error_code", "") or "").lower()
-        != "strict_contract_gap"
+        not in _NON_BLOCKING_GAP_CODES
         and not task_is_retryable(item)
     )
 
@@ -162,7 +165,7 @@ def summarize_tasks(tasks: Iterable[Any]) -> dict[str, Any]:
     active = sum(_status(task) in _ACTIVE_STATUSES for task in task_rows)
     audit_only = sum(
         str(_value(task, "last_error_code", "") or "").lower()
-        == "strict_contract_gap"
+        in _NON_BLOCKING_GAP_CODES
         for task in task_rows
     )
     succeeded = sum(_status(task) in _SUCCESS_STATUSES for task in task_rows) + audit_only

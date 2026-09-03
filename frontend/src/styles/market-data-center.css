@@ -78,6 +78,7 @@
   position: relative;
   z-index: 2;
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
@@ -90,7 +91,9 @@
 
 .mdc-security-form {
   display: grid;
-  grid-template-columns: minmax(150px, 1.2fr) minmax(100px, .65fr) minmax(145px, .85fr) minmax(135px, .8fr) auto;
+  flex: 1 1 688px;
+  min-width: 0;
+  grid-template-columns: minmax(150px, 1.2fr) minmax(100px, .65fr) minmax(145px, .85fr) minmax(135px, .8fr) minmax(126px, max-content);
   gap: 8px;
   align-items: end;
 }
@@ -163,10 +166,33 @@
   gap: 8px;
 }
 
+.mdc-toolbar-submit,
+.mdc-toolbar-submit-label {
+  white-space: nowrap;
+}
+
+.mdc-toolbar-submit {
+  min-width: 126px;
+}
+
 .mdc-toolbar-side {
   display: grid;
+  flex: 0 0 420px;
+  margin-left: auto;
+  min-width: 0;
+  width: min(100%, 420px);
   justify-items: end;
   gap: 8px;
+}
+
+.mdc-toolbar-actions {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mdc-toolbar-actions > button {
+  min-width: 0;
 }
 
 .mdc-freeze-block-reason {
@@ -180,7 +206,8 @@
 
 .mdc-instrument-identity {
   display: grid;
-  min-width: 240px;
+  min-width: 0;
+  width: 100%;
   justify-items: end;
   gap: 2px;
 }
@@ -194,14 +221,22 @@
 }
 
 .mdc-instrument-identity > strong {
+  max-width: 100%;
+  overflow: hidden;
   color: var(--text-muted);
   font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mdc-instrument-identity > small {
+  max-width: 100%;
+  overflow: hidden;
   color: var(--text-faint);
   font-family: var(--font-mono);
   font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mdc-dismissible-message {
@@ -926,6 +961,7 @@
 .mdc-progress-track { height: 5px; margin-top: 5px; border-radius: 999px; background: var(--border); overflow: hidden; }
 .mdc-progress-track span { display: block; height: 100%; border-radius: inherit; background: var(--mint); transition: width 220ms ease-out; }
 .mdc-progress-breakdown { display: flex; gap: 8px; margin-top: 5px; color: var(--text-faint); font-size: 7px; }
+.mdc-provider-progress { display: block; margin-top: 5px; color: var(--mint); font-family: var(--font-mono); font-size: 7px; }
 
 .mdc-bundle-layout { grid-template-columns: minmax(360px, .85fr) minmax(0, 1.15fr); }
 .mdc-bundle-list { display: grid; }
@@ -1116,8 +1152,9 @@
 
 @media (max-width: 1180px) {
   .mdc-toolbar { align-items: stretch; flex-direction: column; }
+  .mdc-security-form { flex: none; }
   .mdc-toolbar-actions { justify-content: flex-start; }
-  .mdc-toolbar-side { justify-items: start; }
+  .mdc-toolbar-side { flex: none; width: 100%; margin-left: 0; justify-items: start; }
   .mdc-instrument-identity { justify-items: start; }
   .mdc-readiness { grid-template-columns: 1fr; }
   .mdc-readiness-primary { border-right: 0; border-bottom: 1px solid var(--border); }
@@ -1209,6 +1246,10 @@
   .mdc-manifest-holdings li strong { grid-column: 2; }
   .mdc-freeze-scope-list li { grid-template-columns: 1fr auto; }
   .mdc-freeze-scope-list li small { grid-column: 1; }
+}
+
+@media (max-width: 420px) {
+  .mdc-toolbar-actions { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

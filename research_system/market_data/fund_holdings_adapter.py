@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from datetime import date, datetime, time, timezone
 from typing import Any
@@ -194,9 +195,11 @@ class FundTopHoldingsSnapshotAdapter:
 
         evidence = self._evidence(
             lineage=lineage,
+            source_refs=source_refs,
             envelope=envelope,
             content=content,
             candidate=candidate,
+            holdings=holdings,
             observed_at=observed,
             pit_safe=not semantic_errors,
             visibility_mode=visibility_mode,
@@ -269,6 +272,10 @@ class FundTopHoldingsSnapshotAdapter:
                 "pit_safe": status == SnapshotStatus.AVAILABLE,
                 "visibility_mode": visibility_mode,
                 "fund_identity": fund_identity.model_dump(mode="json"),
+                "historical_reconstruction": dict(
+                    content.get("historical_reconstruction") or {}
+                ),
+                "provider_errors": list(content.get("provider_errors") or []),
             },
             field_sources={"$": "fund_snapshot_skill"},
             evidence=evidence,
@@ -450,9 +457,11 @@ class FundTopHoldingsSnapshotAdapter:
     def _evidence(
         *,
         lineage: list[FundHoldingsLineage],
+        source_refs: list[dict[str, Any]],
         envelope: Mapping[str, Any],
         content: Mapping[str, Any],
         candidate: Mapping[str, Any] | None,
+        holdings: list[FundTopHolding],
         observed_at: datetime,
         pit_safe: bool,
         visibility_mode: str,
@@ -466,20 +475,50 @@ class FundTopHoldingsSnapshotAdapter:
             else EvidenceGrade.C
         )
         for item in lineage:
-            content_hash = canonical_hash(
+            source = next(
+                (
+                    ref
+                    for ref in source_refs
+                    if str(
+                        ref.get("id") or ref.get("uri") or ref.get("locator") or ""
+                    ).strip()
+                    == item.source_id
+                ),
+                {},
+            )
+            normalized_holdings_binding_hash = canonical_hash(
                 {
-                    "source_id": item.source_id,
-                    "role": item.role,
-                    "candidate": dict(candidate or {}),
-                    "artifact_content_hash": envelope.get("content_hash"),
-                    "content": dict(content),
+                    "lineage": item.model_dump(mode="json"),
+                    "holdings": [row.model_dump(mode="json") for row in holdings],
                 }
+            )
+            native_pdf = FundTopHoldingsSnapshotAdapter._immutable_source(source)
+            content_hash = (
+                str(source.get("content_hash") or "").strip().lower()
+                if native_pdf
+                else canonical_hash(
+                    {
+                        "source_id": item.source_id,
+                        "role": item.role,
+                        "candidate": dict(candidate or {}),
+                        "artifact_content_hash": envelope.get("content_hash"),
+                        "content": dict(content),
+                    }
+                )
+            )
+            content_ref = (
+                str(source.get("content_ref") or "").strip() if native_pdf else None
             )
             rows.append(
                 EvidenceInput(
                     provider=item.provider,
+                    source_url=content_ref,
                     source_kind="official_disclosure",
+                    title=str(source.get("title") or source.get("report_id") or "").strip()
+                    or None,
+                    mime_type="application/pdf" if native_pdf else None,
                     content_hash=content_hash,
+                    content_ref=content_ref,
                     published_at=item.published_at,
                     observed_at=max(observed_at, item.published_at),
                     grade=grade,
@@ -492,6 +531,7 @@ class FundTopHoldingsSnapshotAdapter:
                         "publication_time_basis": item.publication_time_basis,
                         "field_paths": ["holdings", "lineage"],
                         "immutable_content": True,
+                        "normalized_holdings_binding_hash": normalized_holdings_binding_hash,
                     },
                 )
             )
@@ -660,12 +700,18 @@ class FundTopHoldingsSnapshotAdapter:
 
     @staticmethod
     def _immutable_source(source: Mapping[str, Any]) -> bool:
+        content_hash = str(source.get("content_hash") or "").strip()
+        content_ref = str(source.get("content_ref") or "").strip()
+        source_id = str(
+            source.get("id") or source.get("uri") or source.get("locator") or ""
+        ).strip()
         return bool(
             source.get("immutable_proof") is True
-            and (
-                source.get("content_hash")
-                or source.get("content_ref")
-                or source.get("inline_content")
+            and re.fullmatch(r"[0-9a-fA-F]{64}", content_hash)
+            and source_id == content_ref
+            and re.fullmatch(
+                r"https://pdf\.dfcfw\.com/pdf/H2_[A-Za-z0-9_-]+_1\.pdf",
+                content_ref,
             )
         )
 

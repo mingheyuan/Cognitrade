@@ -10,7 +10,9 @@ from research_system.market_data.job_diagnostics import (
 
 
 class MarketDataJobDiagnosticsTests(unittest.TestCase):
-    def test_failure_classifier_separates_raw_contract_gap_from_source_outage(self) -> None:
+    def test_failure_classifier_separates_raw_contract_gap_from_source_outage(
+        self,
+    ) -> None:
         normalized = classify_collection_failure(
             error_code="strict_contract_gap",
             error_message="field ohlcv has 60 items; requires at least 260",
@@ -63,6 +65,33 @@ class MarketDataJobDiagnosticsTests(unittest.TestCase):
         self.assertEqual(summary["audit_only"], 1)
         self.assertEqual(summary["succeeded"], 2)
         self.assertEqual(summary["by_error_code"][0]["count"], 1)
+
+    def test_historical_partial_is_usable_and_neither_retryable_nor_blocked(
+        self,
+    ) -> None:
+        task = {
+            "status": "partial",
+            "dimension": "10_valuation",
+            "retryable": False,
+            "attempt_count": 1,
+            "max_attempts": 3,
+            "last_error_code": "historical_partial",
+            "last_error_message": "核心 UZI 数据可用；历史分位样本不足",
+        }
+
+        summary = summarize_tasks([task])
+        classified = classify_collection_failure(
+            error_code="historical_partial",
+            error_message=task["last_error_message"],
+            provider_status="degraded",
+            metrics={"raw_data_present": True},
+        )
+
+        self.assertEqual(summary["succeeded"], 1)
+        self.assertEqual(summary["audit_only"], 1)
+        self.assertEqual(summary["retryable_failed"], 0)
+        self.assertEqual(summary["blocked_failed"], 0)
+        self.assertEqual(classified["failure_kind"], "partial_available")
 
     def test_fund_portfolio_uses_latest_child_wave_for_strict_slot_counts(self) -> None:
         dimensions = [f"dimension_{index}" for index in range(22)]
@@ -122,7 +151,9 @@ class MarketDataJobDiagnosticsTests(unittest.TestCase):
         self.assertEqual(summary["blocked_slots"], 63)
         self.assertEqual(summary["attempt"], 2)
 
-    def test_fund_portfolio_counts_running_child_slots_before_parent_settles(self) -> None:
+    def test_fund_portfolio_counts_running_child_slots_before_parent_settles(
+        self,
+    ) -> None:
         dimensions = [f"dimension_{index}" for index in range(22)]
         holdings = [{"symbol": f"60000{index}.SH"} for index in range(10)]
         tasks = [

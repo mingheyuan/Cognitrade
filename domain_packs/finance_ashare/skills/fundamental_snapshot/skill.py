@@ -1,16 +1,30 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
-from research_system.adapters.vendors.akshare_fundamental_adapter import AkShareFundamentalAdapter
-from research_system.adapters.vendors.baostock_fundamental_adapter import BaoStockFundamentalAdapter
+from research_system.adapters.vendors.akshare_fundamental_adapter import (
+    AkShareFundamentalAdapter,
+)
+from research_system.adapters.vendors.baostock_fundamental_adapter import (
+    BaoStockFundamentalAdapter,
+)
 from research_system.adapters.vendors.market_router import MarketRouter
 from research_system.adapters.vendors.mx_api_adapter import MxApiAdapter
-from research_system.adapters.vendors.provider_execution import execute_provider_chain, failure_facts
-from research_system.adapters.vendors.provider_registry import ProviderSpec, VendorProviderRegistry
-from research_system.adapters.vendors.tushare_fundamental_adapter import TuShareFundamentalAdapter
-from research_system.adapters.vendors.yfinance_fundamental_adapter import YFinanceFundamentalAdapter
+from research_system.adapters.vendors.provider_execution import (
+    execute_provider_chain,
+    failure_facts,
+)
+from research_system.adapters.vendors.provider_registry import (
+    ProviderSpec,
+    VendorProviderRegistry,
+)
+from research_system.adapters.vendors.tushare_fundamental_adapter import (
+    TuShareFundamentalAdapter,
+)
+from research_system.adapters.vendors.yfinance_fundamental_adapter import (
+    YFinanceFundamentalAdapter,
+)
 from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
 
 
@@ -24,18 +38,32 @@ class FundamentalSnapshotSkill:
     ) -> None:
         self.provider_registry = provider_registry
         self.market_router = market_router or MarketRouter()
-        self.adapters: dict[str, Any] = {"akshare_fundamental": AkShareFundamentalAdapter()}
+        self.adapters: dict[str, Any] = {
+            "akshare_fundamental": AkShareFundamentalAdapter()
+        }
         if provider_registry and provider_registry.settings.mx_api_key:
-            self.adapters["mx_api_fundamental"] = MxApiAdapter(provider_registry.settings.mx_api_key)
+            self.adapters["mx_api_fundamental"] = MxApiAdapter(
+                provider_registry.settings.mx_api_key
+            )
         token = provider_registry.settings.tushare_token if provider_registry else None
         if token:
             self.adapters["tushare_fundamental"] = TuShareFundamentalAdapter(token)
         self.adapters["baostock_fundamental"] = BaoStockFundamentalAdapter()
-        if provider_registry and provider_registry.get_provider_chain("fundamental", "global_equity"):
+        if provider_registry and provider_registry.get_provider_chain(
+            "fundamental", "global_equity"
+        ):
             self.adapters["yfinance_fundamental"] = YFinanceFundamentalAdapter()
 
-    def run(self, *, query: str, symbol: str | None = None) -> dict[str, Any]:
-        snapshot_date = date.today().isoformat()
+    def run(
+        self,
+        *,
+        query: str,
+        symbol: str | None = None,
+        as_of_date: date | None = None,
+        cutoff_at: datetime | None = None,
+    ) -> dict[str, Any]:
+        del cutoff_at
+        snapshot_date = (as_of_date or date.today()).isoformat()
         route = self.market_router.classify(symbol=symbol, query=query)
         providers = self._providers(route.market or "cn_equity")
         if not symbol:
@@ -57,24 +85,34 @@ class FundamentalSnapshotSkill:
         execution = execute_provider_chain(
             providers=providers,
             loaders={
-                provider_id: (lambda current=adapter: current.get_fundamental_snapshot(symbol=resolved_symbol))
+                provider_id: (
+                    lambda current=adapter: current.get_fundamental_snapshot(
+                        symbol=resolved_symbol,
+                        as_of_date=as_of_date,
+                    )
+                )
                 for provider_id, adapter in self.adapters.items()
             },
         )
-        execution.facts.update({
-            "market": route.market_code or route.market,
-            "provider_market": route.market,
-            "exchange": route.exchange,
-            "currency": route.currency or execution.facts.get("currency"),
-            "country": route.country or None,
-        })
+        execution.facts.update(
+            {
+                "market": route.market_code or route.market,
+                "provider_market": route.market,
+                "exchange": route.exchange,
+                "currency": route.currency or execution.facts.get("currency"),
+                "country": route.country or None,
+            }
+        )
         selected = execution.provider or providers[0]
-        position = execution.chain_position if execution.chain_position is not None else 0
+        position = (
+            execution.chain_position if execution.chain_position is not None else 0
+        )
         source = self._source(selected, position)
         field_sources = {
             key: selected.provider_id
             for key in execution.facts
-            if not key.startswith("_") and key not in {"availability", "message", "data_gap"}
+            if not key.startswith("_")
+            and key not in {"availability", "message", "data_gap"}
         }
         return VerifiedSnapshot(
             snapshot_type="fundamental",
@@ -91,7 +129,9 @@ class FundamentalSnapshotSkill:
             source_confidence=self._confidence(selected),
             source_trace=execution.trace,
             degraded=execution.availability != "available",
-            degrade_reason=None if execution.availability == "available" else execution.availability,
+            degrade_reason=None
+            if execution.availability == "available"
+            else execution.availability,
         ).model_dump(mode="json")
 
     def _providers(self, market: str) -> list[ProviderSpec]:
@@ -122,4 +162,8 @@ class FundamentalSnapshotSkill:
         )
 
     def _confidence(self, provider: ProviderSpec) -> str:
-        return self.provider_registry.source_confidence(provider) if self.provider_registry else "medium"
+        return (
+            self.provider_registry.source_confidence(provider)
+            if self.provider_registry
+            else "medium"
+        )

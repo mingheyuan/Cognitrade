@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import math
+import re
+import statistics
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from io import BytesIO, StringIO
-import math
 from pathlib import Path
-import re
-import statistics
 from typing import Any
 
 import akshare as ak
@@ -17,8 +18,11 @@ from bs4 import BeautifulSoup
 from pypdf import PdfReader
 
 from domain_packs.finance_ashare.tools.fund_master import FundSecurityMaster
-from research_system.adapters.vendors.akshare_utils import call_with_retry, coerce_numeric, normalize_value
-
+from research_system.adapters.vendors.akshare_utils import (
+    call_with_retry,
+    coerce_numeric,
+    normalize_value,
+)
 
 _CATEGORY_ALIASES = {
     "全部": "全部",
@@ -60,6 +64,8 @@ class FundSnapshotSkill:
         holdings_loader: Callable[[str, str], Any] | None = None,
         asset_holdings_loader: Callable[[str, str], Any] | None = None,
         target_fund_loader: Callable[[str], Any] | None = None,
+        announcement_loader: Callable[[str], Any] | None = None,
+        report_pdf_loader: Callable[[str], bytes] | None = None,
         overview_loader: Callable[[str], Any] | None = None,
         achievement_loader: Callable[[str], Any] | None = None,
         manager_tenure_loader: Callable[[str], Any] | None = None,
@@ -80,6 +86,14 @@ class FundSnapshotSkill:
         self.holdings_loader = holdings_loader or self._load_holdings
         self.asset_holdings_loader = asset_holdings_loader or self._load_asset_holdings
         self.target_fund_loader = target_fund_loader or self._load_target_fund_disclosure
+        self.announcement_loader = announcement_loader or (
+            lambda code: call_with_retry(
+                lambda: ak.fund_announcement_report_em(symbol=code),
+                retries=2,
+                delay_seconds=0.25,
+            )
+        )
+        self.report_pdf_loader = report_pdf_loader or self._download_report_pdf
         self.overview_loader = overview_loader or self._load_overview
         self.achievement_loader = achievement_loader or self._load_achievement
         self.manager_tenure_loader = manager_tenure_loader or self._load_manager_tenure
@@ -379,6 +393,112 @@ class FundSnapshotSkill:
             "retrieved_at": datetime.now(UTC).isoformat(),
         }
 
+    def run_holdings_as_of(
+        self,
+        *,
+        fund_code: str,
+        as_of_date: date,
+        query: str | None = None,
+        investment_cycle: str = "long_term",
+        cancellation: Any | None = None,
+    ) -> dict[str, Any]:
+        """Reconstruct only the disclosed holdings visible by ``as_of_date``.
+
+        This deliberately avoids the regular fund-ranking/NAV workflow: those
+        endpoints are current-state feeds and must not be mixed into a
+        historical parent holding slot.  Historical rows are accepted only
+        when a matching, pre-cutoff official periodic report supplies a stable
+        report URL and publication date.
+        """
+
+        if investment_cycle not in {"short_term", "mid_term", "long_term"}:
+            raise ValueError(
+                "investment_cycle is required; choose short_term, mid_term or long_term"
+            )
+        code = FundSecurityMaster.normalize_code(fund_code)
+        if not code:
+            raise ValueError("fund_code must be a six-digit public-fund code")
+        target_date = self._calendar_date(as_of_date)
+        if target_date is None:
+            raise ValueError("as_of_date must be a valid date")
+        if target_date > datetime.now(UTC).date():
+            raise ValueError("as_of_date cannot be in the future")
+        if cancellation is not None and cancellation.is_set():
+            raise RuntimeError("fund holdings reconstruction cancelled")
+
+        provider_errors: list[dict[str, Any]] = []
+        identity: dict[str, Any] = {}
+        try:
+            identity = next(
+                (
+                    dict(row)
+                    for row in self.fund_master.rows()
+                    if str(row.get("fund_code") or "") == code
+                ),
+                {},
+            )
+        except Exception as exc:
+            provider_errors.append(
+                self._historical_error(f"fund_catalog:{code}", exc, retryable=True)
+            )
+
+        candidate: dict[str, Any] = {
+            "fund_code": code,
+            "fund_name": str(identity.get("fund_name") or code),
+            "fund_type": identity.get("fund_type"),
+        }
+        is_fund_of_funds = self._is_fund_of_funds(candidate)
+        holdings = self._historical_holdings(
+            code,
+            as_of_date=target_date,
+            is_fund_of_funds=is_fund_of_funds,
+            cancellation=cancellation,
+        )
+        provider_errors.extend(list(holdings.pop("_provider_errors", [])))
+        source_refs = list(holdings.pop("_source_refs", []))
+        candidate.update(holdings)
+
+        required_rows = (
+            list(candidate.get("lookthrough_holdings") or [])
+            if is_fund_of_funds
+            else list(candidate.get("top_holdings") or [])
+        )
+        row_gaps: list[str] = []
+        if len(required_rows) < 10:
+            row_gaps.append("historical_top10_holdings_unavailable")
+        if is_fund_of_funds and not candidate.get("target_fund_holdings"):
+            row_gaps.append("historical_target_fund_disclosure_unavailable")
+        if not source_refs:
+            row_gaps.append("historical_publication_proof_unavailable")
+        candidate["data_gap"] = list(dict.fromkeys(row_gaps))
+        candidate["quality_status"] = "degraded" if row_gaps else "available"
+
+        retryable_gap = bool(row_gaps) and any(
+            error.get("retryable") is True for error in provider_errors
+        )
+        return {
+            "query": query or f"重建基金 {code} 在 {target_date.isoformat()} 可见的前十大持仓",
+            "analysis_mode": "single_fund",
+            "fund_codes": [code],
+            "fund_category": identity.get("fund_type"),
+            "investment_cycle": investment_cycle,
+            "candidate_pool_size": 1,
+            "funds": [candidate],
+            "quality_status": "degraded" if row_gaps or provider_errors else "available",
+            "data_gap": list(row_gaps),
+            "provider_errors": provider_errors,
+            "source_refs": source_refs,
+            "historical_reconstruction": {
+                "requested_as_of_date": target_date.isoformat(),
+                "selection_rule": "latest_matching_periodic_report_published_by_cutoff",
+                "proof_requirement": "official_report_publication_and_stable_content_ref",
+                "retryable": retryable_gap,
+            },
+            # This is the real acquisition time.  The adapter may classify the
+            # result as Grade B, but must never backdate this observation.
+            "retrieved_at": datetime.now(UTC).isoformat(),
+        }
+
     @classmethod
     def normalize_category(cls, value: object) -> str:
         text = str(value or "全部").strip()
@@ -591,12 +711,513 @@ class FundSnapshotSkill:
             "_provider_errors": provider_errors,
         }
 
+    def _historical_holdings(
+        self,
+        code: str,
+        *,
+        as_of_date: date,
+        is_fund_of_funds: bool,
+        cancellation: Any | None,
+    ) -> dict[str, Any]:
+        provider_errors: list[dict[str, Any]] = []
+        source_refs: list[dict[str, Any]] = []
+        direct_equities: list[dict[str, Any]] = []
+        direct_period: str | None = None
+        holdings_published_at: str | None = None
+        target_fund_holdings: list[dict[str, Any]] = []
+        target_fund_period: str | None = None
+        target_fund_source_ref: str | None = None
+        target_fund_published_at: str | None = None
+        lookthrough_holdings: list[dict[str, Any]] = []
+        lookthrough_period: str | None = None
+        lookthrough_published_at: str | None = None
+
+        if is_fund_of_funds:
+            target, parent_ref, parent_errors = self._historical_target_fund(
+                code,
+                as_of_date=as_of_date,
+                cancellation=cancellation,
+            )
+            provider_errors.extend(parent_errors)
+            if target:
+                target_fund_holdings = [target]
+                target_fund_period = target.get("report_date")
+                target_fund_source_ref = target.get("source_ref")
+                target_fund_published_at = target.get("published_at")
+                if parent_ref:
+                    source_refs.append(parent_ref)
+                target_code = str(target.get("code") or "")
+                rows, period, target_ref, target_errors = (
+                    self._historical_direct_equity_holdings(
+                        target_code,
+                        as_of_date=as_of_date,
+                        source_type="fund_target_etf_holdings",
+                        cancellation=cancellation,
+                    )
+                )
+                provider_errors.extend(target_errors)
+                if target_ref:
+                    source_refs.append(target_ref)
+                    lookthrough_published_at = str(
+                        target_ref.get("published_at") or ""
+                    ) or None
+                lookthrough_period = period
+                lookthrough_holdings = [
+                    {
+                        **row,
+                        "security_type": "equity",
+                        "effective_weight_pct": (
+                            round(
+                                float(target["weight_pct"])
+                                * float(row["weight_pct"])
+                                / 100.0,
+                                6,
+                            )
+                            if target.get("weight_pct") is not None
+                            and row.get("weight_pct") is not None
+                            else None
+                        ),
+                    }
+                    for row in rows[:20]
+                ]
+        else:
+            (
+                direct_equities,
+                direct_period,
+                direct_ref,
+                direct_errors,
+            ) = self._historical_direct_equity_holdings(
+                code,
+                as_of_date=as_of_date,
+                source_type="fund_direct_equity_holdings",
+                cancellation=cancellation,
+            )
+            provider_errors.extend(direct_errors)
+            if direct_ref:
+                source_refs.append(direct_ref)
+                holdings_published_at = str(
+                    direct_ref.get("published_at") or ""
+                ) or None
+
+        weights = [
+            row["weight_pct"]
+            for row in direct_equities[:10]
+            if row.get("weight_pct") is not None
+        ]
+        return {
+            "top_holdings": direct_equities,
+            "holdings_period": direct_period,
+            "holdings_published_at": holdings_published_at,
+            "top10_concentration_pct": round(sum(weights), 4) if weights else None,
+            "holdings_source": "eastmoney_official_periodic_reports",
+            "asset_allocation": [],
+            "asset_allocation_period": None,
+            "bond_holdings": [],
+            "target_fund_holdings": target_fund_holdings,
+            "target_fund_period": target_fund_period,
+            "target_fund_source_ref": target_fund_source_ref,
+            "target_fund_published_at": target_fund_published_at,
+            "lookthrough_holdings": lookthrough_holdings,
+            "lookthrough_period": lookthrough_period,
+            "lookthrough_published_at": lookthrough_published_at,
+            "holdings_coverage": {
+                "asset_allocation": "not_requested",
+                "direct_equity": (
+                    "not_applicable"
+                    if is_fund_of_funds
+                    else "available"
+                    if direct_equities
+                    else "unavailable"
+                ),
+                "bond": "not_requested",
+                "target_fund": (
+                    "available"
+                    if target_fund_holdings
+                    else "unavailable"
+                    if is_fund_of_funds
+                    else "not_applicable"
+                ),
+                "lookthrough": (
+                    "available"
+                    if lookthrough_holdings
+                    else "unavailable"
+                    if is_fund_of_funds
+                    else "not_applicable"
+                ),
+                "is_fund_of_funds": is_fund_of_funds,
+            },
+            "_source_refs": source_refs,
+            "_provider_errors": provider_errors,
+        }
+
+    def _historical_direct_equity_holdings(
+        self,
+        code: str,
+        *,
+        as_of_date: date,
+        source_type: str,
+        cancellation: Any | None,
+    ) -> tuple[
+        list[dict[str, Any]],
+        str | None,
+        dict[str, Any] | None,
+        list[dict[str, Any]],
+    ]:
+        errors: list[dict[str, Any]] = []
+        try:
+            reports = self._periodic_report_refs(code, as_of_date=as_of_date)
+        except Exception as exc:
+            return [], None, None, [
+                self._historical_error(f"fund_reports:{code}", exc, retryable=True)
+            ]
+        if not reports:
+            errors.append(
+                {
+                    "stage": f"historical_publication_proof:{code}",
+                    "error_type": "MatchingOfficialReportUnavailable",
+                    "retryable": False,
+                }
+            )
+            return [], None, None, errors
+
+        # The selection rule is lexicographically latest period/publication.
+        # Once chosen, this report is authoritative: failure must be surfaced,
+        # never hidden by silently using an older disclosure.
+        report = reports[0]
+        period_end = report["period_end"]
+        if cancellation is not None and cancellation.is_set():
+            raise RuntimeError("fund holdings reconstruction cancelled")
+        try:
+            payload = self.holdings_loader(code, str(period_end.year))
+            periods = self._normalize_holding_periods(payload)
+        except Exception as exc:
+            errors.append(
+                self._historical_error(
+                    f"direct_equity_holdings:{code}:{period_end.year}",
+                    exc,
+                    retryable=True,
+                )
+            )
+            return [], None, None, errors
+        holding_period = next(
+            (
+                (label, rows)
+                for candidate_end, label, rows in periods
+                if candidate_end == period_end and rows
+            ),
+            None,
+        )
+        if holding_period is None:
+            errors.append(
+                {
+                    "stage": f"historical_holdings_period:{code}:{period_end.isoformat()}",
+                    "error_type": "MatchingHoldingsPeriodUnavailable",
+                    "retryable": False,
+                }
+            )
+            return [], None, None, errors
+        source_ref = str(report["content_ref"])
+        try:
+            pdf_bytes = self.report_pdf_loader(source_ref)
+            if not isinstance(pdf_bytes, bytes) or not pdf_bytes.startswith(b"%PDF"):
+                raise ValueError("official periodic report is not a PDF")
+        except Exception as exc:
+            errors.append(
+                self._historical_error(
+                    f"fund_report_pdf:{code}:{report['report_id']}",
+                    exc,
+                    retryable=True,
+                )
+            )
+            return [], None, None, errors
+        try:
+            self._verify_holdings_against_report(
+                holding_period[1][:20],
+                pdf_bytes=pdf_bytes,
+                period_end=period_end,
+                fund_code=code,
+            )
+        except Exception as exc:
+            errors.append(
+                self._historical_error(
+                    f"fund_report_holdings_mismatch:{code}:{report['report_id']}",
+                    exc,
+                    retryable=False,
+                )
+            )
+            return [], None, None, errors
+        label, rows = holding_period
+        proof = {
+            "type": source_type,
+            "provider": "eastmoney_official_report",
+            "id": source_ref,
+            "content_ref": source_ref,
+            "content_hash": hashlib.sha256(pdf_bytes).hexdigest(),
+            "immutable_proof": True,
+            "published_at": report["published_at"],
+            "period_end": period_end.isoformat(),
+            "report_id": report["report_id"],
+        }
+        return rows[:20], label, proof, errors
+
+    @classmethod
+    def _verify_holdings_against_report(
+        cls,
+        rows: list[dict[str, Any]],
+        *,
+        pdf_bytes: bytes,
+        period_end: date,
+        fund_code: str,
+    ) -> None:
+        """Bind archive rows to the downloaded official report, or fail closed."""
+
+        reader = PdfReader(BytesIO(pdf_bytes), strict=False)
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        searchable = re.sub(r"\s+", " ", text)
+        compact = re.sub(r"\s+", "", text)
+        cls._verify_report_fund_code(searchable, fund_code)
+        period_markers = {
+            period_end.strftime("%Y年%m月%d日").replace("月0", "月").replace("年0", "年").replace("日0", "日"),
+            f"{period_end.year}年{period_end.month}月{period_end.day}日",
+            period_end.isoformat(),
+        }
+        if not any(marker in compact for marker in period_markers):
+            raise ValueError("official report period does not match holdings period")
+        if len(rows) < 10:
+            raise ValueError("official report verification requires at least ten holdings")
+
+        mismatches: list[str] = []
+        # Every candidate returned to the adapter must be bound to this report.
+        # The adapter is allowed to skip unsupported/duplicate securities while
+        # selecting ten A-shares, so checking only the first ten would leave
+        # later fallback candidates unaudited.
+        for row in rows:
+            code = str(row.get("code") or "").strip()
+            name = re.sub(r"\s+", "", str(row.get("name") or ""))
+            expected_weight = cls._numeric(row.get("weight_pct"))
+            if not code or not name or expected_weight is None:
+                mismatches.append(code or "missing_identity")
+                continue
+            verified = False
+            for match in re.finditer(re.escape(code), searchable):
+                window = searchable[match.start() : match.start() + 320]
+                if name not in re.sub(r"\s+", "", window):
+                    continue
+                values = [
+                    float(value)
+                    for value in re.findall(r"(?<!\d)(\d{1,3}(?:\.\d+))(?!\d)", window)
+                ]
+                if any(abs(value - expected_weight) <= 0.011 for value in values):
+                    verified = True
+                    break
+            if not verified:
+                mismatches.append(code)
+        if mismatches:
+            raise ValueError(
+                "official report holdings mismatch: " + ",".join(mismatches)
+            )
+
+    @staticmethod
+    def _verify_report_fund_code(text: str, fund_code: str) -> None:
+        """Require the requested share class to be identified by the report."""
+
+        code = FundSecurityMaster.normalize_code(fund_code)
+        searchable = re.sub(r"\s+", " ", str(text or ""))
+        if not code:
+            raise ValueError("requested fund code is invalid")
+        labels = ("基金主代码", "基金代码", "交易代码", "下属分级基金")
+        for match in re.finditer(rf"(?<!\d){re.escape(code)}(?!\d)", searchable):
+            context = searchable[max(0, match.start() - 180) : match.start()]
+            if any(label in context for label in labels):
+                return
+        raise ValueError(f"official report does not identify requested fund code {code}")
+
+    def _historical_target_fund(
+        self,
+        code: str,
+        *,
+        as_of_date: date,
+        cancellation: Any | None,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None, list[dict[str, Any]]]:
+        errors: list[dict[str, Any]] = []
+        try:
+            reports = self._periodic_report_refs(code, as_of_date=as_of_date)
+        except Exception as exc:
+            return {}, None, [
+                self._historical_error(f"fund_reports:{code}", exc, retryable=True)
+            ]
+        if not reports:
+            errors.append(
+                {
+                    "stage": f"historical_target_fund_proof:{code}",
+                    "error_type": "MatchingOfficialReportUnavailable",
+                    "retryable": False,
+                }
+            )
+            return {}, None, errors
+        report = reports[0]
+        if cancellation is not None and cancellation.is_set():
+            raise RuntimeError("fund holdings reconstruction cancelled")
+        source_ref = str(report["content_ref"])
+        try:
+            pdf_bytes = self.report_pdf_loader(source_ref)
+            if not isinstance(pdf_bytes, bytes) or not pdf_bytes.startswith(b"%PDF"):
+                raise ValueError("official periodic report is not a PDF")
+        except Exception as exc:
+            errors.append(
+                self._historical_error(
+                    f"target_fund_report_pdf:{code}:{report['report_id']}",
+                    exc,
+                    retryable=True,
+                )
+            )
+            return {}, None, errors
+        try:
+            reader = PdfReader(BytesIO(pdf_bytes), strict=False)
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            self._verify_report_fund_code(text, code)
+            target = self._parse_target_fund_report(
+                text,
+                report_id=str(report["report_id"]),
+                source_ref=source_ref,
+            )
+        except Exception as exc:
+            errors.append(
+                self._historical_error(
+                    f"target_fund_report_parse:{code}:{report['report_id']}",
+                    exc,
+                    retryable=False,
+                )
+            )
+            return {}, None, errors
+        target_period = self._calendar_date(target.get("report_date"))
+        if (
+            not target
+            or target_period is None
+            or target_period != report["period_end"]
+        ):
+            errors.append(
+                {
+                    "stage": f"target_fund_report_content:{code}:{report['report_id']}",
+                    "error_type": "TargetFundDisclosureUnsupported",
+                    "retryable": False,
+                }
+            )
+            return {}, None, errors
+        target.update(
+            {
+                "published_at": report["published_at"],
+                "content_hash": hashlib.sha256(pdf_bytes).hexdigest(),
+            }
+        )
+        proof = {
+            "type": "fund_target_disclosure",
+            "provider": "eastmoney_official_report",
+            "id": source_ref,
+            "content_ref": source_ref,
+            "content_hash": target["content_hash"],
+            "immutable_proof": True,
+            "published_at": report["published_at"],
+            "period_end": report["period_end"].isoformat(),
+            "report_id": report["report_id"],
+        }
+        return self._normalize_target_fund(target), proof, errors
+
+    def _periodic_report_refs(
+        self,
+        code: str,
+        *,
+        as_of_date: date,
+    ) -> list[dict[str, Any]]:
+        reports: list[dict[str, Any]] = []
+        for row in self._rows(self.announcement_loader(code)):
+            report_id = str(row.get("报告ID") or "").strip()
+            title = str(row.get("公告标题") or "").strip()
+            published = self._calendar_date(row.get("公告日期"))
+            period_end = self._report_period_end(title)
+            if (
+                not report_id
+                or published is None
+                or period_end is None
+                or published > as_of_date
+                or period_end > as_of_date
+            ):
+                continue
+            reports.append(
+                {
+                    "report_id": report_id,
+                    "title": title,
+                    "published_at": published.isoformat(),
+                    "period_end": period_end,
+                    "content_ref": f"https://pdf.dfcfw.com/pdf/H2_{report_id}_1.pdf",
+                }
+            )
+        reports.sort(
+            key=lambda item: (
+                item["period_end"],
+                self._calendar_date(item["published_at"]) or date.min,
+                str(item["report_id"]),
+            ),
+            reverse=True,
+        )
+        return reports
+
+    @classmethod
+    def _normalize_holding_periods(
+        cls,
+        payload: Any,
+    ) -> list[tuple[date, str, list[dict[str, Any]]]]:
+        groups: list[tuple[str, list[dict[str, Any]]]] = []
+        if isinstance(payload, list) and payload and all(
+            isinstance(item, dict) and "rows" in item for item in payload
+        ):
+            groups = [
+                (
+                    str(item.get("period") or "").strip(),
+                    [dict(row) for row in list(item.get("rows") or []) if isinstance(row, dict)],
+                )
+                for item in payload
+            ]
+        else:
+            raw_rows = cls._rows(payload)
+            labels = list(
+                dict.fromkeys(
+                    str(row.get("季度") or "").strip()
+                    for row in raw_rows
+                    if str(row.get("季度") or "").strip()
+                )
+            )
+            groups = [
+                (
+                    label,
+                    [row for row in raw_rows if str(row.get("季度") or "").strip() == label],
+                )
+                for label in labels
+            ]
+        output: list[tuple[date, str, list[dict[str, Any]]]] = []
+        for label, raw_rows in groups:
+            period_end = cls._holding_period_end(label)
+            if period_end is None:
+                continue
+            normalized, _period = cls._normalize_holdings(
+                [{"period": label, "rows": raw_rows}]
+            )
+            if normalized:
+                output.append((period_end, label, normalized))
+        output.sort(key=lambda item: item[0], reverse=True)
+        return output
+
     def _latest_direct_equity_holdings(
         self,
         code: str,
     ) -> tuple[list[dict[str, Any]], str | None, list[dict[str, str]]]:
         errors: list[dict[str, str]] = []
-        for year in (str(date.today().year), str(date.today().year - 1), str(date.today().year - 2)):
+        current_year = datetime.now(UTC).year
+        for year in (
+            str(current_year),
+            str(current_year - 1),
+            str(current_year - 2),
+        ):
             try:
                 payload = self.holdings_loader(code, year)
                 rows, period = self._normalize_holdings(payload)
@@ -671,7 +1292,7 @@ class FundSnapshotSkill:
         if match:
             quarter_ends = {"1": "0331", "2": "0630", "3": "0930", "4": "1231"}
             report_dates.append(f"{match.group(1)}{quarter_ends[match.group(2)]}")
-        today = date.today()
+        today = datetime.now(UTC).date()
         completed_quarter = (today.month - 1) // 3
         year = today.year
         if completed_quarter == 0:
@@ -842,25 +1463,61 @@ class FundSnapshotSkill:
         source_ref: str,
     ) -> dict[str, Any]:
         compact = re.sub(r"\s+", " ", text)
-        identity_match = re.search(
-            r"目标基金\s*基本情况(?P<body>.*?)(?=目标基金\s*产品说明|\d+\.\d+\.\d+\s|$)",
-            compact,
-        )
-        holding_match = re.search(
-            r"期末投资目标基金明细(?P<body>.*?)(?=\d+\.\d+\s+报告期末|报告期末按行业分类|$)",
-            compact,
-        )
-        identity_section = identity_match.group("body") if identity_match else ""
-        holding_section = holding_match.group("body") if holding_match else ""
-        code_match = re.search(r"基金主代码\s*(\d{6})", identity_section)
-        name_match = re.search(r"基金名称\s+(.+?)\s+基金主代码", identity_section)
-        holding_values = re.findall(
-            r"([0-9][0-9,]*\.\d{2})\s+([0-9]{1,3}(?:\.\d+)?)",
-            holding_section,
-        )
-        if not code_match or not name_match or not holding_values:
+        identity: tuple[re.Match[str], re.Match[str]] | None = None
+        for heading in re.finditer(r"目标基金\s*基本情况", compact):
+            section = compact[heading.end() : heading.end() + 4_000]
+            next_heading = re.search(
+                r"目标基金\s*产品说明|\s\d+\.\d+(?:\.\d+)?\s+[\u4e00-\u9fff]",
+                section,
+            )
+            if next_heading:
+                section = section[: next_heading.start()]
+            code_match = re.search(r"基金主代码\s*(\d{6})", section)
+            name_match = re.search(r"基金名称\s+(.+?)\s+基金主代码", section)
+            if code_match and name_match:
+                identity = (code_match, name_match)
+                break
+
+        holding_value: tuple[str, str] | None = None
+        target_code = identity[0].group(1) if identity else ""
+        target_name = re.sub(r"\s+", "", identity[1].group(1)) if identity else ""
+        target_name_stem = re.split(
+            r"交易型|开放式|证券投资基金|ETF",
+            target_name,
+            maxsplit=1,
+        )[0]
+        for heading in re.finditer(r"期末投资目标基金明细", compact):
+            section = compact[heading.end() : heading.end() + 8_000]
+            next_heading = re.search(
+                r"\s\d+\.\d+(?:\.\d+)?\s+[\u4e00-\u9fff]",
+                section,
+            )
+            if next_heading:
+                section = section[: next_heading.start()]
+            # A table-of-contents occurrence has no disclosed row.  Require the
+            # actual target identity plus the market-value/weight pair so the
+            # first heading cannot shadow the report body.
+            compact_section = re.sub(r"\s+", "", section)
+            if not target_code or (
+                target_code not in compact_section
+                and target_name not in compact_section
+                and (
+                    len(target_name_stem) < 6
+                    or target_name_stem not in compact_section
+                )
+            ):
+                continue
+            value_match = re.search(
+                r"([0-9][0-9,]*\.\d{2})\s+([0-9]{1,3}(?:\.\d+)?)",
+                section,
+            )
+            if value_match:
+                holding_value = (value_match.group(1), value_match.group(2))
+                break
+        if identity is None or holding_value is None:
             return {}
-        market_value, weight = holding_values[-1]
+        code_match, name_match = identity
+        market_value, weight = holding_value
         report_period_match = re.search(
             r"本报告期自\s*(20\d{2})\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日"
             r"\s*起至\s*(?:20\d{2}\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日",
@@ -1211,6 +1868,8 @@ class FundSnapshotSkill:
             "report_date": cls._date_value(row.get("report_date")),
             "report_id": str(row.get("report_id") or "").strip() or None,
             "source_ref": str(row.get("source_ref") or "").strip() or None,
+            "published_at": cls._date_value(row.get("published_at")),
+            "content_hash": str(row.get("content_hash") or "").strip() or None,
         }
 
     @classmethod
@@ -1358,8 +2017,90 @@ class FundSnapshotSkill:
         return text or None
 
     @staticmethod
+    def _calendar_date(value: Any) -> date | None:
+        normalized = normalize_value(value)
+        if normalized is None:
+            return None
+        if isinstance(normalized, datetime):
+            return normalized.date()
+        if isinstance(normalized, date):
+            return normalized
+        text = str(normalized).strip()
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            return None
+
+    @classmethod
+    def _holding_period_end(cls, value: Any) -> date | None:
+        text = str(value or "").strip()
+        explicit = re.search(
+            r"(?<!\d)(20\d{2})[-年/.](\d{1,2})[-月/.](\d{1,2})(?:日)?(?!\d)",
+            text,
+        )
+        if explicit:
+            try:
+                return date(
+                    int(explicit.group(1)),
+                    int(explicit.group(2)),
+                    int(explicit.group(3)),
+                )
+            except ValueError:
+                return None
+        quarter = re.search(
+            r"(?<!\d)(20\d{2})\s*年?\s*(?:第\s*)?([1-4一二三四])\s*(?:季度|季)",
+            text,
+        ) or re.search(r"(?<!\d)(20\d{2})\s*年?\s*[Qq]([1-4])(?!\d)", text)
+        if quarter is None:
+            return None
+        quarter_number = {"一": 1, "二": 2, "三": 3, "四": 4}.get(
+            quarter.group(2),
+            int(quarter.group(2)) if quarter.group(2).isdigit() else 0,
+        )
+        month_day = {
+            1: (3, 31),
+            2: (6, 30),
+            3: (9, 30),
+            4: (12, 31),
+        }.get(quarter_number)
+        return (
+            date(int(quarter.group(1)), *month_day)
+            if month_day is not None
+            else None
+        )
+
+    @classmethod
+    def _report_period_end(cls, title: str) -> date | None:
+        text = str(title or "").strip()
+        quarter = re.search(r"(20\d{2})\s*年\s*第\s*([1-4一二三四])\s*季度报告", text)
+        if quarter:
+            return cls._holding_period_end(
+                f"{quarter.group(1)}年第{quarter.group(2)}季度"
+            )
+        half_year = re.search(r"(20\d{2})\s*年\s*(?:中期|半年度)报告", text)
+        if half_year:
+            return date(int(half_year.group(1)), 6, 30)
+        annual = re.search(r"(20\d{2})\s*年\s*年度报告", text)
+        if annual:
+            return date(int(annual.group(1)), 12, 31)
+        return None
+
+    @staticmethod
     def _error(stage: str, exc: Exception) -> dict[str, str]:
         return {"stage": stage, "error_type": exc.__class__.__name__}
+
+    @staticmethod
+    def _historical_error(
+        stage: str,
+        exc: Exception,
+        *,
+        retryable: bool,
+    ) -> dict[str, Any]:
+        return {
+            "stage": stage,
+            "error_type": exc.__class__.__name__,
+            "retryable": retryable,
+        }
 
     @classmethod
     def _unique_codes(cls, values: list[str]) -> list[str]:

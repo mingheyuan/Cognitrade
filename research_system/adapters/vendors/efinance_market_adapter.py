@@ -4,7 +4,10 @@ from datetime import date, datetime
 from importlib import import_module
 from typing import Any
 
-from research_system.adapters.vendors.akshare_utils import coerce_numeric, normalize_value
+from research_system.adapters.vendors.akshare_utils import (
+    coerce_numeric,
+    normalize_value,
+)
 
 
 class EFinanceMarketAdapter:
@@ -24,8 +27,17 @@ class EFinanceMarketAdapter:
         end_date: str,
         adjust: str = "",
     ) -> dict[str, Any]:
-        if str(symbol).upper().endswith(".HK") or str(symbol).upper().startswith("HK") or any(
-            char.isalpha() for char in str(symbol).upper().replace("SH", "").replace("SZ", "").replace("BJ", "")
+        if (
+            str(symbol).upper().endswith(".HK")
+            or str(symbol).upper().startswith("HK")
+            or any(
+                char.isalpha()
+                for char in str(symbol)
+                .upper()
+                .replace("SH", "")
+                .replace("SZ", "")
+                .replace("BJ", "")
+            )
         ):
             raise ValueError("efinance market adapter only supports A-share symbols")
         ef = import_module("efinance")
@@ -43,6 +55,8 @@ class EFinanceMarketAdapter:
                 raise ValueError(f"no market data returned for symbol {symbol}")
             bars = [self._normalize_bar(row) for row in history.to_dict("records")]
         except Exception:
+            if end_date != date.today().strftime("%Y%m%d"):
+                raise
             # eFinance history and quote snapshots use different EastMoney
             # endpoints.  push2his can be blocked while the current quote is
             # healthy; retain the independent current-market observation and
@@ -50,7 +64,9 @@ class EFinanceMarketAdapter:
             quote = self._quote_record(ef, provider_symbol)
             latest = coerce_numeric(quote.get("最新价"))
             if latest is None:
-                raise ValueError(f"no efinance quote fallback returned for symbol {symbol}")
+                raise ValueError(
+                    f"no efinance quote fallback returned for symbol {symbol}"
+                )
             bars = [
                 {
                     "date": str(quote.get("日期") or date.today().isoformat()),
@@ -79,18 +95,27 @@ class EFinanceMarketAdapter:
             "history_mode": history_mode,
         }
 
-    def get_market_overview(self, *, symbol: str, latest_bar: dict[str, Any] | None = None) -> dict[str, Any]:
+    def get_market_overview(
+        self,
+        *,
+        symbol: str,
+        latest_bar: dict[str, Any] | None = None,
+        as_of_date: date | None = None,
+    ) -> dict[str, Any]:
         bar = dict(latest_bar or {})
         ef = import_module("efinance")
         provider_symbol = self._provider_symbol(symbol)
-        try:
-            quote = self._quote_record(ef, provider_symbol)
-        except Exception:
-            quote = {}
-        try:
-            base = self._base_record(ef, provider_symbol)
-        except Exception:
-            base = {}
+        quote: dict[str, Any] = {}
+        base: dict[str, Any] = {}
+        if as_of_date is None:
+            try:
+                quote = self._quote_record(ef, provider_symbol)
+            except Exception:
+                quote = {}
+            try:
+                base = self._base_record(ef, provider_symbol)
+            except Exception:
+                base = {}
 
         latest_price = coerce_numeric(quote.get("最新价"))
         if latest_price is None:
@@ -105,11 +130,14 @@ class EFinanceMarketAdapter:
         return {
             "symbol": symbol,
             "normalized_symbol": provider_symbol,
-            "security_name": base.get("股票名称") or quote.get("名称") or bar.get("name"),
+            "security_name": base.get("股票名称")
+            or quote.get("名称")
+            or bar.get("name"),
             "industry": base.get("所处行业"),
             "latest_price": latest_price,
             "pct_change": pct_change,
-            "amount": coerce_numeric(quote.get("成交额")) or coerce_numeric(bar.get("amount")),
+            "amount": coerce_numeric(quote.get("成交额"))
+            or coerce_numeric(bar.get("amount")),
             "pb": pb,
             # eFinance exposes dynamic PE here, not TTM PE.  Keep the basis
             # explicit so downstream recovery never silently relabels it.
@@ -153,11 +181,10 @@ class EFinanceMarketAdapter:
             value = value.iloc[0]
         payload = value.to_dict()
         if payload and all(isinstance(item, dict) for item in payload.values()):
-            payload = {key: next(iter(item.values()), None) for key, item in payload.items()}
-        return {
-            str(key): normalize_value(item)
-            for key, item in payload.items()
-        }
+            payload = {
+                key: next(iter(item.values()), None) for key, item in payload.items()
+            }
+        return {str(key): normalize_value(item) for key, item in payload.items()}
 
     @staticmethod
     def _provider_symbol(symbol: str) -> str:

@@ -1,6 +1,6 @@
 import { Ban, Bot, CalendarRange, CheckCircle2, ChevronDown, CircleDashed, Database, LockKeyhole, Play, RefreshCw, RotateCcw } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { collectionJobDurations, formatDateTime, isActiveCollectionJob, jobStatusMeta } from './status'
+import { collectionJobDurations, collectionOutcomeMeta, formatDateTime, isActiveCollectionJob, jobStatusMeta } from './status'
 import { EmptyState, LoadingState, StatusBadge } from './shared'
 import { CollectionJobProgress } from './CollectionJobProgress'
 import { FundCollectionOverview, FundCollectionProgress } from './FundCollectionOverview'
@@ -202,7 +202,10 @@ export function CollectionJobsPanel({ contract, urlState, jobs, jobDetails, load
                   {job.asset_family !== 'fund' && detailedJob.error ? <p className="mdc-job-error">{detailedJob.error}</p> : null}
                   {job.asset_family !== 'fund' && !jobDetails[job.job_id] ? <LoadingState label="展开后读取槽位明细…" /> : null}
                   {job.asset_family !== 'fund' && !!detailedJob.tasks?.length && (
-                    <div className="mdc-table-scroll"><table className="mdc-table"><thead><tr><th>证券</th><th>槽位</th><th>状态</th><th>Attempt</th><th>说明</th></tr></thead><tbody>{detailedJob.tasks.map((task) => <tr key={task.task_id}><td>{task.symbol}</td><td><code>{task.dimension_id}</code></td><td>{task.resolution_status === 'audit_only' ? 'UZI 可用' : task.resolution_status === 'degraded' ? '降级披露' : jobStatusMeta(task.status).label}</td><td>{task.attempt}{task.max_attempts ? ` / ${task.max_attempts}` : ''}</td><td>{task.resolution_status === 'audit_only' ? '扩展契约仅作审计，不再阻断' : task.resolution_status === 'degraded' ? '历史不可恢复，已排除评分' : task.error_message || '—'}</td></tr>)}</tbody></table></div>
+                    <div className="mdc-table-scroll"><table className="mdc-table"><thead><tr><th>证券</th><th>槽位</th><th>状态</th><th>Attempt</th><th>说明</th></tr></thead><tbody>{detailedJob.tasks.map((task) => {
+                      const outcome = collectionOutcomeMeta(task.collection_outcome, task.result_message)
+                      return <tr key={task.task_id}><td>{task.symbol}</td><td><code>{task.dimension_id}</code></td><td>{outcome?.label || (task.resolution_status === 'audit_only' ? 'UZI 可用' : jobStatusMeta(task.status).label)}</td><td>{task.attempt}{task.max_attempts ? ` / ${task.max_attempts}` : ''}</td><td>{outcome?.summary || (task.resolution_status === 'audit_only' ? '扩展契约仅作审计，不再阻断' : task.error_message || '—')}</td></tr>
+                    })}</tbody></table></div>
                   )}
                   <div className="mdc-panel-actions">
                     {job.asset_family !== 'fund' && detailedJob.freeze_status !== 'frozen' && retryableTaskCount > 0 && <button className="secondary-button" type="button" disabled={actionLoading || agentRecoveryActive} onClick={() => void onRetry(job.job_id).catch(() => undefined)}><RotateCcw size={14} />重试 {retryableTaskCount} 个可重试槽</button>}

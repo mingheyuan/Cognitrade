@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
@@ -15,12 +16,13 @@ from research_system.strategies.database import StrategyDatabase
 
 def _market_collector(**kwargs):
     now = datetime.now(timezone.utc)
+    as_of_date = kwargs.get("as_of_date")
     return [
         {
             "snapshot_type": "market",
             "symbol": symbol,
             "retrieved_at": now.isoformat(),
-            "snapshot_date": now.date().isoformat(),
+            "snapshot_date": (as_of_date or now.date()).isoformat(),
             "quality_status": "available",
             "facts": {
                 "availability": "available",
@@ -37,6 +39,21 @@ def _market_collector(**kwargs):
                 },
             },
             "source": {"provider_id": "test.market", "chain_position": 0},
+            **(
+                {
+                    "historical_reconstruction": {
+                        "safe": True,
+                        "strategy": "dated_series",
+                        "requested_as_of_date": as_of_date.isoformat(),
+                        "window_start": (
+                            as_of_date - timedelta(days=550)
+                        ).isoformat(),
+                        "window_end": as_of_date.isoformat(),
+                    }
+                }
+                if as_of_date is not None
+                else {}
+            ),
         }
         for symbol in kwargs["symbols"]
         if "market" in kwargs["snapshot_types"]
@@ -47,7 +64,7 @@ def test_agent_recovery_appends_snapshot_without_mutating_original() -> None:
     database = StrategyDatabase("sqlite://")
     database.create_schema()
     coordinator = MarketDataCollectionCoordinator(database, collector=_market_collector)
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
     try:
         job = coordinator.create_job(
             tenant_id="tenant",
@@ -120,10 +137,10 @@ def test_agent_recovery_appends_snapshot_without_mutating_original() -> None:
         database.close()
 
 
-def test_historical_agent_recovery_is_disclosed_noop_without_current_evidence() -> None:
+def test_historical_agent_recovery_retries_pit_provider_without_current_evidence() -> None:
     database = StrategyDatabase("sqlite://")
     database.create_schema()
-    coordinator = MarketDataCollectionCoordinator(database, collector=_market_collector)
+    coordinator = MarketDataCollectionCoordinator(database, collector=lambda **_kwargs: [])
     historical = datetime.now(timezone.utc).date() - timedelta(days=30)
     try:
         job = coordinator.create_job(
@@ -145,14 +162,16 @@ def test_historical_agent_recovery_is_disclosed_noop_without_current_evidence() 
                 database,
                 job_id=job["id"],
                 settings=Settings.from_env(Path(__file__).resolve().parents[2]),
+                collector=_market_collector,
             )
 
         native_recovery.assert_not_called()
         assert result["historical_only"] is True
-        assert result["attempted"] == 0
+        assert result["attempted"] == 1
+        assert result["succeeded"] == 1
         assert result["failed"] == 0
         assert result["skipped_historical_scopes"][0]["as_of_date"] == historical.isoformat()
-        assert "当前" in result["disclosure"]
+        assert "结构化 provider" in result["disclosure"]
     finally:
         coordinator.close()
         database.close()

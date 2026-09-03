@@ -117,32 +117,54 @@ checkpoint；基金父快照一旦成功落库，重试会复用它并只补尚�
 不能重试或补采，需要新建 Job 形成新修订。
 采集、Agent 与基金父任务的持久租约会定期续约，并以 owner token 阻止过期 worker
 覆盖新 worker；Bundle 发布、revision 分配与 Snapshot 撤销同样由数据库锁协调。
+后台每 10 秒扫描一次失联任务；心跳租约最长 3 分钟，因此进程异常退出后无需再次
+重启服务，任务会自动回到可执行状态并从持久化 checkpoint 继续。
 兼容 `GET /api/v2/finance/market-data/{symbol}` 中的 `refresh=true` 不再刷新上游；
 `POST /api/v2/finance/market-data/report-manifests` 只冻结输入，不直接启动报告 run。
 公开证券搜索与报价 GET 同样只读数据库；`refresh=true` 不会采集。只有显式提交
 模拟订单或显式请求挂单重新撮合时，服务端才会走独立的实时成交报价路径，这条路径
 不写入研究 Bundle，也不能被正式报告消费。
 
-历史 PIT 不用当前值伪造。股票历史 Job 按维度/来源能力处理：宏观、研报、资金流、
-政策、事件、龙虎榜和舆情等带独立日期记录的来源会自动查询并裁剪到目标日 cutoff；
-能满足严格契约的结果按 B 级历史重建落库，查询过但没有可验证目标日记录，或仅提供
-当前状态的来源，则写入可审计 `data_gap`，自动排除评分并在报告中披露。只要 22 个槽
+历史 PIT 不用当前值伪造。股票历史 Job 按字段/来源能力处理：行情、财报、K 线、估值、
+宏观、研报、资金流、政策、事件、龙虎榜和日期化舆情等来源直接接收
+`as_of_date/cutoff_at`，在 provider 侧限定查询并保存逐来源证明；实时热度、比赛排名等
+没有历史档案的字段不会回填。每个槽明确区分 `available`、`partial`、
+`verified_empty`、`retryable_failure` 与 `unavailable`：部分恢复保留 UZI 评分资格并披露
+可选缺口，查证为空是合法观测，上游临时失败可定向重试，只有真正没有历史档案的字段
+才排除评分。只要 22 个槽
 都已有原生结果或明确缺口记录，就可形成 `quality=degraded` 的冻结候选；用户可先让
 UZI Agent 尝试恢复并重新生成候选，也可确认缺口披露后冻结；`report_ready`、`report_generatable`
 与 `audit_ready` 始终分别展示。
 
-基金的外部持仓获取只允许在上海时区当日的
-采集 Job 中发生（用户显式创建，或由双 opt-in 订阅授权调度）；历史日只能
-复用已落库、且能证明在 cutoff 前可见的
-基金快照/Bundle，缺失时直接失败，不 live 回填：没有父持仓披露就无法知道目标日
-应分析哪 10 只股票，不能安全降级成另一个持仓集合。完整方案与已知边界见
-[《Point-in-Time 数据中心实施方案》](./plan/market-data-report-decoupling-plan.md)。
+历史财报在冻结前会按 UZI 原生计算合同规范化：营业收入、净利润历史序列统一为“亿元”
+数值，ROE 等比例序列统一为百分数值。上游页面的 `6.10亿`、`2991.87万`、`7.48%`
+等展示字符串不会直接进入评分函数，避免在增长率计算中触发字符串减法并被误诊断为
+数据缺口。没有历史档案而明确 `_excluded_from_scoring` 的安全槽只形成 warning，不会被
+第二层自审再次升级为 critical。
+
+基金历史 Job 会优先复用已落库、且能证明在 cutoff 前可见的快照/Bundle；缺失时只走
+历史持仓专用重建路径。该路径按目标日筛选官方定期报告，实际下载并哈希 PDF，
+再把归档表中的报告期、代码、名称和权重逐项与官方文件核对。受支持的直接持股
+权益基金需要一条持仓证据；单目标 ETF 联接基金需要父基金目标配置和目标 ETF
+持仓两条证据，全部满足
+`published_at <= cutoff` 才以 B 级快照落库。真实 `observed_at` 始终保留，绝不把
+当前页面倒填到历史日；临时网络/PDF 故障可重试，无匹配公告或证据不一致则明确失败。
+普通多目标 FOF 的历史穿透尚不在该适配器覆盖范围内。
+完整方案与已知边界见
+[《Point-in-Time 数据中心实施方案》](./plan/market-data-report-decoupling-plan.md)及
+[《历史 PIT 误降级修复计划与验收记录》](./plan/historical-pit-recovery-fix-plan.md)。
 Agent OS 正式研究可用 ISO 日期约束 `analysis_as_of_date=YYYY-MM-DD` 精确选择历史
 Bundle；未解决槽、无 Bundle 或 cutoff 晚于评估时点仍会失败，安全降级槽则随
 manifest 冻结、从 UZI 维度加权中剔除，并进入报告数据缺口区，绝不回退当前值。
+报告的节点级定向重试继续绑定原 attempt 的不可变 manifest，以保证重放一致；只有用户
+明确确认的 `full_rerun` 才重新选择当前最新、满足目标日 cutoff 的 Bundle revision 并冻结
+一个新 manifest。补采后若希望报告采用新数据，应选择完整重跑，而不是节点重试。
 基金报告冻结时，10 个股票 Bundle 之外还会把父基金 Bundle ID、
 Bundle manifest hash 以及父快照 hash 写入 report manifest 依赖和最终 hash；
-父披露变更或失效时，原报告输入不会被静默复用。升级环境需在备份后
+父披露变更或失效时，原报告输入不会被静默复用。每个持仓子 Agent 启动前仍会重验父
+Manifest hash、全部 Bundle 引用和基金父依赖，但只物化当前股票的 22 个 Snapshot，
+避免把十股 Manifest 完整扫描十次；这只是校验粒度优化，不放宽撤销、冲突或完整性门禁。
+升级环境需在备份后
 显式执行 Alembic `20260820_0003_market_data_point_in_time.py` 和
 `20260820_0004_fund_holding_inputs.py`；API 进程启动不会隐式改库。
 仅对早期 `create_all`/auto-bootstrap 生成、没有 `alembic_version`，且经逐表、
@@ -282,16 +304,35 @@ UZI 报告不再给所有请求套同一个 480 秒上限：Lite、Medium、Deep
 30 秒硬终止；当前日超时会如实记录为可重试 `data_gap` 并阻止严格 Bundle 发布；
 历史查询穷尽后可转成排除评分的终态披露，不伪造同行数据。
 
+十大持仓批次的外层等待同样按档位区分：Lite 60 分钟、Medium 120 分钟、Deep 180 分钟；
+多日历史补跑仍至少使用独立的 6 小时单日批次预算。外层超时只负责终止真正失控的批次，
+不会再用固定 30 分钟提前取消仍在正常执行的 Deep 任务。
+
 正式的 Lite、Medium、Deep 个股分析统一执行 UZI `SKILL.md` 的完整 Agent 工作流：
 20 个编号维度逐项审阅、66 席 persona 角色评审、宏观/政策、行业/事件、原料/期货三组
 六维定性研究，以及机械自审通过后才允许报告交付。档位仍控制数据预算、推理强度、
 机构方法和 Deep 独有多空辩论；“快速模式”只由独立 `quick_scan` 意图进入，不会再把
 正式 Lite/Medium 报告静默降级成规则引擎骨架。
 
+历史报告不会用当前网页补造目标日证据。若冻结 Bundle 的六类定性维度有结构化 PIT 数据，
+但目标日没有至少两条可审计 URL，Agent 证据预检会明确记为“目标日无 PIT-safe URL”，
+将这六维定性扩展降为 warning 并写入报告缺口；编号维度、66 席评审和 UZI 核心数值门禁
+仍照常执行。只有纯粹的 URL 证据缺失可这样终态披露，模型失败、来源无效或其他自检
+critical 仍会阻止报告。当前日研究继续按 UZI 原生标准要求定性引用，不适用该历史例外。
+
 完整 Agent 阶段使用冻结快照并按 `UZI_LLM_MAX_CONCURRENCY` 调度：角色评审与六维研究
 同波并行，维度评论按 5 维一组并发，四类买入区间并发。失败恢复刻意优于原生 CLI 的
 整轮重跑：角色评审按分组、六维研究按分组、维度评论按批次、买入区间按派系分别缓存；
 机械校验失败时只清除并重试受影响阶段，已经验证的真实证据和模型输出继续复用。
+角色评审的市场身份以 UZI root 的 `full/market/code` 为准，避免无后缀 `ticker` 把 A 股
+误识别为美股；有冻结证据的 Agent 覆盖会同步重算 `consensus_valid/hollow_*`。恢复循环
+按问题类别、维度和正文判重，证据描述变化不会再触发无限重跑；每轮完整 critical 诊断
+保存在 `recovery_history.critical_issues`。角色票的证据校验覆盖 headline、reasoning、comment
+与 verdict；`skip/insufficient_evidence` 只接受明确弃权或缺口说明。分组名允许省略展示用中文
+后缀，但 investor membership 仍必须逐席精确匹配，避免把格式差异误报为整组缺失。
+
+日报重试/恢复开始时会清空本次日期上一 attempt 的错误和完成时间；历史报告集与 attempt
+仍完整保留供审计，但旧超时不会继续污染新 attempt 的状态、错误摘要或前端提示。
 
 没有模型 Key 时，系统仍可执行确定性 Pack 能力，但需要模型合成的最终答复可能以
 `completed_partial` 结束。`COGNITRADE_API_ALLOW_UNAUTHENTICATED=true` 只允许

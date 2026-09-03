@@ -51,6 +51,19 @@ export function jobStatusMeta(status: string | null | undefined) {
   return { label: status || '未知', tone: 'muted' as const }
 }
 
+export function collectionOutcomeMeta(
+  outcome: string | null | undefined,
+  fallback?: string | null,
+) {
+  const normalized = String(outcome || '').toLowerCase()
+  if (normalized === 'available') return { label: '完整恢复', summary: fallback || '目标日数据已获取并可用于 UZI 报告与评分。', tone: 'good' as const }
+  if (normalized === 'partial') return { label: '部分恢复', summary: fallback || 'UZI 核心字段可用；无法历史恢复的可选字段已单独披露。', tone: 'warning' as const }
+  if (normalized === 'verified_empty') return { label: '查证为空', summary: fallback || '数据源查询成功，目标窗口内确实没有记录；这不是采集失败。', tone: 'info' as const }
+  if (normalized === 'retryable_failure') return { label: '数据源失败', summary: fallback || '本次上游请求失败，没有把失败误判为历史不可恢复；可定向重试。', tone: 'danger' as const }
+  if (normalized === 'unavailable') return { label: '无历史档案', summary: fallback || '该字段没有可证明的历史归档；当前值未写入历史快照，并已排除评分。', tone: 'warning' as const }
+  return null
+}
+
 export function isActiveCollectionJob(status: string | null | undefined) {
   return ['queued', 'pending', 'running', 'processing', 'leased'].includes(
     String(status || '').toLowerCase(),

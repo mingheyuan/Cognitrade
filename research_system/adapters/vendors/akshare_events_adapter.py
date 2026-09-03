@@ -1,26 +1,58 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import requests
 
+
 class AkShareEventsAdapter:
     vendor_name = "akshare"
 
-    def get_events_snapshot(self, *, symbol: str) -> dict[str, Any]:
-        rows = self._cninfo_direct(symbol=symbol, limit=30)
+    def get_events_snapshot(
+        self, *, symbol: str, as_of_date: date | None = None
+    ) -> dict[str, Any]:
+        target = as_of_date or date.today()
+        rows = self._cninfo_direct(
+            symbol=symbol,
+            limit=100 if as_of_date is not None else 30,
+            start_date=target - timedelta(days=180),
+            end_date=target,
+        )
         if not rows:
-            raise ValueError(f"no event data returned for symbol {symbol}")
+            return {
+                "symbol": symbol,
+                "event_notices": [],
+                "event_keywords": [],
+                "source_id": "cninfo",
+                "observation_status": "verified_empty",
+                "observation_window_days": 180,
+            }
         return {
             "symbol": symbol,
             "event_notices": rows[:10],
             "event_keywords": self._extract_event_keywords(rows),
             "source_id": "cninfo",
+            "observation_status": "verified_non_empty",
+            "observation_window_days": 180,
         }
 
-    def _cninfo_direct(self, *, symbol: str, limit: int) -> list[dict[str, Any]]:
-        code = str(symbol or "").strip().upper().removeprefix("SH").removeprefix("SZ").removeprefix("BJ")[-6:]
+    def _cninfo_direct(
+        self,
+        *,
+        symbol: str,
+        limit: int,
+        start_date: date,
+        end_date: date,
+    ) -> list[dict[str, Any]]:
+        code = (
+            str(symbol or "")
+            .strip()
+            .upper()
+            .removeprefix("SH")
+            .removeprefix("SZ")
+            .removeprefix("BJ")[-6:]
+        )
         if not code.isdigit():
             return []
         if code.startswith(("000", "001", "002", "3")):
@@ -42,7 +74,7 @@ class AkShareEventsAdapter:
                 "secid": "",
                 "category": "",
                 "trade": "",
-                "seDate": "",
+                "seDate": f"{start_date.isoformat()}~{end_date.isoformat()}",
                 "sortName": "",
                 "sortType": "",
                 "isHLtitle": "true",
@@ -60,21 +92,42 @@ class AkShareEventsAdapter:
         for item in (response.json().get("announcements") or [])[:limit]:
             timestamp = item.get("announcementTime") or 0
             try:
-                published = datetime.fromtimestamp(timestamp / 1000).strftime("%Y-%m-%d") if timestamp else ""
+                published = (
+                    datetime.fromtimestamp(timestamp / 1000).strftime("%Y-%m-%d")
+                    if timestamp
+                    else ""
+                )
             except (TypeError, ValueError, OSError):
                 published = ""
             path = str(item.get("adjunctUrl") or "")
+            if published and not (
+                start_date.isoformat() <= published <= end_date.isoformat()
+            ):
+                continue
             rows.append(
                 {
                     "公告时间": published,
                     "公告标题": str(item.get("announcementTitle") or ""),
-                    "公告链接": f"http://static.cninfo.com.cn/{path.lstrip('/')}" if path else "",
+                    "公告链接": f"http://static.cninfo.com.cn/{path.lstrip('/')}"
+                    if path
+                    else "",
                 }
             )
         return rows
 
     def _extract_event_keywords(self, rows: list[dict[str, Any]]) -> list[str]:
-        keywords = ("业绩", "合同", "中标", "回购", "激励", "临床", "注册", "合作", "减持", "增持")
+        keywords = (
+            "业绩",
+            "合同",
+            "中标",
+            "回购",
+            "激励",
+            "临床",
+            "注册",
+            "合作",
+            "减持",
+            "增持",
+        )
         hits: list[str] = []
         for row in rows:
             text = " ".join(str(value) for value in row.values())

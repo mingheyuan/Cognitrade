@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from importlib import import_module
 from typing import Any
 
@@ -15,7 +16,9 @@ class TuShareFundamentalAdapter:
         if not self.token:
             raise ValueError("tushare token is required")
 
-    def get_fundamental_snapshot(self, *, symbol: str) -> dict[str, Any]:
+    def get_fundamental_snapshot(
+        self, *, symbol: str, as_of_date: date | None = None
+    ) -> dict[str, Any]:
         ts = import_module("tushare")
         pro = ts.pro_api(self.token)
         ts_code = tushare_code(symbol)
@@ -38,13 +41,18 @@ class TuShareFundamentalAdapter:
         }
         for name, call in calls.items():
             try:
-                frames[name] = call()
+                frames[name] = self._filter_frame_as_of(call(), as_of_date)
             except Exception:
                 frames[name] = None
                 unavailable.append(name)
-        if not any(frame is not None and not getattr(frame, "empty", True) for frame in frames.values()):
+        if not any(
+            frame is not None and not getattr(frame, "empty", True)
+            for frame in frames.values()
+        ):
             if unavailable:
-                raise PermissionError("tushare token has no accessible fundamental interfaces")
+                raise PermissionError(
+                    "tushare token has no accessible fundamental interfaces"
+                )
             raise ValueError(f"no fundamental data returned for symbol {symbol}")
         income = frame_records(frames["income"])
         balance = frame_records(frames["balance"])
@@ -71,4 +79,18 @@ class TuShareFundamentalAdapter:
     def _first_record(frame) -> dict[str, Any]:
         if frame is None or getattr(frame, "empty", True):
             return {}
-        return {str(key): normalize_value(value) for key, value in frame.iloc[0].to_dict().items()}
+        return {
+            str(key): normalize_value(value)
+            for key, value in frame.iloc[0].to_dict().items()
+        }
+
+    @staticmethod
+    def _filter_frame_as_of(frame, as_of_date: date | None):
+        if frame is None or getattr(frame, "empty", True) or as_of_date is None:
+            return frame
+        for column in ("ann_date", "f_ann_date", "trade_date", "end_date"):
+            if column not in frame.columns:
+                continue
+            normalized = frame[column].astype(str).str.replace("-", "", regex=False)
+            return frame[normalized <= as_of_date.strftime("%Y%m%d")]
+        return frame

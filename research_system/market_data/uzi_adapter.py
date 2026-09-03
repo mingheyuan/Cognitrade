@@ -19,6 +19,7 @@ from research_system.market_data.dimension_contracts import (
     DEFAULT_DIMENSION_REGISTRY,
     DimensionRegistry,
 )
+from research_system.market_data.historical import capability_for_dimension
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 _UTC_OFFSET_RE = re.compile(
@@ -149,9 +150,7 @@ class UziSnapshotAdapter:
             semantic_errors.extend(self._provider_failure_errors(snapshot))
         semantic_errors = list(dict.fromkeys(semantic_errors))
         status = (
-            SnapshotStatus.AVAILABLE
-            if native_available
-            else SnapshotStatus.DATA_GAP
+            SnapshotStatus.AVAILABLE if native_available else SnapshotStatus.DATA_GAP
         )
         source = (
             snapshot.get("source")
@@ -163,7 +162,9 @@ class UziSnapshotAdapter:
         )
         cutoff_at = cutoff_at_for_date(as_of_date, exchange_timezone)
         published_at = cutoff_at if reconstruction_safe else observed_at
-        pit_mode = "historical_reconstruction" if reconstruction_safe else "live_observation"
+        pit_mode = (
+            "historical_reconstruction" if reconstruction_safe else "live_observation"
+        )
         query_manifest = {
             "requested_as_of_date": as_of_date.isoformat(),
             "observed_local_date": local_observed_date.isoformat(),
@@ -174,6 +175,12 @@ class UziSnapshotAdapter:
             "native_quality_status": declared_status,
             "degrade_reasons": list(snapshot.get("degrade_reasons") or []),
             "missing_fields": list(snapshot.get("missing_fields") or []),
+            "field_coverage": dict(snapshot.get("field_coverage") or {}),
+            "source_trace": [
+                dict(item)
+                for item in list(snapshot.get("source_trace") or [])
+                if isinstance(item, Mapping)
+            ],
         }
         if dimension == "2_kline":
             adjustment = str(raw.get("ohlcv_adjustment") or "").strip().lower()
@@ -188,9 +195,81 @@ class UziSnapshotAdapter:
                     as_of_date=as_of_date,
                     reconstruction=reconstruction,
                     payload=payload,
+                    snapshot=dict(snapshot),
                 )
             )
-            if status == SnapshotStatus.DATA_GAP:
+            field_coverage = self._historical_field_coverage(
+                dimension=dimension,
+                payload=payload,
+                raw=raw,
+                reconstruction=reconstruction,
+            )
+            query_manifest["field_coverage"] = field_coverage
+            outcome = self._historical_outcome(
+                dimension=dimension,
+                snapshot=dict(snapshot),
+                raw=raw,
+                field_coverage=field_coverage,
+            )
+            query_manifest["collection_outcome"] = outcome
+            if outcome == "partial":
+                missing = list(field_coverage.get("missing_fields") or [])
+                present = list(field_coverage.get("present_fields") or [])
+                partial_retryable = self._has_retryable_provider_failure(
+                    query_manifest["source_trace"]
+                )
+                query_manifest["partial_disclosure"] = {
+                    "excluded_from_scoring": False,
+                    "reason_code": "historical_fields_partial",
+                    "missing_fields": missing,
+                    "retryable": partial_retryable,
+                    "message": (
+                        f"已恢复 {len(present)} 个历史字段；仍缺少：{', '.join(missing)}"
+                        if missing
+                        else "历史来源仅完成部分验证"
+                    ),
+                }
+            elif outcome == "verified_empty":
+                query_manifest["verified_empty_disclosure"] = {
+                    "reason_code": "historical_bounded_zero",
+                    "message": "规定的历史来源已完成有界查询，结果为零条",
+                }
+                query_manifest["native_empty_observation"] = {
+                    "observation_status": "verified_empty",
+                    "query_status": {"status": "success", "result_count": 0},
+                }
+            elif outcome == "retryable_failure":
+                failed_sources = [
+                    dict(row)
+                    for row in query_manifest["source_trace"]
+                    if str(row.get("status") or "").strip().lower()
+                    in {
+                        "provider_unavailable",
+                        "rate_limited",
+                        "timeout",
+                        "parse_failed",
+                    }
+                ]
+                descriptions = []
+                for row in failed_sources:
+                    provider_name = str(
+                        row.get("provider_id")
+                        or row.get("source_id")
+                        or "unknown_provider"
+                    )
+                    provider_status = str(row.get("status") or "provider_unavailable")
+                    error_type = str(row.get("error_type") or "").strip()
+                    descriptions.append(
+                        f"{provider_name}: {provider_status}"
+                        + (f" ({error_type})" if error_type else "")
+                    )
+                query_manifest["provider_failure"] = {
+                    "reason_code": "historical_provider_failure",
+                    "message": "；".join(descriptions)
+                    or "历史数据源本次未返回可用结果",
+                    "retryable": True,
+                }
+            elif outcome == "unavailable":
                 query_manifest["degradation"] = {
                     "safe_for_report": True,
                     "excluded_from_scoring": True,
@@ -198,6 +277,13 @@ class UziSnapshotAdapter:
                     "message": "历史来源已自动查询，但结果不足以满足严格维度合同",
                     "attempted_reconstruction": True,
                 }
+            if outcome == "verified_empty":
+                status = SnapshotStatus.VERIFIED_EMPTY
+                payload = {}
+            elif outcome in {"retryable_failure", "unavailable"}:
+                status = SnapshotStatus.DATA_GAP
+            else:
+                status = SnapshotStatus.AVAILABLE
         elif pit_safe:
             query_manifest.update(
                 self._live_query_manifest(
@@ -241,6 +327,7 @@ class UziSnapshotAdapter:
             observation_metadata={
                 "native_snapshot_date": snapshot.get("snapshot_date"),
                 "native_fallback_applied": bool(snapshot.get("fallback_applied")),
+                "collection_outcome": query_manifest.get("collection_outcome"),
             },
             collection_task_id=collection_task_id,
             provider_attempt_id=provider_attempt_id,
@@ -360,8 +447,10 @@ class UziSnapshotAdapter:
             if str(field).startswith("_") or field in metadata_fields:
                 continue
             current = raw.get(field)
-            current_missing = current is None or current == "" or (
-                isinstance(current, (list, tuple, dict)) and not current
+            current_missing = (
+                current is None
+                or current == ""
+                or (isinstance(current, (list, tuple, dict)) and not current)
             )
             if field not in raw or current_missing:
                 raw[field] = value
@@ -382,7 +471,9 @@ class UziSnapshotAdapter:
                 row.get("provider_id") or row.get("source_id") or "unknown_provider"
             ).strip()
             error_type = str(row.get("error_type") or status or "Unavailable").strip()
-            errors.append(f"provider {provider}: {status or 'unavailable'} ({error_type})")
+            errors.append(
+                f"provider {provider}: {status or 'unavailable'} ({error_type})"
+            )
         return errors
 
     @staticmethod
@@ -589,7 +680,9 @@ class UziSnapshotAdapter:
                     or []
                 )
             institutions = raw.get("institutions") or raw.get("institution_holders")
-            if not institutions and isinstance(raw.get("institutional_history"), Mapping):
+            if not institutions and isinstance(
+                raw.get("institutional_history"), Mapping
+            ):
                 history = raw["institutional_history"]
                 quarters = list(history.get("quarters") or [])
                 fund_values = list(history.get("fund") or [])
@@ -598,8 +691,12 @@ class UziSnapshotAdapter:
                 institutions = [
                     {
                         "period": period,
-                        "fund": fund_values[index] if index < len(fund_values) else None,
-                        "qfii": qfii_values[index] if index < len(qfii_values) else None,
+                        "fund": fund_values[index]
+                        if index < len(fund_values)
+                        else None,
+                        "qfii": qfii_values[index]
+                        if index < len(qfii_values)
+                        else None,
                         "social_security": social_security_values[index]
                         if index < len(social_security_values)
                         else None,
@@ -611,7 +708,12 @@ class UziSnapshotAdapter:
                 events = [
                     {"event_type": event_type, **dict(row)}
                     for event_type, rows in (
-                        ("block_trade", raw.get("block_trades_recent") or raw.get("block_trades") or []),
+                        (
+                            "block_trade",
+                            raw.get("block_trades_recent")
+                            or raw.get("block_trades")
+                            or [],
+                        ),
                         ("unlock", raw.get("unlock_recent") or raw.get("unlock") or []),
                         ("unlock_schedule", raw.get("unlock_schedule") or []),
                     )
@@ -681,6 +783,7 @@ class UziSnapshotAdapter:
             payload.update(
                 items=self._items(
                     raw.get("items"),
+                    raw.get("news_samples"),
                     raw.get("platform_snippets"),
                     raw.get("news_multi_source"),
                 ),
@@ -900,6 +1003,135 @@ class UziSnapshotAdapter:
         return evidence, semantic_errors
 
     @staticmethod
+    def _historical_outcome(
+        *,
+        dimension: str,
+        snapshot: dict[str, Any],
+        raw: dict[str, Any],
+        field_coverage: dict[str, Any],
+    ) -> str:
+        facts = (
+            dict(snapshot.get("facts") or {})
+            if isinstance(snapshot.get("facts"), Mapping)
+            else {}
+        )
+        observation_status = str(
+            raw.get("observation_status") or facts.get("observation_status") or ""
+        ).lower()
+        contract = DEFAULT_DIMENSION_REGISTRY.get(dimension)
+        if observation_status == "verified_empty" and contract.permits_verified_empty:
+            return "verified_empty"
+        statuses = {
+            str(row.get("status") or "").strip().lower()
+            for row in list(snapshot.get("source_trace") or [])
+            if isinstance(row, Mapping)
+        }
+        if observation_status == "partially_verified_empty":
+            return "partial"
+        if statuses.intersection(
+            {"provider_unavailable", "rate_limited", "timeout", "parse_failed"}
+        ) and not field_coverage.get("present_fields"):
+            return "retryable_failure"
+        present = set(field_coverage.get("present_fields") or [])
+        recoverable = set(field_coverage.get("recoverable_fields") or [])
+        current_only = set(field_coverage.get("current_only_fields") or [])
+        if present:
+            return (
+                "available"
+                if recoverable.issubset(present) and not current_only
+                else "partial"
+            )
+        successful = statuses.intersection(
+            {"available", "success", "succeeded", "verified_empty", "no_data"}
+        )
+        if successful and contract.permits_verified_empty:
+            return "verified_empty"
+        if successful:
+            return "retryable_failure"
+        return "unavailable"
+
+    @staticmethod
+    def _has_retryable_provider_failure(trace: Iterable[Mapping[str, Any]]) -> bool:
+        return any(
+            str(row.get("status") or "").strip().lower()
+            in {"provider_unavailable", "rate_limited", "timeout", "parse_failed"}
+            for row in trace
+        )
+
+    @classmethod
+    def _historical_field_coverage(
+        cls,
+        *,
+        dimension: str,
+        payload: dict[str, Any],
+        raw: dict[str, Any],
+        reconstruction: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Measure PIT fields after normalization, not provider dict truthiness."""
+
+        capability = capability_for_dimension(dimension)
+        recoverable = list(
+            reconstruction.get("recoverable_fields") or capability.recoverable_fields
+        )
+        current_only = list(
+            reconstruction.get("current_only_fields") or capability.current_only_fields
+        )
+        aliases: dict[str, tuple[str, ...]] = {
+            "market_cap": ("market_cap", "market_cap_raw"),
+            "percentiles": ("percentiles", "pe_quantile", "pb_quantile"),
+            "records": ("records", "lhb_records", "lhb_statistics"),
+            "items": (
+                "items",
+                "news_samples",
+                "platform_snippets",
+                "news_multi_source",
+            ),
+            "classification": ("classification", "industry"),
+            "research_and_development": (
+                "research_and_development",
+                "rd_summary",
+            ),
+        }
+
+        def value_for(field: str) -> Any:
+            for key in aliases.get(field, (field,)):
+                if key in payload and cls._meaningful_historical_value(
+                    payload.get(key)
+                ):
+                    return payload.get(key)
+                if key in raw and cls._meaningful_historical_value(raw.get(key)):
+                    return raw.get(key)
+            return None
+
+        present = [field for field in recoverable if value_for(field) is not None]
+        return {
+            "recoverable_fields": recoverable,
+            "current_only_fields": current_only,
+            "present_fields": present,
+            "missing_fields": [field for field in recoverable if field not in present],
+        }
+
+    @classmethod
+    def _meaningful_historical_value(cls, value: Any) -> bool:
+        if value is None or value == "" or value == "—":
+            return False
+        if isinstance(value, Mapping):
+            return any(
+                cls._meaningful_historical_value(item) for item in value.values()
+            )
+        if isinstance(value, (list, tuple, set)):
+            if not value:
+                return False
+            if all(
+                isinstance(item, Mapping)
+                and str(item.get("status") or "").strip().lower() == "insufficient"
+                for item in value
+            ):
+                return False
+            return any(cls._meaningful_historical_value(item) for item in value)
+        return True
+
+    @staticmethod
     def _historical_query_manifest(
         *,
         dimension: str,
@@ -907,12 +1139,23 @@ class UziSnapshotAdapter:
         as_of_date: date,
         reconstruction: dict[str, Any],
         payload: dict[str, Any],
+        snapshot: dict[str, Any],
     ) -> dict[str, Any]:
         start = str(reconstruction.get("window_start") or as_of_date.isoformat())
         end = as_of_date.isoformat()
         paths: tuple[str, ...] = {
+            "0_basic": ("price", "market_cap"),
+            "1_financials": ("periods",),
+            "2_kline": ("ohlcv", "corporate_actions", "adjustment_factors"),
             "3_macro": ("observations",),
+            "4_peers": ("peers",),
+            "5_chain": ("segments",),
             "6_research": ("reports",),
+            "7_industry": ("industry",),
+            "8_materials": ("prices",),
+            "9_futures": ("prices",),
+            "10_valuation": ("history",),
+            "11_governance": ("pledges", "ownership_changes"),
             "12_capital_flow": (
                 "money_flow",
                 "northbound",
@@ -923,24 +1166,81 @@ class UziSnapshotAdapter:
             "15_events": ("events",),
             "16_lhb": ("records",),
             "17_sentiment": ("items",),
+            "18_trap": ("signals",),
+            "6_fund_holders": ("funds",),
+            "similar_stocks": ("stocks",),
         }.get(dimension, ())
+        trace = [
+            dict(row)
+            for row in list(snapshot.get("source_trace") or [])
+            if isinstance(row, Mapping)
+        ]
+        successful_statuses = {
+            "available",
+            "success",
+            "succeeded",
+            "verified_empty",
+            "no_data",
+        }
+        source_results: list[dict[str, Any]] = []
+        for row in trace:
+            source_id = str(row.get("provider_id") or row.get("source_id") or provider)
+            row_status = str(row.get("status") or "").strip().lower()
+            source_results.append(
+                {
+                    "source": source_id,
+                    "status": (
+                        "success"
+                        if row_status in successful_statuses
+                        else row_status or "unknown"
+                    ),
+                    "result_count": int(row.get("count") or 0),
+                    **(
+                        {"reason_code": row.get("reason_code")}
+                        if row.get("reason_code")
+                        else {}
+                    ),
+                }
+            )
+        required_source_results = [
+            row
+            for row in source_results
+            if str(row.get("status") or "").lower()
+            not in {"not_queried", "not_configured", "not_supported", "skipped"}
+        ]
+        if not source_results:
+            source_results = [
+                {"source": provider, "status": "unknown", "result_count": 0}
+            ]
         field_queries: dict[str, Any] = {}
         for path in paths:
             value = payload.get(path)
             count = len(value) if isinstance(value, (list, tuple, dict)) else 0
             field_queries[path] = {
                 "query_window": {"start": start, "end": end},
-                "required_sources": [provider],
-                "sources": [
-                    {
-                        "source": provider,
-                        "status": "success",
-                        "result_count": count,
-                    }
-                ],
+                "required_sources": list(
+                    dict.fromkeys(row["source"] for row in required_source_results)
+                ),
+                "sources": required_source_results,
                 "result_count": count,
             }
-        return {"field_queries": field_queries} if field_queries else {}
+        result_count = sum(
+            len(payload.get(path) or [])
+            if isinstance(payload.get(path), (list, tuple, dict))
+            else int(payload.get(path) is not None)
+            for path in paths
+        )
+        query_proof = {
+            "query_window": {"start": start, "end": end},
+            "required_sources": list(
+                dict.fromkeys(row["source"] for row in required_source_results)
+            ),
+            "sources": required_source_results,
+            "result_count": result_count,
+        }
+        if field_queries:
+            query_proof["field_queries"] = field_queries
+        return query_proof
 
     def _live_query_manifest(
         self,
@@ -995,19 +1295,25 @@ class UziSnapshotAdapter:
                 "pledges": "pledge",
                 "ownership_changes": "insider_trades_1y",
             }.get(requirement.path, requirement.path)
-            coverage_status = str(
-                source_coverage.get(coverage_key) or ""
-            ).strip().lower()
+            coverage_status = (
+                str(source_coverage.get(coverage_key) or "").strip().lower()
+            )
             explicitly_verified_empty = (
                 dimension == "16_lhb"
                 and requirement.path == "records"
                 and observation_status in {"verified_empty", "verified_non_empty"}
             )
-            query_succeeded = bool(count) or status in {
-                "success",
-                "succeeded",
-                "available",
-            } or coverage_status == "available" or explicitly_verified_empty
+            query_succeeded = (
+                bool(count)
+                or status
+                in {
+                    "success",
+                    "succeeded",
+                    "available",
+                }
+                or coverage_status == "available"
+                or explicitly_verified_empty
+            )
             if not query_succeeded:
                 continue
             source_id = str(

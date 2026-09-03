@@ -632,6 +632,53 @@ class StrategyBacktestTests(unittest.TestCase):
 
 
 class OTCFundLedgerTests(unittest.TestCase):
+    def test_stock_gateway_reads_bundle_at_backtest_as_of_date(self) -> None:
+        class _DateAwareMarketData:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def get_market_data(self, symbol: str, **kwargs):
+                self.calls.append({"symbol": symbol, **kwargs})
+                return {
+                    "sections": {
+                        "kline": {
+                            "ohlcv": [
+                                {
+                                    "date": "2026-08-04",
+                                    "open": 10,
+                                    "high": 11,
+                                    "low": 9,
+                                    "close": 10.5,
+                                    "volume": 100,
+                                    "amount": 1050,
+                                }
+                            ]
+                        }
+                    },
+                    "sources": {"kline": {"provider": "published_bundle"}},
+                }
+
+        market_data = _DateAwareMarketData()
+        gateway = MarketDataGateway(market_data)
+        series = gateway.get_series(
+            InstrumentResolver.resolve_stock("600519", "贵州茅台"),
+            start_date=date(2026, 8, 4),
+            end_date=date(2026, 8, 4),
+            as_of_date=date(2026, 8, 4),
+        )
+
+        self.assertEqual(series.bars[-1]["close"], 10.5)
+        self.assertEqual(
+            market_data.calls,
+            [
+                {
+                    "symbol": "600519",
+                    "refresh": False,
+                    "as_of_date": date(2026, 8, 4),
+                }
+            ],
+        )
+
     def test_market_gateway_normalizes_chinese_fund_bars_and_enforces_as_of(self) -> None:
         instrument = InstrumentResolver.resolve_fund({"fund_type": "ETF"}, code="510300")
         gateway = MarketDataGateway(
