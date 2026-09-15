@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-import json
+from datetime import UTC, date, datetime
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
@@ -22,8 +21,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class _SecurityMaster:
+    def __init__(self) -> None:
+        self.resolve_allow_network: list[bool] = []
+        self.rows_calls = 0
+
     def resolve(self, query: str, *, supplied_symbols=(), allow_network: bool = True):
-        del supplied_symbols, allow_network
+        del supplied_symbols
+        self.resolve_allow_network.append(bool(allow_network))
         symbol = "600519" if "茅台" in query or "600519" in query else "600036"
         name = "贵州茅台" if symbol == "600519" else "招商银行"
         return SecurityResolution(
@@ -34,6 +38,7 @@ class _SecurityMaster:
         )
 
     def rows(self):
+        self.rows_calls += 1
         return [
             {
                 "symbol": "600519",
@@ -147,10 +152,17 @@ class ApiV2FinanceTests(unittest.TestCase):
             }
         )
         ensure_workspace_layout(self.settings)
+        self.market_collector_calls: list[dict] = []
+
+        def recording_market_collector(**kwargs):
+            self.market_collector_calls.append(dict(kwargs))
+            return _collector(**kwargs)
+
+        self.security_master = _SecurityMaster()
         self.market = FinanceMarketDataService(
             cache_root=workspace / "cache",
-            collector=_collector,
-            security_master=_SecurityMaster(),
+            collector=recording_market_collector,
+            security_master=self.security_master,
         )
         self.database_path = workspace / "paper_trading" / "paper.sqlite3"
         self.paper = PaperTradingService(
@@ -180,21 +192,112 @@ class ApiV2FinanceTests(unittest.TestCase):
         self.client_context.__exit__(None, None, None)
         self.temp_dir.cleanup()
 
-    def test_market_data_v2_aggregates_all_workspace_sections(self) -> None:
+    def test_market_data_v2_requires_an_explicitly_published_bundle(self) -> None:
         response = self.client.get("/api/v2/finance/market-data/贵州茅台", headers=auth_headers())
 
-        self.assertEqual(response.status_code, 200, response.text)
-        payload = response.json()
-        self.assertEqual(payload["symbol"], "600519")
-        self.assertEqual(payload["name"], "贵州茅台")
-        self.assertEqual(payload["sections"]["market"]["overview"]["latest_price"], 100.0)
-        self.assertEqual(payload["sections"]["kline"]["bar_count"], 3)
-        self.assertEqual(len(payload["sections"]["kline"]["bars"]), 3)
-        self.assertEqual(payload["sections"]["kline"]["bars"][-1]["close"], 101.0)
-        self.assertEqual(payload["sections"]["fundamental"]["info"]["股票简称"], "贵州茅台")
-        self.assertEqual(payload["sections"]["events"]["event_keywords"], ["回购"])
-        self.assertEqual(payload["quality_status"], "available")
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["error"]["code"], "published_bundle_missing")
+        # Opening the workspace is a DB-only read.  The injected raw collector
+        # is reserved for explicit jobs and must not be used as a GET fallback.
+        self.assertEqual(self.market_collector_calls, [])
         self.assertEqual(response.headers["cache-control"], "no-store")
+
+    def test_public_finance_gets_are_db_only_after_center_binding(self) -> None:
+        self.security_master.resolve_allow_network.clear()
+        self.security_master.rows_calls = 0
+
+        securities = self.client.get(
+            "/api/v2/finance/securities",
+            params={"query": "贵州茅台"},
+            headers=auth_headers(),
+        )
+        quote = self.client.get(
+            "/api/v2/finance/quotes/600519",
+            params={"refresh": "true"},
+            headers=auth_headers(),
+        )
+        workspace = self.client.get(
+            "/api/v2/finance/market-data/600519",
+            params={"refresh": "true"},
+            headers=auth_headers(),
+        )
+
+        self.assertEqual(securities.status_code, 200, securities.text)
+        self.assertEqual(quote.status_code, 409, quote.text)
+        self.assertEqual(quote.json()["error"]["code"], "published_bundle_missing")
+        self.assertEqual(workspace.status_code, 409, workspace.text)
+        self.assertEqual(workspace.json()["error"]["code"], "published_bundle_missing")
+        self.assertEqual(self.market_collector_calls, [])
+        self.assertEqual(self.security_master.rows_calls, 0)
+        self.assertTrue(self.security_master.resolve_allow_network)
+        self.assertFalse(any(self.security_master.resolve_allow_network))
+
+    def test_bundle_quote_projection_is_db_only_and_ignores_get_refresh(self) -> None:
+        class _PublishedBundleCenter:
+            def __init__(self) -> None:
+                self.calls: list[dict] = []
+
+            def get_workspace_market_data(self, **kwargs):
+                self.calls.append(dict(kwargs))
+                return {
+                    "symbol": "600519",
+                    "name": "贵州茅台",
+                    "as_of_date": "2026-07-15",
+                    "cutoff_at": "2026-07-15T07:00:00+00:00",
+                    "quality_status": "available",
+                    "bundle_id": "bundle-1",
+                    "bundle_manifest_hash": "a" * 64,
+                    "sections": {
+                        "market": {
+                            "symbol": "600519",
+                            "price": 123.45,
+                            "pct_change": 1.5,
+                            "observed_at": "2026-07-15T06:59:00+00:00",
+                        },
+                        "kline": {"ohlcv": []},
+                    },
+                }
+
+        center = _PublishedBundleCenter()
+        self.market.bind_market_data_center(center)
+        self.security_master.resolve_allow_network.clear()
+        self.security_master.rows_calls = 0
+
+        quote = self.market.get_quote("贵州茅台", refresh=True)
+        results = self.market.search_securities("600519")
+
+        self.assertEqual(quote["latest_price"], 123.45)
+        self.assertEqual(quote["source"]["mode"], "bundle_only")
+        self.assertTrue(quote["refresh_requested"])
+        self.assertFalse(quote["refresh_performed"])
+        self.assertEqual(results[0]["latest_price"], 123.45)
+        self.assertEqual(self.market_collector_calls, [])
+        self.assertEqual(self.security_master.rows_calls, 0)
+        self.assertFalse(any(self.security_master.resolve_allow_network))
+        self.assertEqual(
+            center.calls,
+            [
+                {"symbol": "600519", "as_of_date": None},
+                {"symbol": "600519", "as_of_date": None},
+            ],
+        )
+
+        historical = self.market.get_market_data(
+            "600519",
+            as_of_date=date(2026, 7, 14),
+        )
+        self.assertEqual(historical["symbol"], "600519")
+        self.assertEqual(
+            center.calls[-1],
+            {"symbol": "600519", "as_of_date": date(2026, 7, 14)},
+        )
+
+    def test_explicit_live_quote_still_uses_the_execution_collector(self) -> None:
+        quote = self.market.get_live_quote("600519", refresh=True)
+
+        self.assertEqual(quote["latest_price"], 100.0)
+        self.assertEqual(len(self.market_collector_calls), 1)
+        self.assertTrue(self.security_master.resolve_allow_network[-1])
 
     def test_workspace_collection_serializes_provider_initialization(self) -> None:
         calls: list[int | None] = []
@@ -449,7 +552,7 @@ class ApiV2FinanceTests(unittest.TestCase):
                 "tradable": True,
             }
 
-        self.market.get_quote = mutable_quote  # type: ignore[method-assign]
+        self.market.get_live_quote = mutable_quote  # type: ignore[method-assign]
         pending = self.client.post(
             "/api/v2/finance/paper/orders",
             headers=auth_headers(),
@@ -491,56 +594,6 @@ class ApiV2FinanceTests(unittest.TestCase):
             places=2,
         )
 
-    def test_hikyuu_backtest_endpoint_validates_available_history(self) -> None:
-        engine = self.client.get("/api/v2/finance/backtests/engine", headers=auth_headers())
-        response = self.client.post(
-            "/api/v2/finance/backtests",
-            headers=auth_headers(),
-            json={
-                "symbol": "600519",
-                "strategy": "ma_cross",
-                "strategy_parameters": {"fast_period": 2, "slow_period": 3},
-                "initial_cash": 1_000_000,
-                "trade_size": 100,
-            },
-        )
-
-        self.assertEqual(engine.status_code, 200, engine.text)
-        self.assertEqual(engine.json()["engine"], "hikyuu")
-        self.assertTrue(engine.json()["available"])
-        self.assertEqual(response.status_code, 422, response.text)
-        self.assertEqual(response.json()["error"]["code"], "insufficient_kline_history")
-
-    def test_backtest_history_is_paginated_without_hiding_total_count(self) -> None:
-        result_root = self.settings.workspace_root / "backtests"
-        result_root.mkdir(parents=True, exist_ok=True)
-        for index in range(3):
-            backtest_id = f"01J0000000000000000000000{index}"
-            (result_root / f"{backtest_id}.json").write_text(
-                json.dumps({
-                    "backtest_id": backtest_id,
-                    "created_at": f"2026-08-0{index + 1}T00:00:00Z",
-                    "symbol": "600519",
-                    "name": "贵州茅台",
-                    "strategy": {"id": "ma_cross", "name": "双均线交叉"},
-                    "parameters": {"fast_period": 5, "slow_period": 20},
-                    "period": {"start": "2020-01-01", "end": "2026-08-01", "bar_count": 1000, "frequency": "DAY"},
-                    "metrics": {"total_return_pct": index},
-                }, ensure_ascii=False),
-                encoding="utf-8",
-            )
-
-        response = self.client.get(
-            "/api/v2/finance/backtests?limit=1&offset=1",
-            headers=auth_headers(),
-        )
-        self.assertEqual(response.status_code, 200, response.text)
-        payload = response.json()
-        self.assertEqual(payload["total_count"], 3)
-        self.assertEqual(payload["limit"], 1)
-        self.assertEqual(payload["offset"], 1)
-        self.assertEqual(len(payload["results"]), 1)
-
     def test_openapi_and_cors_publish_the_complete_strategy_contract(self) -> None:
         schema = self.client.get("/openapi.json").json()
         paths = set(schema["paths"])
@@ -560,7 +613,6 @@ class ApiV2FinanceTests(unittest.TestCase):
             "/api/v2/finance/strategy-paper-orders",
         }
         self.assertFalse(expected - paths, expected - paths)
-
         preflight = self.client.options(
             "/api/v2/finance/strategies/example",
             headers={

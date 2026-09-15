@@ -40,7 +40,7 @@ VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
 
 ```bash
 npm run lint
-npm test -- --run
+npm test
 npm run build
 ```
 

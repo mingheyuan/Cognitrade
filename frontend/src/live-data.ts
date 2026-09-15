@@ -11,8 +11,9 @@ import type {
   RunStep,
 } from './research-contracts'
 import { localizeErrorMessage } from './utils/error-message'
+import { asNumber, asRecord, asString, asStringList } from './utils/value'
 
-export type RunListItem = {
+type RunListItem = {
   id: string
   title: string
   summary: string
@@ -33,7 +34,7 @@ export type EvidenceItem = {
   type: 'market' | 'filing' | 'methodology' | 'news'
 }
 
-export type DashboardCandidateItem = {
+type DashboardCandidateItem = {
   rank: number
   code: string
   name: string
@@ -49,7 +50,7 @@ export type DashboardCandidateItem = {
   runId: string
 }
 
-export type SectorSignalItem = {
+type SectorSignalItem = {
   name: string
   score: number
   scoreBasis: string
@@ -58,35 +59,24 @@ export type SectorSignalItem = {
 }
 
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
+const STATUS_LABELS: Record<string, string> = {
+  received: '已接收',
+  identifying_intent: '识别意图',
+  needs_clarification: '待补充',
+  ready: '已就绪',
+  running: '运行中',
+  waiting_external: '等待外部',
+  waiting_approval: '等待审批',
+  gated: '质量门禁',
+  completed: '已完成',
+  completed_partial: '部分完成',
+  cancelled: '已取消',
+  failed: '失败',
+  timed_out: '超时',
+  unknown: '未知',
 }
 
-export function asRecord(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {}
-}
-
-export function asString(value: unknown, fallback = ''): string {
-  if (typeof value === 'string') return value.trim()
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-  return fallback
-}
-
-export function asNumber(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value === 'string' && value.trim()) {
-    const parsed = Number(value)
-    if (Number.isFinite(parsed)) return parsed
-  }
-  return null
-}
-
-export function asStringList(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map((item) => asString(item)).filter(Boolean)
-  const text = asString(value)
-  return text ? [text] : []
-}
+export { asNumber, asRecord, asString }
 
 export function reportFromDetail(detail?: RunDetail | null): ResearchReport {
   const artifacts = Array.isArray(detail?.replay.artifacts) ? detail.replay.artifacts : []
@@ -163,26 +153,11 @@ export function isActiveStatus(status?: string | null): boolean {
 }
 
 export function statusLabel(status?: string | null): string {
-  const labels: Record<string, string> = {
-    received: '已接收',
-    identifying_intent: '识别意图',
-    needs_clarification: '待补充',
-    ready: '已就绪',
-    running: '运行中',
-    waiting_external: '等待外部',
-    waiting_approval: '等待审批',
-    gated: '质量门禁',
-    completed: '已完成',
-    completed_partial: '部分完成',
-    cancelled: '已取消',
-    failed: '失败',
-    timed_out: '超时',
-    unknown: '未知',
-  }
-  return labels[String(status || 'unknown')] || String(status || '未知')
+  const normalized = String(status || 'unknown')
+  return STATUS_LABELS[normalized] || String(status || '未知')
 }
 
-export type AgentActivityItem = {
+type AgentActivityItem = {
   id: string
   actor: string
   nodeId: string

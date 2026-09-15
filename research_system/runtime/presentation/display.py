@@ -3,19 +3,35 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 _CHINESE_TEXT = re.compile(r"[\u3400-\u9fff]")
 _TECHNICAL_ERROR_TEXT = re.compile(
     r"(?:traceback|stack trace|[A-Z][A-Za-z0-9_]*(?:Error|Exception)\b|"
     r"RemoteDisconnected|connection aborted|socket|econn|errno|httpx|"
     r"requests\.|urllib|ssl|tcp)",
-    re.I,
+    re.IGNORECASE,
+)
+_MACHINE_FIELDS = frozenset(
+    {
+        "action",
+        "next_action",
+        "kind",
+        "code",
+        "error_code",
+        "reason_code",
+        "reason_codes",
+    }
 )
 
 
-def build_display_summary(*, result_payload: dict | None, summary_payload: dict | None) -> str | None:
+def build_display_summary(
+    *, result_payload: dict | None, summary_payload: dict | None
+) -> str | None:
     report_payload = _report_payload(result_payload)
-    review_summary = report_payload.get("review_summary") if isinstance(report_payload, dict) else None
+    review_summary = (
+        report_payload.get("review_summary")
+        if isinstance(report_payload, dict)
+        else None
+    )
     if isinstance(review_summary, dict):
         summary_text = str(review_summary.get("summary_text") or "").strip()
         if summary_text:
@@ -27,7 +43,11 @@ def build_display_summary(*, result_payload: dict | None, summary_payload: dict 
             return _compact_text(conclusion)
 
     message = str((summary_payload or {}).get("message") or "").strip()
-    status = str((summary_payload or {}).get("status") or (result_payload or {}).get("status") or "").strip()
+    status = str(
+        (summary_payload or {}).get("status")
+        or (result_payload or {}).get("status")
+        or ""
+    ).strip()
     if message and status and message != status:
         return _compact_text(f"{status}: {message}")
     if message:
@@ -73,26 +93,41 @@ def runtime_status_message(status: str, *, subject: str = "Agent OS 运行") -> 
     return f"{subject}{label}。"
 
 
-def localize_runtime_error(value: Any, *, fallback: str = "运行失败，请稍后重试。") -> str:
+def localize_runtime_error(
+    value: Any, *, fallback: str = "运行失败，请稍后重试。"
+) -> str:
     message = str(value or "").strip()
-    if message and _CHINESE_TEXT.search(message) and not _TECHNICAL_ERROR_TEXT.search(message):
+    if (
+        message
+        and _CHINESE_TEXT.search(message)
+        and not _TECHNICAL_ERROR_TEXT.search(message)
+    ):
         return message
     lowered = message.lower()
-    status = re.search(r"(?:error code|status(?: code)?)\D{0,8}(\d{3})", message, re.I)
+    status = re.search(r"(?:error code|status(?: code)?)\D{0,8}(\d{3})", message, re.IGNORECASE)
     suffix = f"（HTTP {status.group(1)}）" if status else ""
     if "timeout" in lowered or "timed out" in lowered:
         return f"运行超时{suffix}，请稍后重试。"
-    if "approval" in lowered and any(word in lowered for word in ("reject", "revoke", "expire", "denied")):
+    if "approval" in lowered and any(
+        word in lowered for word in ("reject", "revoke", "expire", "denied")
+    ):
         return "审批已被拒绝、撤销或过期。"
-    if "approval" in lowered and any(word in lowered for word in ("required", "waiting")):
+    if "approval" in lowered and any(
+        word in lowered for word in ("required", "waiting")
+    ):
         return "当前操作需要审批后才能继续。"
     if "cancel" in lowered:
         return "运行已取消。"
-    if any(word in lowered for word in ("unavailable", "connection", "disconnected", "econn")):
+    if any(
+        word in lowered
+        for word in ("unavailable", "connection", "disconnected", "econn")
+    ):
         return f"外部服务暂不可用{suffix}，请稍后重试。"
     if "not found" in lowered:
         return "未找到运行所需的资源。"
-    if any(word in lowered for word in ("invalid", "missing", "required", "unsupported")):
+    if any(
+        word in lowered for word in ("invalid", "missing", "required", "unsupported")
+    ):
         return "运行参数或依赖不符合要求。"
     return str(fallback or "运行失败，请稍后重试。").strip() or "运行失败，请稍后重试。"
 
@@ -101,28 +136,25 @@ def localize_runtime_event(event: dict[str, Any]) -> dict[str, Any]:
     public = localize_public_error_fields(dict(event))
     event_type = str(public.get("event_type") or "").lower()
     event_status = str(public.get("status") or "").lower()
-    is_failure = (
-        any(
-            marker in event_type
-            for marker in (
-                "failed",
-                "failure",
-                "rejected",
-                "timed_out",
-                "cancelled",
-                "gated",
-                "error",
-            )
-        )
-        or event_status in {
+    is_failure = any(
+        marker in event_type
+        for marker in (
             "failed",
+            "failure",
+            "rejected",
             "timed_out",
             "cancelled",
             "gated",
-            "rejected",
-            "needs_review",
-        }
-    )
+            "error",
+        )
+    ) or event_status in {
+        "failed",
+        "timed_out",
+        "cancelled",
+        "gated",
+        "rejected",
+        "needs_review",
+    }
     for key in ("error", "error_summary"):
         if public.get(key):
             public[key] = localize_runtime_error(public[key])
@@ -131,7 +163,6 @@ def localize_runtime_event(event: dict[str, Any]) -> dict[str, Any]:
             "message",
             "reason",
             "current_action",
-            "next_action",
             "output_summary",
         ):
             if public.get(key):
@@ -139,10 +170,14 @@ def localize_runtime_event(event: dict[str, Any]) -> dict[str, Any]:
     return public
 
 
-def localize_public_error_fields(value: Any, *, field_name: str = "", failed_context: bool = False) -> Any:
-    """Localize error-bearing fields in API copies while leaving stored diagnostics untouched."""
+def localize_public_error_fields(
+    value: Any, *, field_name: str = "", failed_context: bool = False
+) -> Any:
+    """Localize display text without rewriting machine-readable recovery contracts."""
     if isinstance(value, dict):
-        metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
+        metadata = (
+            value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
+        )
         raw_status = (
             value.get("status")
             or value.get("verdict")
@@ -173,17 +208,25 @@ def localize_public_error_fields(value: Any, *, field_name: str = "", failed_con
             "unhealthy",
             "synthesis_unavailable",
         }
-        current_failed = status in failure_statuses if raw_status is not None else failed_context
+        current_failed = (
+            status in failure_statuses if raw_status is not None else failed_context
+        )
         return {
-            key: localize_public_error_fields(item, field_name=str(key), failed_context=current_failed)
+            key: localize_public_error_fields(
+                item, field_name=str(key), failed_context=current_failed
+            )
             for key, item in value.items()
         }
     if isinstance(value, list):
         return [
-            localize_public_error_fields(item, field_name=field_name, failed_context=failed_context)
+            localize_public_error_fields(
+                item, field_name=field_name, failed_context=failed_context
+            )
             for item in value
         ]
     normalized_key = field_name.lower()
+    if normalized_key in _MACHINE_FIELDS:
+        return value
     is_error_field = normalized_key in {
         "error",
         "errors",
@@ -206,7 +249,6 @@ def localize_public_error_fields(value: Any, *, field_name: str = "", failed_con
         "detail",
         "display_summary",
         "current_action",
-        "next_action",
         "output_summary",
         "output",
         "content",
@@ -220,8 +262,8 @@ def localize_public_error_fields(value: Any, *, field_name: str = "", failed_con
 
 __all__ = [
     "build_display_summary",
+    "localize_public_error_fields",
     "localize_runtime_error",
     "localize_runtime_event",
-    "localize_public_error_fields",
     "runtime_status_message",
 ]

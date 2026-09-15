@@ -61,125 +61,117 @@ class MarketRouter:
     def classify(self, *, symbol: str | None, query: str | None = None) -> MarketRoute:
         normalized_symbol = (symbol or "").strip().upper()
         if not normalized_symbol:
-            return MarketRoute(
-                market="cn",
-                exchange="unknown",
-                security_type="unknown",
-                normalized_symbol=None,
-                route_hint="query_only",
-                currency="CNY",
-                country="CN",
-                market_code="A",
-            )
+            return self._unknown_cn_route(None)
 
-        if normalized_symbol.startswith("SEHK.") and normalized_symbol.removeprefix("SEHK.").isdigit():
-            code = normalized_symbol.removeprefix("SEHK.").lstrip("0") or "0"
-            return MarketRoute(
-                market="hk_equity",
-                exchange="hkex",
-                security_type="stock",
-                normalized_symbol=f"{code.zfill(5)}.HK",
-                route_hint="stock_snapshot",
-                currency="HKD",
-                country="HK",
-                market_code="H",
-            )
+        for classifier in (
+            self._classify_sehk,
+            self._classify_china,
+            self._classify_hk,
+            self._classify_global,
+        ):
+            route = classifier(normalized_symbol)
+            if route is not None:
+                return route
+        return self._classify_query(normalized_symbol, query)
 
-        a_share = re.fullmatch(r"(\d{6})\.(SH|SZ|BJ)", normalized_symbol)
-        if a_share:
-            code, exchange = a_share.groups()
-            security_type = self._infer_security_type(code)
-            return MarketRoute(
-                market=f"cn_{security_type}" if security_type != "stock" else "cn_equity",
-                exchange=exchange.lower(),
-                security_type=security_type,
-                normalized_symbol=code,
-                route_hint=self._route_hint(security_type),
-                currency="CNY",
-                country="CN",
-                market_code="A",
-            )
+    @staticmethod
+    def _classify_sehk(symbol: str) -> MarketRoute | None:
+        code = symbol.removeprefix("SEHK.")
+        if not symbol.startswith("SEHK.") or not code.isdigit():
+            return None
+        return MarketRouter._hk_route(code.lstrip("0") or "0")
 
-        if len(normalized_symbol) == 6 and normalized_symbol.isdigit():
-            exchange = self._infer_exchange(normalized_symbol)
-            security_type = self._infer_security_type(normalized_symbol)
-            route_hint = "stock_snapshot"
-            if security_type in {"etf", "lof", "mutual_fund"}:
-                route_hint = "fund_like_snapshot"
-            elif security_type == "convertible_bond":
-                route_hint = "bond_like_snapshot"
-            elif security_type == "index":
-                route_hint = "index_snapshot"
-            return MarketRoute(
-                market=f"cn_{security_type}" if security_type != "stock" else "cn_equity",
-                exchange=exchange,
-                security_type=security_type,
-                normalized_symbol=normalized_symbol,
-                route_hint=route_hint,
-                currency="CNY",
-                country="CN",
-                market_code="A",
-            )
+    def _classify_china(self, symbol: str) -> MarketRoute | None:
+        suffix_match = re.fullmatch(r"(\d{6})\.(SH|SZ|BJ)", symbol)
+        if suffix_match:
+            code, exchange = suffix_match.groups()
+            return self._china_route(code, exchange.lower())
+        if len(symbol) == 6 and symbol.isdigit():
+            return self._china_route(symbol, self._infer_exchange(symbol))
+        return None
 
-        hk_match = re.fullmatch(r"(?:HK)?(\d{1,5})(?:\.HK)?", normalized_symbol)
-        if hk_match and (normalized_symbol.startswith("HK") or normalized_symbol.endswith(".HK") or len(normalized_symbol) < 6):
-            code = hk_match.group(1).zfill(5)
-            return MarketRoute(
-                market="hk_equity",
-                exchange="hkex",
-                security_type="stock",
-                normalized_symbol=f"{code}.HK",
-                route_hint="stock_snapshot",
-                currency="HKD",
-                country="HK",
-                market_code="H",
-            )
+    @staticmethod
+    def _classify_hk(symbol: str) -> MarketRoute | None:
+        match = re.fullmatch(r"(?:HK)?(\d{1,5})(?:\.HK)?", symbol)
+        has_hk_marker = symbol.startswith("HK") or symbol.endswith(".HK")
+        if match is None or not (has_hk_marker or len(symbol) < 6):
+            return None
+        return MarketRouter._hk_route(match.group(1))
 
+    @staticmethod
+    def _classify_global(symbol: str) -> MarketRoute | None:
         for suffix, (country, exchange, currency) in sorted(
             _GLOBAL_SUFFIXES.items(), key=lambda item: len(item[0]), reverse=True
         ):
-            if normalized_symbol.endswith(suffix) and len(normalized_symbol) > len(suffix):
+            if symbol.endswith(suffix) and len(symbol) > len(suffix):
                 return MarketRoute(
                     market="global_equity",
                     exchange=exchange,
                     security_type="stock",
-                    normalized_symbol=normalized_symbol,
+                    normalized_symbol=symbol,
                     route_hint="stock_snapshot",
                     currency=currency,
                     country=country,
                     market_code=country,
                 )
-
-        if re.fullmatch(r"[A-Z][A-Z.\-]{0,5}", normalized_symbol):
+        if re.fullmatch(r"[A-Z][A-Z.\-]{0,5}", symbol):
             return MarketRoute(
                 market="us_equity",
                 exchange="us",
                 security_type="stock",
-                normalized_symbol=normalized_symbol,
+                normalized_symbol=symbol,
                 route_hint="stock_snapshot",
                 currency="USD",
                 country="US",
                 market_code="U",
             )
+        unknown_global = re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,30}\.([A-Z0-9]{1,5})", symbol)
+        if unknown_global is None:
+            return None
+        return MarketRoute(
+            market="global_equity",
+            exchange=unknown_global.group(1).lower(),
+            security_type="stock",
+            normalized_symbol=symbol,
+            route_hint="stock_snapshot",
+            market_code="G",
+        )
 
-        unknown_global = re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,30}\.([A-Z0-9]{1,5})", normalized_symbol)
-        if unknown_global:
-            return MarketRoute(
-                market="global_equity",
-                exchange=unknown_global.group(1).lower(),
-                security_type="stock",
-                normalized_symbol=normalized_symbol,
-                route_hint="stock_snapshot",
-                market_code="G",
-            )
+    def _china_route(self, symbol: str, exchange: str) -> MarketRoute:
+        security_type = self._infer_security_type(symbol)
+        return MarketRoute(
+            market=f"cn_{security_type}" if security_type != "stock" else "cn_equity",
+            exchange=exchange,
+            security_type=security_type,
+            normalized_symbol=symbol,
+            route_hint=self._route_hint(security_type),
+            currency="CNY",
+            country="CN",
+            market_code="A",
+        )
 
+    @staticmethod
+    def _hk_route(code: str) -> MarketRoute:
+        return MarketRoute(
+            market="hk_equity",
+            exchange="hkex",
+            security_type="stock",
+            normalized_symbol=f"{code.zfill(5)}.HK",
+            route_hint="stock_snapshot",
+            currency="HKD",
+            country="HK",
+            market_code="H",
+        )
+
+    @staticmethod
+    def _classify_query(symbol: str, query: str | None) -> MarketRoute:
         lowered = (query or "").lower()
         if any(token in lowered for token in ("etf", "lof", "基金", "fund")):
             return MarketRoute(
                 market="cn_fund",
                 exchange="unknown",
                 security_type="mutual_fund",
-                normalized_symbol=normalized_symbol or None,
+                normalized_symbol=symbol or None,
                 route_hint="fund_like_snapshot",
                 currency="CNY",
                 country="CN",
@@ -190,17 +182,21 @@ class MarketRouter:
                 market="cn_index",
                 exchange="unknown",
                 security_type="index",
-                normalized_symbol=normalized_symbol or None,
+                normalized_symbol=symbol or None,
                 route_hint="index_snapshot",
                 currency="CNY",
                 country="CN",
                 market_code="A",
             )
+        return MarketRouter._unknown_cn_route(symbol)
+
+    @staticmethod
+    def _unknown_cn_route(symbol: str | None) -> MarketRoute:
         return MarketRoute(
             market="cn",
             exchange="unknown",
             security_type="unknown",
-            normalized_symbol=normalized_symbol or None,
+            normalized_symbol=symbol or None,
             route_hint="query_only",
             currency="CNY",
             country="CN",

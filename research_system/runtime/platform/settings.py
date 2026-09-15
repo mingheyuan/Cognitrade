@@ -13,26 +13,23 @@ from research_system.runtime.workspace.layout import (
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider_name: str = "openai"
+    provider_name: str = "codex"
+    codex_enabled: bool = True
     default_model: str = "gpt-5.6-luna"
-    openai_reasoning_effort: str | None = None
-    openai_service_tier: str = "default"
-    openai_disable_response_storage: bool = True
+    codex_reasoning_effort: str | None = "low"
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536
-    openai_api_key: str | None = None
-    openai_base_url: str | None = None
-    tushare_token: str | None = None
-    mx_api_key: str | None = None
+    tushare_token: str | None = Field(default=None, repr=False)
+    mx_api_key: str | None = Field(default=None, repr=False)
     qdrant_url: str | None = None
-    qdrant_api_key: str | None = None
+    qdrant_api_key: str | None = Field(default=None, repr=False)
     qdrant_collection_name: str = "research_evidence"
     qdrant_hybrid_candidate_limit: int = 50
     qdrant_vector_weight: float = 0.55
     qdrant_lexical_weight: float = 0.45
     memory_vector_search_enabled: bool = False
     tool_resource_lease_backend: str = "file"
-    tool_resource_lease_redis_url: str | None = None
+    tool_resource_lease_redis_url: str | None = Field(default=None, repr=False)
     tool_resource_lease_key_prefix: str = "cognitrade:tool:lease:"
     tool_resource_lease_redis_timeout_seconds: float = 0.5
     tool_resource_lease_root: Path | None = None
@@ -46,21 +43,29 @@ class Settings(BaseModel):
     provider_policy_overrides: dict[str, str] = Field(default_factory=dict)
     sensitive_sources_enabled: bool = False
     sensitive_source_allowlist: list[str] = Field(default_factory=list)
-    xueqiu_cookie: str | None = None
+    xueqiu_cookie: str | None = Field(default=None, repr=False)
     browser_sources_enabled: bool = False
     paper_trading_enforce_market_hours: bool = True
-    cognitrade_database_url: str | None = None
+    cognitrade_database_url: str | None = Field(default=None, repr=False)
     cognitrade_database_auto_bootstrap: bool = True
     strategy_object_store_root: Path | None = None
     llm_request_timeout_seconds: int = 25
     uzi_llm_request_timeout_seconds: int = 480
+    uzi_llm_lite_request_timeout_seconds: int = 240
+    uzi_llm_medium_request_timeout_seconds: int = 600
+    uzi_llm_deep_request_timeout_seconds: int = 900
+    uzi_llm_buy_zone_request_timeout_seconds: int = 300
     uzi_llm_max_concurrency: int = 2
-    uzi_llm_transient_retries: int = 6
+    uzi_llm_transient_retries: int = 2
     uzi_llm_retry_base_seconds: float = 2.0
     uzi_llm_retry_max_seconds: float = 60.0
     max_agent_tool_loop_turns: int = 4
     max_child_threads_per_turn: int = 8
+    market_data_auto_collection_enabled: bool = False
+    market_data_collection_concurrency: int = 5
     fund_holding_report_concurrency: int = 2
+    fund_holding_report_max_auto_retries: int = 3
+    strategy_backfill_batch_timeout_seconds: int = 6 * 60 * 60
     artifacts_retention_days: int = 30
     max_artifacts_size_mb: int = 1024
     memory_expiration_interval_seconds: float = 300.0
@@ -77,12 +82,12 @@ class Settings(BaseModel):
         return build_settings_from_env(cls, repo_root)
 
     def validate(self) -> None:
-        if self.provider_name != "openai":
-            raise ValueError("provider_name must default to 'openai' for the current phase")
+        if self.provider_name != "codex":
+            raise ValueError("Only provider_name='codex' is supported; API-key providers were removed")
         if not self.default_model:
             raise ValueError("default_model must be configured")
-        if self.openai_service_tier not in {"auto", "default", "flex", "priority"}:
-            raise ValueError("openai_service_tier must be one of: auto, default, flex, priority")
+        if self.codex_reasoning_effort not in {None, "minimal", "low", "medium", "high", "xhigh", "max"}:
+            raise ValueError("Unsupported Codex reasoning effort")
         if self.run_timeout_seconds <= 0:
             raise ValueError("run_timeout_seconds must be positive")
         if self.embedding_dimensions <= 0:
@@ -93,6 +98,16 @@ class Settings(BaseModel):
             raise ValueError("llm_request_timeout_seconds must be positive")
         if self.uzi_llm_request_timeout_seconds <= 0:
             raise ValueError("uzi_llm_request_timeout_seconds must be positive")
+        if any(
+            timeout <= 0
+            for timeout in (
+                self.uzi_llm_lite_request_timeout_seconds,
+                self.uzi_llm_medium_request_timeout_seconds,
+                self.uzi_llm_deep_request_timeout_seconds,
+                self.uzi_llm_buy_zone_request_timeout_seconds,
+            )
+        ):
+            raise ValueError("profile-specific UZI request timeouts must be positive")
         if self.uzi_llm_max_concurrency <= 0:
             raise ValueError("uzi_llm_max_concurrency must be positive")
         if self.uzi_llm_transient_retries < 0:
@@ -110,8 +125,14 @@ class Settings(BaseModel):
             raise ValueError("max_agent_tool_loop_turns must be positive")
         if self.max_child_threads_per_turn <= 0:
             raise ValueError("max_child_threads_per_turn must be positive")
-        if not 1 <= self.fund_holding_report_concurrency <= 10:
-            raise ValueError("fund_holding_report_concurrency must be between 1 and 10")
+        if not 1 <= self.market_data_collection_concurrency <= 5:
+            raise ValueError("market_data_collection_concurrency must be between 1 and 5")
+        if not 1 <= self.fund_holding_report_concurrency <= 5:
+            raise ValueError("fund_holding_report_concurrency must be between 1 and 5")
+        if self.fund_holding_report_max_auto_retries < 0:
+            raise ValueError("fund_holding_report_max_auto_retries must not be negative")
+        if self.strategy_backfill_batch_timeout_seconds <= 0:
+            raise ValueError("strategy_backfill_batch_timeout_seconds must be positive")
         if self.tool_resource_lease_backend not in {"file", "redis"}:
             raise ValueError("tool_resource_lease_backend must be 'file' or 'redis'")
         if self.tool_resource_lease_backend == "redis" and not self.tool_resource_lease_redis_url:

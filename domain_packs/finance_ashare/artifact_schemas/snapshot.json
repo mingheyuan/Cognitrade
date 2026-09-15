@@ -13,6 +13,12 @@
       "type": "string",
       "minLength": 1
     },
+    "dimension_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "scope": {
       "type": "string",
       "enum": [
@@ -77,6 +83,35 @@
       "items": {
         "type": "string"
       }
+    },
+    "query_manifest": {
+      "type": "object"
+    },
+    "scoring_policy": {
+      "type": "object",
+      "required": [
+        "excluded",
+        "reason_code",
+        "reason"
+      ],
+      "properties": {
+        "excluded": {
+          "type": "boolean"
+        },
+        "reason_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "facts": {
       "type": "object"

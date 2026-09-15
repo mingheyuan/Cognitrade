@@ -15,7 +15,6 @@ SKIP_SYSTEM_INSTALL=0
 NO_BUILD=0
 PULL_BASE_IMAGES=0
 DRY_RUN=0
-REQUIRE_OPENAI=0
 BUILD_RETRIES="${COGNITRADE_DEPLOY_BUILD_RETRIES:-2}"
 LOG_TARGET="all"
 PROVIDER_SMOKE_SYMBOL="${COGNITRADE_PROVIDER_SMOKE_SYMBOL:-600519}"
@@ -53,7 +52,6 @@ Options:
   --timeout SECONDS             Readiness timeout; default: 300
   --env-file PATH               Deployment environment file; default: .env
   --compose-file PATH           Compose file; default: compose.yaml
-  --require-openai              Fail when OPENAI_API_KEY is empty
   --dry-run                     Print mutating commands without running them
   -h, --help                    Show this help
 
@@ -176,10 +174,6 @@ while (( $# )); do
             (( $# >= 2 )) || fail "--compose-file requires a value"
             COMPOSE_FILE="$2"
             shift 2
-            ;;
-        --require-openai)
-            REQUIRE_OPENAI=1
-            shift
             ;;
         --dry-run)
             DRY_RUN=1
@@ -497,12 +491,8 @@ validate_environment() {
         [[ "$object_store_root" == /* ]] || fail "COGNITRADE_OBJECT_STORE_ROOT must be an absolute container path"
     fi
 
-    local openai_key=""
-    openai_key="$(read_env_value OPENAI_API_KEY)"
-    if [[ -z "$openai_key" ]]; then
-        (( ! REQUIRE_OPENAI )) || fail "OPENAI_API_KEY is required by --require-openai"
-        warn "OPENAI_API_KEY is empty; research will use supported degraded behavior"
-    fi
+    # Model authentication belongs to Codex's managed login in its dedicated
+    # volume. Never inspect an API key or infer model readiness from one.
     [[ -d "$ROOT_DIR/workspace/config" ]] \
         || fail "workspace config templates are required"
 }

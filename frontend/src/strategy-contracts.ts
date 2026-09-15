@@ -1,9 +1,10 @@
 export type BacktestMode = 'fund_only' | 'holdings_portfolio'
-export type StrategyLifecycle = 'draft' | 'published' | 'archived'
-export type GovernanceState = 'published' | 'verified' | 'promoted'
-export type SignalState = 'ALLOW_BUY' | 'WATCH' | 'AVOID' | 'BLOCKED'
+export type ResearchProfile = 'lite' | 'medium' | 'deep'
+type StrategyLifecycle = 'draft' | 'published' | 'archived'
+type GovernanceState = 'published' | 'verified' | 'promoted'
+type SignalState = 'ALLOW_BUY' | 'WATCH' | 'AVOID' | 'BLOCKED'
 
-export type StrategyDocument = {
+export type StrategyDocumentV1 = {
   metadata: { schema_version: '1'; description: string }
   pins: {
     uzi_methodology_version: string
@@ -17,7 +18,7 @@ export type StrategyDocument = {
   }
   report_inputs: {
     holding_uzi_required: true
-    research_profile: 'deep'
+    research_profile: ResearchProfile
     top_n: number
     independent_holding_signals_enabled: boolean
     enabled_backtest_modes: BacktestMode[]
@@ -58,7 +59,19 @@ export type StrategyDocument = {
   asset_execution: {
     stock: Record<string, string | number>
     exchange_fund: Record<string, string | number>
-    otc_fund: Record<string, string | number | boolean>
+    otc_fund: {
+      subscription_fee_rate_fallback: number
+      redemption_fee_rate_fallback: number
+      subscription_confirmation_days: number
+      redemption_confirmation_days: number
+      require_open_status: boolean
+      missing_open_status_policy: string
+      max_position_pct?: number
+      entry_tranche_pct?: number
+      max_entry_tranches?: number
+      minimum_entry_interval_days?: number
+      [key: string]: string | number | boolean | undefined
+    }
   }
   schedule_defaults: {
     enabled: boolean
@@ -69,7 +82,50 @@ export type StrategyDocument = {
   }
 }
 
-export type StrategyVersion = {
+export type StrategyDocumentV2 = Omit<StrategyDocumentV1,
+  'metadata' | 'fund_composite' | 'factor_weights' | 'signal_thresholds' | 'execution'> & {
+  metadata: { schema_version: '2'; description: string }
+  report_signal: {
+    model: 'report_conditions_v1'
+    source: 'dashboard.battle_plan'
+    extractor_version: 'uzi-battle-plan-v1'
+    entry_fraction: 0.5
+    entry_valid_trading_days: 3
+    evaluation: 'daily_close_next_open'
+    position_plan: 'lock_on_entry'
+    gap_policy: 'cancel_outside_stop_target'
+    weight_policy: 'original_disclosed_no_normalization'
+  }
+  execution: { max_single_stock_pct: number }
+}
+
+export type StrategyDocument = StrategyDocumentV1 | StrategyDocumentV2
+
+export function isReportConditionsDocument(document: StrategyDocument | null | undefined): document is StrategyDocumentV2 {
+  return document?.metadata.schema_version === '2'
+}
+
+export type ReportExecutionPlan = {
+  model: 'report_conditions_v1'
+  native_verdict: string
+  native_verdict_label: string
+  native_overall_score: number | null
+  prices: { entry: number | null; stop: number | null; target: number | null }
+  original_disclosed_weight_pct: number | null
+  entry_fraction: number
+  entry_permitted: boolean
+  executable: boolean
+  errors: string[]
+  source_artifact_id: string | null
+  source_content_hash: string | null
+  source_field: string
+  source_node_id: string
+  source_report_set_id: string
+  source_report_revision: number
+  [key: string]: unknown
+}
+
+type StrategyVersion = {
   id: string
   strategy_id: string
   version_number: number
@@ -79,10 +135,13 @@ export type StrategyVersion = {
   artifact_run_id?: string | null
   published_at: string
   published_by: string
+  research_profile?: ResearchProfile
+  schema_version?: '1' | '2'
+  signal_model?: string
   document?: StrategyDocument
 }
 
-export type StrategyDraft = {
+type StrategyDraft = {
   strategy_id: string
   base_version_id?: string | null
   draft_revision: number
@@ -148,6 +207,35 @@ export type ReportJob = {
   attempts?: Array<Record<string, unknown>>
   created_at: string
   updated_at: string
+  completed_at?: string | null
+}
+
+export type ReportRepairPlan = {
+  job_id: string
+  automatic_collection: false
+  items: Array<{
+    symbol: string
+    as_of_date: string
+    recovery: { kind: string; action: string }
+    dimensions: Array<{ dimension: string; reason: string; retryable: boolean }>
+    pending_evidence: Array<{ dimension: string; url: string }>
+    collection_request: {
+      symbols: string[]; asset_family: 'equity'; start_date: string; end_date: string
+      dimensions: string[]; mode: 'missing_or_stale' | 'force_all'; max_concurrency: number
+      publish_when_complete: false; include_research_archive: boolean
+      research_document_requests?: Array<{ dimension: string; url: string }>
+    } | null
+    notes: string[]
+  }>
+}
+
+export type ReportEvidenceCollection = {
+  id: string
+  status: string
+  freeze_status?: string
+  can_confirm_freeze?: boolean
+  publication_candidate?: { proposal_hash: string; degraded?: boolean } | null
+  research_archive?: { succeeded?: number; failed?: number; attempted?: number; persisted_snapshot_count?: number } | null
 }
 
 export type DailyReportSet = {
@@ -185,10 +273,11 @@ export type TradeSignal = {
   confidence: number
   reasons: string[]
   content_hash?: string
+  execution_plan?: ReportExecutionPlan | null
   [key: string]: unknown
 }
 
-export type SignalCalculation = {
+type SignalCalculation = {
   subject_code?: string
   state: SignalState
   score_lower_bound: number
@@ -196,6 +285,7 @@ export type SignalCalculation = {
   coverage: number
   confidence: number
   reasons: string[]
+  execution_plan?: ReportExecutionPlan | null
 }
 
 export type SignalPreviewResult = {
@@ -204,11 +294,15 @@ export type SignalPreviewResult = {
   strategy_version_id: string
   strategy_content_hash: string
   report_set_id: string
-  fund_signal: SignalCalculation
+  fund_signal: SignalCalculation | null
   stock_signals: SignalCalculation[]
 }
 
 export type BacktestPreflight = {
+  signal_model?: 'report_conditions_v1' | string
+  executable_plan_count?: number
+  blocked_plan_count?: number
+  executable_plan_coverage?: number
   assignment_id: string
   strategy_version_id: string
   strategy_content_hash: string
@@ -219,7 +313,68 @@ export type BacktestPreflight = {
   missing_report_dates: string[]
   signal_count: number
   ready: boolean
+  can_run?: boolean
+  report_coverage?: number
+  signal_coverage?: number
+  market_data_checked?: boolean
+  market_data_missing?: Array<{ symbol: string; code: string; message: string; suggested_collection?: unknown }>
+  signal_uncovered_dates?: string[]
   carry_days: number
+}
+
+type BacktestEquityPoint = {
+  date: string
+  equity?: number
+  cash?: number
+  market_value?: number
+  pending_confirmation_value?: number
+  committed_position_value?: number
+  position_weight_pct?: number
+  value?: number
+  return_pct?: number
+}
+
+type BacktestTrade = {
+  date: string
+  order_date?: string
+  side: string
+  instrument_id?: string
+  symbol?: string
+  price: number
+  quantity: number
+  gross_value: number
+  cash_after?: number
+  fees?: Record<string, number>
+  signal_id?: string
+  signal_ids?: string[]
+  source_report_set_id?: string
+  technical_reason?: string
+  entry_tranche_index?: number
+  entry_tranche_limit?: number
+}
+
+type BacktestBenchmark = {
+  status: string
+  start?: string
+  end?: string
+  return_pct?: number
+  symbol?: string
+  name?: string
+  reason?: string
+  equity_curve?: BacktestEquityPoint[]
+}
+
+export type StrategyBacktestResult = {
+  schema_version?: string
+  mode?: BacktestMode
+  period?: { start?: string; end?: string }
+  equity_curve: BacktestEquityPoint[]
+  trades: BacktestTrade[]
+  benchmarks: Record<string, BacktestBenchmark>
+  metrics: Record<string, number>
+  report_set_ids?: string[]
+  execution_adapter?: Record<string, unknown>
+  ending_positions?: Record<string, number>
 }
 
 export type StrategyBacktest = {
@@ -234,9 +389,13 @@ export type StrategyBacktest = {
   start_date: string
   end_date: string
   initial_cash: number
+  report_policy?: 'existing_only' | 'require_complete'
+  benchmark?: Record<string, unknown>
+  input_snapshot_hash?: string | null
   status: string
   metrics: Record<string, number>
-  result?: Record<string, unknown>
+  result?: StrategyBacktestResult
+  result_content_hash?: string | null
   error_summary?: string | null
   created_at: string
   completed_at?: string | null
@@ -274,24 +433,6 @@ export type PaperStrategyBinding = {
   promoted_at: string
 }
 
-export type StrategyPaperOrder = {
-  id: string
-  binding_id: string
-  strategy_version_id: string
-  signal_id: string
-  source_report_set_id: string
-  client_order_id: string
-  paper_order_id?: string | null
-  symbol: string
-  side: 'buy' | 'sell'
-  quantity: number
-  technical_reason: string
-  status: string
-  paper_order: Record<string, unknown>
-  created_at: string
-  idempotent_replay: boolean
-}
-
 export type StrategyWorkspaceContext = {
   strategyId?: string
   tab?: 'rules' | 'signals' | 'versions' | 'assignments' | 'backtests' | 'governance'
@@ -299,9 +440,10 @@ export type StrategyWorkspaceContext = {
   fundName?: string
   sourceRunId?: string
   sourceArtifactId?: string
+  fundBundleId?: string
   reportSetId?: string
   strategyVersionId?: string
   assignmentId?: string
-  mode: BacktestMode
+  mode?: BacktestMode
   holdingSymbol?: string
 }

@@ -8,6 +8,24 @@ from research_system.runtime.platform.settings import Settings, ensure_workspace
 
 
 class SettingsRuntimeTests(unittest.TestCase):
+    def test_credentials_are_not_in_settings_repr(self) -> None:
+        secrets = {
+            "tushare_token": "test-only-tushare-secret",
+            "mx_api_key": "test-only-mx-secret",
+            "qdrant_api_key": "test-only-vector-secret",
+            "xueqiu_cookie": "test-only-cookie-secret",
+            "tool_resource_lease_redis_url": "redis://user:test-only-redis-secret@localhost/0",
+            "cognitrade_database_url": "postgresql://user:test-only-database-secret@localhost/db",
+        }
+        # Construct without loading .env: assertion failures must never carry
+        # the developer's real credentials into test logs.
+        settings = Settings.model_construct(**secrets)
+        for representation in (repr(settings), str(settings)):
+            for value in secrets.values():
+                self.assertNotIn(value, representation)
+        for key, value in secrets.items():
+            self.assertEqual(getattr(settings, key), value)
+
     def test_ensure_workspace_layout_seeds_templates_from_explicit_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -33,12 +51,12 @@ class SettingsRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             (root / ".env").write_text(
-                "OPENAI_MODEL=test-model\n"
-                "OPENAI_REASONING_EFFORT=xhigh\n"
-                "OPENAI_SERVICE_TIER=priority\n"
-                "OPENAI_DISABLE_RESPONSE_STORAGE=false\n"
+                "CODEX_MODEL=test-model\n"
+                "CODEX_REASONING_EFFORT=xhigh\n"
                 "UZI_LLM_REQUEST_TIMEOUT_SECONDS=360\n"
-                "COGNITRADE_BAOSTOCK_SOCKET_TIMEOUT_SECONDS=9\n",
+                "COGNITRADE_BAOSTOCK_SOCKET_TIMEOUT_SECONDS=9\n"
+                "COGNITRADE_FUND_HOLDING_REPORT_MAX_AUTO_RETRIES=4\n"
+                "COGNITRADE_STRATEGY_BACKFILL_BATCH_TIMEOUT_SECONDS=28800\n",
                 encoding="utf-8",
             )
 
@@ -46,13 +64,25 @@ class SettingsRuntimeTests(unittest.TestCase):
             resolved_root = root.resolve()
 
             self.assertEqual(settings.default_model, "test-model")
-            self.assertEqual(settings.openai_reasoning_effort, "xhigh")
-            self.assertEqual(settings.openai_service_tier, "priority")
-            self.assertFalse(settings.openai_disable_response_storage)
+            self.assertEqual(settings.codex_reasoning_effort, "xhigh")
+            self.assertEqual(settings.provider_name, "codex")
             self.assertEqual(settings.uzi_llm_request_timeout_seconds, 360)
             self.assertEqual(settings.baostock_socket_timeout_seconds, 9)
+            self.assertEqual(settings.fund_holding_report_max_auto_retries, 4)
+            self.assertEqual(settings.strategy_backfill_batch_timeout_seconds, 28800)
+            self.assertFalse(settings.market_data_auto_collection_enabled)
+            self.assertEqual(settings.market_data_collection_concurrency, 5)
+            self.assertEqual(settings.fund_holding_report_concurrency, 2)
             self.assertEqual(settings.workspace_root, resolved_root / "workspace")
             self.assertEqual(settings.config_root, resolved_root / "workspace" / "config")
+
+    def test_market_data_collection_concurrency_is_limited_to_five(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = Settings.from_env(Path(temp_dir)).model_copy(
+                update={"market_data_collection_concurrency": 6}
+            )
+            with self.assertRaisesRegex(ValueError, "between 1 and 5"):
+                settings.validate()
 
 
 if __name__ == "__main__":

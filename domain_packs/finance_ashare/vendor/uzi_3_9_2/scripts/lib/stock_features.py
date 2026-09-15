@@ -27,6 +27,22 @@ def _f(v, default=0.0) -> float:
         return default
 
 
+def sanitize_features(features: dict | None) -> dict:
+    """Return a copy without top-level ``None`` values.
+
+    Institutional workflows use ``dict.get(key, conservative_default)``. A
+    present key whose value is ``None`` bypasses that default and can trigger
+    numeric ``TypeError`` exceptions. Keep this sanitizer at the modeling
+    boundary only: the investor evaluator intentionally uses ``None`` to mark
+    unavailable evidence and skip a rule instead of scoring it as a failure.
+    """
+    return {
+        key: value
+        for key, value in (features or {}).items()
+        if value is not None
+    }
+
+
 def _pct_change(values: list, n: int = 1) -> float:
     """n-period % change between first and last."""
     if not values or len(values) < 2:
@@ -127,7 +143,15 @@ def extract_features(raw: dict, dims: dict) -> dict:
     f["roe_trend_up"] = _last(roe_hist) > _avg(roe_hist[:-1]) if len(roe_hist) >= 3 else False
 
     f["revenue_latest_yi"] = _last(rev_hist)
-    f["revenue_growth_latest"] = _pct_change(rev_hist, 1)
+    explicit_revenue_yoy = fin.get("revenue_growth_yoy")
+    f["revenue_growth_latest"] = (
+        _f(explicit_revenue_yoy)
+        if explicit_revenue_yoy is not None
+        else _pct_change(rev_hist, 1)
+    )
+    f["revenue_growth_period"] = fin.get("revenue_growth_period")
+    f["revenue_growth_basis"] = fin.get("revenue_growth_basis")
+    f["revenue_growth_source"] = fin.get("revenue_growth_source")
     f["revenue_growth_3y_cagr"] = ((_last(rev_hist) / _f(rev_hist[-4])) ** (1/3) - 1) * 100 if len(rev_hist) >= 4 and _f(rev_hist[-4]) > 0 else 0
 
     f["net_profit_latest_yi"] = _last(np_hist)

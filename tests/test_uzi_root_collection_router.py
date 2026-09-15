@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import importlib
 import os
+import threading
+import time
+import unittest
+from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
-import unittest
 from unittest.mock import patch
 
-from domain_packs.finance_ashare.subagents.uzi_methodology import select_profile
-from domain_packs.finance_ashare.subagents.uzi_392_native_methods import build_uzi_raw
 from domain_packs.finance_ashare.subagents import runtime as subagent_runtime
+from domain_packs.finance_ashare.subagents.uzi_392_native_methods import build_uzi_raw
+from domain_packs.finance_ashare.subagents.uzi_methodology import select_profile
 from domain_packs.finance_ashare.tools import snapshot_collector
 from domain_packs.finance_ashare.vendor.uzi_3_9_2 import Uzi392FetcherRuntime
 
@@ -169,6 +172,35 @@ class UziRootCollectionRouterTests(unittest.TestCase):
         self.assertIn("uzi_pipeline_partial", row["degrade_reasons"])
         self.assertEqual(row["source_trace"][0]["status"], "degraded")
 
+    def test_capital_flow_uses_symbol_value_not_transport_presence_wrapper(self) -> None:
+        for field in ("margin_recent", "holder_count_history", "block_trades_recent", "unlock_recent"):
+            for row_symbol, expected in (("688041", "degraded"), ("688012", "data_gap")):
+                with self.subTest(field=field, row_symbol=row_symbol):
+                    raw_result = {
+                        "data": {field: [{"代码": row_symbol, "recorded": 1}]},
+                        "source": "recorded-source",
+                        "_pipeline": {
+                            "quality": "partial",
+                            "data_gaps": ["northbound"],
+                        },
+                    }
+                    # Native SKILL has ticker, but no host-added full/code aliases.
+                    symbol_result = {
+                        "ticker": "688041.SH",
+                        "dimensions": {"12_capital_flow": raw_result},
+                    }
+                    row = snapshot_collector._project_uzi_symbol_snapshot(
+                        query="recorded capital flow",
+                        requested_symbol="688041.SH",
+                        snapshot_type="capital_flow",
+                        symbol_result=symbol_result,
+                    )
+                    self.assertEqual(row["quality_status"], expected)
+                    self.assertEqual(row["facts"]["_uzi_raw_result"], raw_result)
+                    self.assertEqual(row["facts"]["_uzi_root_fields"]["full"], {
+                        "present": False, "value": None,
+                    })
+
     def test_request_scoped_no_resume_reaches_root_uzi_router(self) -> None:
         symbol_result = {
             "ticker": "600519",
@@ -202,6 +234,53 @@ class UziRootCollectionRouterTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertIs(collect_symbol.call_args.kwargs["resume"], False)
+        self.assertEqual(
+            collect_symbol.call_args.kwargs["options"][
+                "cognitrade_pipeline_fetcher_timeout_overrides"
+            ],
+            {"similar_stocks": 30.0},
+        )
+
+    def test_pipeline_host_timeout_override_reaches_spawn_job(self) -> None:
+        observed: dict[str, float] = {}
+
+        with TemporaryDirectory() as temporary:
+            runtime = self._runtime(Path(temporary))
+            pipeline_run = importlib.import_module("lib.pipeline.run")
+            pipeline_collect = importlib.import_module("lib.pipeline.collect")
+            run_real_test = importlib.import_module("run_real_test")
+
+            def collect_with_job(*_args, **_kwargs):
+                job = pipeline_collect.ProcessJob(
+                    "similar_stocks",
+                    lambda: None,
+                    timeout_sec=120.0,
+                )
+                observed["timeout_seconds"] = job.timeout_sec
+                return {}
+
+            with (
+                patch.dict(os.environ, {"UZI_LEGACY": "0"}),
+                patch.object(pipeline_run, "_preflight_guards"),
+                patch.object(
+                    pipeline_collect,
+                    "collect",
+                    side_effect=collect_with_job,
+                ),
+                patch.object(run_real_test, "collect_raw_data") as legacy,
+                patch.object(runtime, "_write_native_raw"),
+            ):
+                runtime.collect_symbol(
+                    ticker="600519",
+                    options={
+                        "cognitrade_pipeline_fetcher_timeout_overrides": {
+                            "similar_stocks": 30.0,
+                        }
+                    },
+                )
+
+        self.assertEqual(observed, {"timeout_seconds": 30.0})
+        legacy.assert_not_called()
 
     def test_multi_runner_keeps_pinned_resume_true(self) -> None:
         symbol_result = {
@@ -310,10 +389,13 @@ class UziRootCollectionRouterTests(unittest.TestCase):
                 )
 
         result = raw["dimensions"]["12_capital_flow"]
-        self.assertEqual(raw["_uzi_execution"], {
-            "lane": "pipeline",
-            "fallback_reason": None,
-        })
+        self.assertEqual(
+            raw["_uzi_execution"],
+            {
+                "lane": "pipeline",
+                "fallback_reason": None,
+            },
+        )
         self.assertIsNone(result["data"]["northbound"])
         self.assertIsNone(result["data"]["margin_recent"])
         self.assertEqual(
@@ -330,7 +412,9 @@ class UziRootCollectionRouterTests(unittest.TestCase):
         main.assert_called_once_with("600519")
         legacy.assert_not_called()
 
-    def test_capital_flow_provider_exception_is_v3_error_not_root_fallback(self) -> None:
+    def test_capital_flow_provider_exception_is_v3_error_not_root_fallback(
+        self,
+    ) -> None:
         with TemporaryDirectory() as temporary:
             runtime = self._runtime(Path(temporary))
             pipeline_run = importlib.import_module("lib.pipeline.run")
@@ -362,7 +446,9 @@ class UziRootCollectionRouterTests(unittest.TestCase):
         self.assertEqual(result["data"], {})
         self.assertTrue(result["fallback"])
         self.assertEqual(result["_pipeline"]["quality"], "error")
-        self.assertIn("RuntimeError: provider fixture failed", result["_pipeline"]["error"])
+        self.assertIn(
+            "RuntimeError: provider fixture failed", result["_pipeline"]["error"]
+        )
         main.assert_called_once_with("600519")
         legacy.assert_not_called()
 
@@ -393,7 +479,9 @@ class UziRootCollectionRouterTests(unittest.TestCase):
                     "read_task_output",
                     side_effect=ValueError("corrupt json fixture"),
                 ),
-                patch.object(pipeline_collect, "collect", return_value=collected) as collect,
+                patch.object(
+                    pipeline_collect, "collect", return_value=collected
+                ) as collect,
                 patch.object(run_real_test, "collect_raw_data") as legacy,
                 patch.object(runtime, "_write_native_raw"),
             ):
@@ -466,7 +554,9 @@ class UziRootCollectionRouterTests(unittest.TestCase):
         collect.assert_not_called()
         legacy.assert_not_called()
 
-    def test_pipeline_infrastructure_exception_discards_v3_and_falls_back_whole_symbol(self) -> None:
+    def test_pipeline_infrastructure_exception_discards_v3_and_falls_back_whole_symbol(
+        self,
+    ) -> None:
         legacy_raw = self._legacy_raw(marker="infra-legacy")
         v3_candidate = {
             "0_basic": {"data": {"marker": "discarded-v3"}},
@@ -513,8 +603,7 @@ class UziRootCollectionRouterTests(unittest.TestCase):
             "RuntimeError",
         )
         projected_markers = {
-            dimension["data"]["marker"]
-            for dimension in raw["dimensions"].values()
+            dimension["data"]["marker"] for dimension in raw["dimensions"].values()
         }
         self.assertEqual(projected_markers, {"infra-legacy"})
         self.assertNotIn("discarded-v3", str(raw))
@@ -542,10 +631,13 @@ class UziRootCollectionRouterTests(unittest.TestCase):
             ):
                 raw = runtime.collect_symbol(ticker="600519", max_workers=3)
 
-        self.assertEqual(raw["_uzi_execution"], {
-            "lane": "legacy_forced",
-            "fallback_reason": None,
-        })
+        self.assertEqual(
+            raw["_uzi_execution"],
+            {
+                "lane": "legacy_forced",
+                "fallback_reason": None,
+            },
+        )
         self.assertEqual(
             raw["dimensions"]["12_capital_flow"]["data"]["marker"],
             "forced-legacy",
@@ -571,7 +663,9 @@ class UziRootCollectionRouterTests(unittest.TestCase):
             with (
                 patch.dict(os.environ, {"UZI_LEGACY": "1"}),
                 patch.object(pipeline_run, "_preflight_guards"),
-                patch.object(pipeline_collect, "collect", return_value=collected) as collect,
+                patch.object(
+                    pipeline_collect, "collect", return_value=collected
+                ) as collect,
                 patch.object(run_real_test, "collect_raw_data") as legacy,
                 patch.object(runtime, "_write_native_raw"),
             ):
@@ -602,7 +696,9 @@ class UziRootCollectionRouterTests(unittest.TestCase):
             with (
                 patch.dict(os.environ, {"UZI_NO_RESUME": "1"}),
                 patch.object(pipeline_run, "_preflight_guards"),
-                patch.object(pipeline_collect, "collect", return_value=collected) as collect,
+                patch.object(
+                    pipeline_collect, "collect", return_value=collected
+                ) as collect,
                 patch.object(runtime, "_write_native_raw"),
             ):
                 runtime.collect_symbol(
@@ -735,14 +831,18 @@ class UziRootCollectionRouterTests(unittest.TestCase):
             pipeline_run = importlib.import_module("lib.pipeline.run")
             pipeline_collect = importlib.import_module("lib.pipeline.collect")
             pipeline_schema = importlib.import_module("lib.pipeline.schema")
-            pipeline_registry = importlib.import_module("lib.pipeline.fetchers.registry")
+            pipeline_registry = importlib.import_module(
+                "lib.pipeline.fetchers.registry"
+            )
             capital_flow = importlib.import_module("fetch_capital_flow")
             run_real_test = importlib.import_module("run_real_test")
 
             def collect_v3(ticker: str, **_kwargs) -> dict:
                 capital_fetcher = pipeline_registry.get_fetcher("12_capital_flow")
                 if capital_fetcher is None:
-                    raise AssertionError("Pinned UZI registry is missing 12_capital_flow")
+                    raise AssertionError(
+                        "Pinned UZI registry is missing 12_capital_flow"
+                    )
                 basic = pipeline_schema.DimResult(
                     dim_key="0_basic",
                     data={"name": "贵州茅台", "price": 1400.0},
@@ -780,7 +880,9 @@ class UziRootCollectionRouterTests(unittest.TestCase):
         self.assertNotIn("fixture:legacy", str(raw["dimensions"]))
         legacy.assert_not_called()
 
-    def test_symbol_bonus_top_level_fields_round_trip_without_becoming_dimensions(self) -> None:
+    def test_symbol_bonus_top_level_fields_round_trip_without_becoming_dimensions(
+        self,
+    ) -> None:
         pipeline_schema = None
         cases = (
             (
@@ -863,14 +965,19 @@ class UziRootCollectionRouterTests(unittest.TestCase):
                 else:
                     self.assertNotIn("6_fund_holders", raw["dimensions"])
 
-    def test_requested_capital_flow_only_still_executes_complete_v3_registry(self) -> None:
+    def test_requested_capital_flow_only_still_executes_complete_v3_registry(
+        self,
+    ) -> None:
         executed: list[str] = []
         with TemporaryDirectory() as temporary:
-            runtime = self._runtime(Path(temporary))
+            self._runtime(Path(temporary))
             pipeline_run = importlib.import_module("lib.pipeline.run")
             pipeline_collect = importlib.import_module("lib.pipeline.collect")
-            pipeline_registry = importlib.import_module("lib.pipeline.fetchers.registry")
+            pipeline_registry = importlib.import_module(
+                "lib.pipeline.fetchers.registry"
+            )
             pipeline_schema = importlib.import_module("lib.pipeline.schema")
+            run_real_test = importlib.import_module("run_real_test")
 
             class FixtureFetcher:
                 def __init__(self, dim_key: str) -> None:
@@ -897,24 +1004,41 @@ class UziRootCollectionRouterTests(unittest.TestCase):
                 return FixtureFetcher(dim_key)
 
             def run_jobs(jobs, *, max_workers, overall_timeout):
+                # Execute the scheduler's complete transport signature. The
+                # cache-bound target carries (root, target, args, kwargs), and
+                # the contest policy wrapper is already part of that target.
                 return [
                     pipeline_collect.ProcessOutcome(
                         key=job.key,
-                        value=(
-                            pipeline_collect._run_fetcher_job
-                            if job.key == "19_contests"
-                            else job.target
-                        )(*job.args[:3], **job.kwargs),
+                        value=job.target(*job.args, **job.kwargs),
                     )
                     for job in jobs
                 ]
+
+            def offline_contest_job(dim_key, ticker, raw_context=None, policy=None):
+                # The fixture executes child work in the collector thread.
+                # Do not reacquire the parent's source-policy lock there;
+                # real spawned-process composition has dedicated coverage.
+                return pipeline_collect._run_fetcher_job(dim_key, ticker, raw_context)
 
             with (
                 patch.dict(os.environ, {"UZI_LEGACY": "0"}),
                 patch.object(pipeline_run, "_preflight_guards"),
                 patch.object(pipeline_collect, "DEPENDENT_DIMS", set()),
                 patch.object(pipeline_collect, "get_fetcher", side_effect=get_fetcher),
-                patch.object(pipeline_collect, "run_process_jobs", side_effect=run_jobs),
+                patch.object(
+                    pipeline_collect, "run_process_jobs", side_effect=run_jobs
+                ),
+                patch(
+                    "domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime._run_pipeline_contest_job",
+                    side_effect=offline_contest_job,
+                ),
+                patch.object(
+                    run_real_test, "collect_raw_data",
+                    side_effect=AssertionError("registry fixture must not fall back to real collection"),
+                ),
+                patch("socket.socket.connect", side_effect=AssertionError("registry fixture must stay offline")),
+                patch("socket.create_connection", side_effect=AssertionError("registry fixture must stay offline")),
                 patch.object(Uzi392FetcherRuntime, "_write_native_raw"),
             ):
                 rows = snapshot_collector.collect_snapshots(
@@ -930,7 +1054,9 @@ class UziRootCollectionRouterTests(unittest.TestCase):
         self.assertEqual(set(executed), set(pipeline_registry.FETCHER_REGISTRY))
         self.assertEqual(len(executed), len(pipeline_registry.FETCHER_REGISTRY))
         self.assertEqual(len(pipeline_registry.FETCHER_REGISTRY), 22)
-        self.assertEqual(len(select_profile({"research_profile": "lite"})["fetchers_enabled"]), 7)
+        self.assertEqual(
+            len(select_profile({"research_profile": "lite"})["fetchers_enabled"]), 7
+        )
         self.assertEqual([row["snapshot_type"] for row in rows], ["capital_flow"])
         self.assertEqual(rows[0]["facts"]["marker"], "12_capital_flow")
         self.assertEqual(rows[0]["facts"]["_uzi_execution"]["lane"], "pipeline")
@@ -954,12 +1080,15 @@ class UziRootCollectionRouterTests(unittest.TestCase):
             },
             "_uzi_execution": {"lane": "pipeline", "fallback_reason": None},
         }
-        with TemporaryDirectory() as temporary, patch.object(
-            Uzi392FetcherRuntime,
-            "collect_symbol",
-            autospec=True,
-            return_value=symbol_result,
-        ) as collect_symbol:
+        with (
+            TemporaryDirectory() as temporary,
+            patch.object(
+                Uzi392FetcherRuntime,
+                "collect_symbol",
+                autospec=True,
+                return_value=symbol_result,
+            ) as collect_symbol,
+        ):
             rows = snapshot_collector.collect_snapshots(
                 query="重复请求",
                 symbols=["600519"],
@@ -973,7 +1102,162 @@ class UziRootCollectionRouterTests(unittest.TestCase):
         self.assertEqual(rows[0]["facts"]["marker"], "one-symbol-run")
         collect_symbol.assert_called_once()
 
-    def test_snapshot_projection_round_trips_pipeline_and_legacy_bonus_spills(self) -> None:
+    def test_multi_symbol_root_route_honors_symbol_concurrency_and_output_order(
+        self,
+    ) -> None:
+        active = 0
+        peak_active = 0
+        state_lock = threading.Lock()
+        callback_thread_ids: list[int] = []
+        caller_thread_id = threading.get_ident()
+        symbols = ["600519", "000858", "300750", "601318"]
+
+        def collect_symbol(_runtime, *, ticker, **_kwargs):
+            nonlocal active, peak_active
+            with state_lock:
+                active += 1
+                peak_active = max(peak_active, active)
+            # Make completion order differ from request order. The returned
+            # snapshots must nevertheless retain the caller's symbol order.
+            time.sleep(0.01 if ticker != "600519" else 0.04)
+            with state_lock:
+                active -= 1
+            return {
+                "ticker": ticker,
+                "market": "A",
+                "code": ticker,
+                "full": ticker,
+                "dimensions": {
+                    "0_basic": {
+                        "data": {"marker": ticker},
+                        "source": "fixture:basic",
+                        "fallback": False,
+                        "_pipeline": {"dim_key": "0_basic", "quality": "full"},
+                    }
+                },
+                "_uzi_execution": {"lane": "pipeline", "fallback_reason": None},
+            }
+
+        with patch.object(
+            Uzi392FetcherRuntime,
+            "collect_symbol",
+            autospec=True,
+            side_effect=collect_symbol,
+        ) as mocked:
+            rows = snapshot_collector.collect_snapshots(
+                query="组合并发采集",
+                symbols=symbols,
+                snapshot_types=["market"],
+                research_profile="deep",
+                max_workers=2,
+                progress_callback=lambda _event: callback_thread_ids.append(
+                    threading.get_ident()
+                ),
+                uzi_root_route=True,
+                uzi_root_route_mode="multi",
+            )
+
+        self.assertEqual(peak_active, 2)
+        self.assertEqual([row["symbol"] for row in rows], symbols)
+        self.assertEqual(len(mocked.call_args_list), len(symbols))
+        self.assertEqual(
+            {call.kwargs["max_workers"] for call in mocked.call_args_list},
+            {snapshot_collector._UZI_MAX_WORKERS},
+        )
+        self.assertEqual(set(callback_thread_ids), {caller_thread_id})
+
+    def test_historical_multi_symbol_route_uses_stock_concurrency_and_keeps_order(
+        self,
+    ) -> None:
+        active = 0
+        peak_active = 0
+        state_lock = threading.Lock()
+        symbols = ["600519", "000858", "300750", "601318"]
+
+        def collect_one(**kwargs):
+            nonlocal active, peak_active
+            symbol = kwargs["symbols"][0]
+            with state_lock:
+                active += 1
+                peak_active = max(peak_active, active)
+            time.sleep(0.01 if symbol != "600519" else 0.04)
+            with state_lock:
+                active -= 1
+            return [{"snapshot_type": "market", "symbol": symbol}]
+
+        with patch.object(
+            snapshot_collector,
+            "_collect_snapshots",
+            side_effect=collect_one,
+        ) as mocked:
+            rows = snapshot_collector.collect_snapshots(
+                query="历史组合并发采集",
+                symbols=symbols,
+                snapshot_types=["market"],
+                research_profile="medium",
+                max_workers=2,
+                as_of_date=date(2026, 9, 1),
+            )
+
+        self.assertEqual(peak_active, 2)
+        self.assertEqual([row["symbol"] for row in rows], symbols)
+        self.assertEqual(len(mocked.call_args_list), len(symbols))
+        self.assertEqual(
+            {call.kwargs["max_workers"] for call in mocked.call_args_list},
+            {snapshot_collector._UZI_MAX_WORKERS},
+        )
+
+    def test_multi_symbol_root_route_cancellation_stops_new_symbol_starts(self) -> None:
+        cancellation = threading.Event()
+        first_wave = threading.Barrier(2)
+        called: list[str] = []
+        called_lock = threading.Lock()
+        symbols = ["600519", "000858", "300750", "601318"]
+
+        def collect_symbol(_runtime, *, ticker, **_kwargs):
+            with called_lock:
+                called.append(ticker)
+            first_wave.wait(timeout=1)
+            cancellation.set()
+            return {
+                "ticker": ticker,
+                "market": "A",
+                "code": ticker,
+                "full": ticker,
+                "dimensions": {
+                    "0_basic": {
+                        "data": {"marker": ticker},
+                        "source": "fixture:basic",
+                        "fallback": False,
+                        "_pipeline": {"dim_key": "0_basic", "quality": "full"},
+                    }
+                },
+                "_uzi_execution": {"lane": "pipeline", "fallback_reason": None},
+            }
+
+        with patch.object(
+            Uzi392FetcherRuntime,
+            "collect_symbol",
+            autospec=True,
+            side_effect=collect_symbol,
+        ):
+            rows = snapshot_collector.collect_snapshots(
+                query="取消组合采集",
+                symbols=symbols,
+                snapshot_types=["market"],
+                research_profile="deep",
+                max_workers=2,
+                cancellation=cancellation,
+                uzi_root_route=True,
+                uzi_root_route_mode="multi",
+            )
+
+        self.assertEqual(set(called), set(symbols[:2]))
+        self.assertEqual([row["symbol"] for row in rows], symbols[:2])
+
+    def test_snapshot_projection_round_trips_pipeline_and_legacy_bonus_spills(
+        self,
+    ) -> None:
         fund_dimension = {
             "data": {"active_funds_count": 1},
             "source": "legacy:fetch_fund_holders",
@@ -1037,11 +1321,15 @@ class UziRootCollectionRouterTests(unittest.TestCase):
         )
 
         for label, symbol_result in cases:
-            with self.subTest(label=label), TemporaryDirectory() as temporary, patch.object(
-                Uzi392FetcherRuntime,
-                "collect_symbol",
-                autospec=True,
-                return_value=symbol_result,
+            with (
+                self.subTest(label=label),
+                TemporaryDirectory() as temporary,
+                patch.object(
+                    Uzi392FetcherRuntime,
+                    "collect_symbol",
+                    autospec=True,
+                    return_value=symbol_result,
+                ),
             ):
                 rows = snapshot_collector.collect_snapshots(
                     query="bonus spill",
@@ -1130,11 +1418,14 @@ class UziRootCollectionRouterTests(unittest.TestCase):
         )
 
         for symbol_result in cases:
-            with self.subTest(lane=symbol_result["_uzi_execution"]["lane"]), patch.object(
-                Uzi392FetcherRuntime,
-                "collect_symbol",
-                autospec=True,
-                return_value=symbol_result,
+            with (
+                self.subTest(lane=symbol_result["_uzi_execution"]["lane"]),
+                patch.object(
+                    Uzi392FetcherRuntime,
+                    "collect_symbol",
+                    autospec=True,
+                    return_value=symbol_result,
+                ),
             ):
                 rows = snapshot_collector.collect_snapshots(
                     query="raw round trip",
@@ -1173,8 +1464,7 @@ class UziRootCollectionRouterTests(unittest.TestCase):
 
         self.assertEqual(completed, rows)
         normalized = [
-            snapshot_collector._normalize_snapshot_quality(row)
-            for row in completed
+            snapshot_collector._normalize_snapshot_quality(row) for row in completed
         ]
         self.assertTrue(all(row["scope"] == "symbol" for row in normalized))
         self.assertTrue(

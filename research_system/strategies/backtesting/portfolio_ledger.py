@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections import defaultdict
-from datetime import date
 import math
+from collections import defaultdict
+from collections.abc import Iterable
+from datetime import date
 from statistics import fmean, pstdev
 from typing import Any
 
@@ -103,21 +104,12 @@ def run_otc_single_asset(
     instrument: TradableInstrument,
     bars: list[dict[str, Any]],
     events: list[dict[str, Any]],
+    fund_signals: list[dict[str, Any]] | None = None,
     adapter: OTCExecutionAdapter,
     initial_cash: float,
     start_date: date,
     end_date: date,
 ) -> dict[str, Any]:
-    if adapter.require_open_status and any(
-        row.get("purchase_open") is None or row.get("redemption_open") is None
-        for row in bars
-        if start_date <= date.fromisoformat(str(row["date"])) <= end_date
-    ):
-        raise StrategyDomainError(
-            "otc_open_status_unavailable",
-            "场外基金缺少历史申购/赎回开放状态，不能可靠回测",
-            status_code=409,
-        )
     by_event: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for event in events:
         by_event[str(event["date"])].append(dict(event))
@@ -125,10 +117,22 @@ def run_otc_single_asset(
     shares = 0.0
     pending: list[dict[str, Any]] = []
     next_actions: list[dict[str, Any]] = []
+    entry_plan_event: dict[str, Any] | None = None
+    exit_plan_event: dict[str, Any] | None = None
+    entry_orders_submitted = 0
+    total_entry_orders_submitted = 0
+    last_entry_order_index: int | None = None
     trades: list[dict[str, Any]] = []
     curve: list[dict[str, Any]] = []
     total_fees = 0.0
     turnover = 0.0
+    open_status_assumptions: list[dict[str, str]] = []
+    staged_rules_enabled = (
+        adapter.max_position_pct != 100.0
+        or adapter.entry_tranche_pct != 100.0
+        or adapter.max_entry_tranches != 1
+        or adapter.minimum_entry_interval_days != 0
+    )
     period_bars = [
         row for row in bars if start_date <= date.fromisoformat(str(row["date"])) <= end_date
     ]
@@ -152,6 +156,9 @@ def run_otc_single_asset(
                 fees = adapter.redemption_fee(gross)
                 cash += gross - fees.total
                 shares = max(0.0, shares - quantity)
+                if shares <= 1e-12:
+                    entry_orders_submitted = 0
+                    last_entry_order_index = None
             total_fees += fees.total
             turnover += gross
             trades.append(
@@ -170,25 +177,36 @@ def run_otc_single_asset(
             )
         for event in next_actions:
             side = str(event["side"])
-            if side == "buy" and shares <= 1e-12 and not any(row["side"] == "buy" for row in pending):
-                if bar.get("purchase_open") is not True:
-                    continue
-                amount = cash
-                if amount <= 0:
-                    continue
-                cash = 0.0
-                pending.append(
+            if side == "buy" and not any(row["side"] == "sell" for row in pending):
+                entry_plan_event = dict(event)
+                exit_plan_event = None
+            elif side == "sell":
+                entry_plan_event = None
+                exit_plan_event = dict(event)
+
+        if (
+            exit_plan_event is not None
+            and shares > 1e-12
+            and not any(row["side"] in {"buy", "sell"} for row in pending)
+        ):
+            event = exit_plan_event
+            if adapter.require_open_status and bar.get("redemption_open") is None:
+                if adapter.missing_open_status_policy == "block":
+                    raise StrategyDomainError(
+                        "otc_redemption_status_unavailable",
+                        f"场外基金 {day.isoformat()} 缺少历史赎回开放状态，不能可靠执行赎回信号",
+                        status_code=409,
+                        details={"date": day.isoformat(), "side": "sell"},
+                    )
+                open_status_assumptions.append(
                     {
-                        "side": "buy",
-                        "amount": amount,
-                        "confirm_index": index + adapter.subscription_confirmation_days,
-                        "order_date": day.isoformat(),
-                        "event": event,
+                        "date": day.isoformat(),
+                        "side": "sell",
+                        "assumption": "assumed_open",
+                        "reason": "historical_redemption_status_unavailable",
                     }
                 )
-            elif side == "sell" and shares > 1e-12 and not any(row["side"] == "sell" for row in pending):
-                if bar.get("redemption_open") is not True:
-                    continue
+            if bar.get("redemption_open") is not False:
                 pending.append(
                     {
                         "side": "sell",
@@ -198,18 +216,123 @@ def run_otc_single_asset(
                         "event": event,
                     }
                 )
+                exit_plan_event = None
+
+        interval_ready = (
+            last_entry_order_index is None
+            or index - last_entry_order_index >= adapter.minimum_entry_interval_days
+        )
+        current_fund_gate = (
+            _latest_signal(fund_signals, day.isoformat())
+            if fund_signals is not None
+            else None
+        )
+        fund_gate_allows_entry = (
+            fund_signals is None
+            or (
+                current_fund_gate is not None
+                and str(current_fund_gate.get("state") or "") == "ALLOW_BUY"
+            )
+        )
+        can_stage_entry = (
+            entry_plan_event is not None
+            and exit_plan_event is None
+            and not any(row["side"] in {"buy", "sell"} for row in pending)
+            and entry_orders_submitted < adapter.max_entry_tranches
+            and interval_ready
+            and fund_gate_allows_entry
+        )
+        if can_stage_entry:
+            equity_before_order = cash + shares * nav
+            maximum_position_value = equity_before_order * adapter.max_position_pct / 100.0
+            current_position_value = shares * nav
+            remaining_capacity = max(0.0, maximum_position_value - current_position_value)
+            tranche_budget = equity_before_order * adapter.entry_tranche_pct / 100.0
+            amount = min(cash, remaining_capacity, tranche_budget)
+            if amount > 1e-8:
+                if adapter.require_open_status and bar.get("purchase_open") is None:
+                    if adapter.missing_open_status_policy == "block":
+                        raise StrategyDomainError(
+                            "otc_purchase_status_unavailable",
+                            f"场外基金 {day.isoformat()} 缺少历史申购开放状态，不能可靠执行申购信号",
+                            status_code=409,
+                            details={"date": day.isoformat(), "side": "buy"},
+                        )
+                    open_status_assumptions.append(
+                        {
+                            "date": day.isoformat(),
+                            "side": "buy",
+                            "assumption": "assumed_open",
+                            "reason": "historical_purchase_status_unavailable",
+                        }
+                    )
+                if bar.get("purchase_open") is not False:
+                    entry_orders_submitted += 1
+                    total_entry_orders_submitted += 1
+                    last_entry_order_index = index
+                    staged_event = dict(entry_plan_event)
+                    if current_fund_gate is not None:
+                        signal_ids = list(
+                            dict.fromkeys(
+                                str(value)
+                                for value in [
+                                    current_fund_gate.get("id"),
+                                    staged_event.get("signal_id"),
+                                    *(staged_event.get("signal_ids") or []),
+                                ]
+                                if value
+                            )
+                        )
+                        staged_event.update(
+                            {
+                                "signal_id": signal_ids[0] if signal_ids else None,
+                                "signal_ids": signal_ids,
+                                "source_report_set_id": current_fund_gate.get(
+                                    "source_report_set_id"
+                                ),
+                            }
+                        )
+                    if staged_rules_enabled:
+                        staged_event.update(
+                            {
+                                "entry_tranche_index": entry_orders_submitted,
+                                "entry_tranche_limit": adapter.max_entry_tranches,
+                            }
+                        )
+                    cash -= amount
+                    pending.append(
+                        {
+                            "side": "buy",
+                            "amount": amount,
+                            "confirm_index": index + adapter.subscription_confirmation_days,
+                            "order_date": day.isoformat(),
+                            "event": staged_event,
+                        }
+                    )
+                    if entry_orders_submitted >= adapter.max_entry_tranches:
+                        entry_plan_event = None
         next_actions = [dict(event) for event in by_event.get(day.isoformat(), [])]
         pending_cash = sum(float(row.get("amount") or 0.0) for row in pending if row["side"] == "buy")
         equity = cash + pending_cash + shares * nav
-        curve.append(
-            {
-                "date": day.isoformat(),
-                "equity": round(equity, 6),
-                "cash": round(cash, 6),
-                "market_value": round(shares * nav, 6),
-                "pending_confirmation_value": round(pending_cash, 6),
-            }
-        )
+        committed_position_value = pending_cash + shares * nav
+        curve_row = {
+            "date": day.isoformat(),
+            "equity": round(equity, 6),
+            "cash": round(cash, 6),
+            "market_value": round(shares * nav, 6),
+            "pending_confirmation_value": round(pending_cash, 6),
+        }
+        if staged_rules_enabled:
+            curve_row.update(
+                {
+                    "committed_position_value": round(committed_position_value, 6),
+                    "position_weight_pct": round(
+                        committed_position_value / equity * 100.0 if equity > 0 else 0.0,
+                        6,
+                    ),
+                }
+            )
+        curve.append(curve_row)
     return _result(
         initial_cash=initial_cash,
         curve=curve,
@@ -220,8 +343,23 @@ def run_otc_single_asset(
         adapter={
             "model_id": adapter.model_id,
             "degraded_estimate": adapter.degraded_estimate,
+            "require_open_status": adapter.require_open_status,
+            "missing_open_status_policy": adapter.missing_open_status_policy,
+            "open_status_validation": "order_date_and_side",
+            "open_status_assumptions": open_status_assumptions,
             "subscription_confirmation_days": adapter.subscription_confirmation_days,
             "redemption_confirmation_days": adapter.redemption_confirmation_days,
+            **(
+                {
+                    "max_position_pct": adapter.max_position_pct,
+                    "entry_tranche_pct": adapter.entry_tranche_pct,
+                    "max_entry_tranches": adapter.max_entry_tranches,
+                    "minimum_entry_interval_days": adapter.minimum_entry_interval_days,
+                    "entry_orders_submitted": total_entry_orders_submitted,
+                }
+                if staged_rules_enabled
+                else {}
+            ),
         },
     )
 
@@ -240,6 +378,7 @@ def run_holdings_portfolio(
     end_date: date,
     max_single_stock_pct: float,
     drift_pct_points: float,
+    fallback_trading_days: Iterable[date] = (),
 ) -> dict[str, Any]:
     bars_index = {
         symbol: {str(row["date"]): row for row in rows}
@@ -253,8 +392,14 @@ def run_holdings_portfolio(
             if start_date.isoformat() <= day <= end_date.isoformat()
         }
     )
+    if not trading_days and not instruments:
+        trading_days = sorted(
+            day.isoformat()
+            for day in fallback_trading_days
+            if start_date <= day <= end_date
+        )
     if not trading_days:
-        raise StrategyDomainError("market_history_unavailable", "持仓组合没有共同可交易日期")
+        raise StrategyDomainError("market_history_unavailable", "持仓组合在请求区间没有可交易行情")
     event_index = {
         symbol: {str(row["date"]): dict(row) for row in events}
         for symbol, events in events_by_symbol.items()
@@ -273,7 +418,7 @@ def run_holdings_portfolio(
     for day_text in trading_days:
         day = date.fromisoformat(day_text)
         available_symbols = [symbol for symbol in instruments if day_text in bars_index[symbol]]
-        if not available_symbols:
+        if instruments and not available_symbols:
             continue
         current_report = _latest_effective(report_schedule, day_text)
         targets = dict((current_report or {}).get("target_weights") or {})
@@ -490,7 +635,7 @@ def _trade_payload(
         for value in [event.get("signal_id"), *(event.get("signal_ids") or [])]
         if value
     ))
-    return {
+    payload = {
         "date": day.isoformat(),
         "order_date": order_date,
         "instrument_id": instrument.instrument_id,
@@ -506,6 +651,10 @@ def _trade_payload(
         "source_report_set_id": event.get("source_report_set_id"),
         "technical_reason": event.get("technical_reason"),
     }
+    if event.get("entry_tranche_index") is not None:
+        payload["entry_tranche_index"] = int(event["entry_tranche_index"])
+        payload["entry_tranche_limit"] = int(event.get("entry_tranche_limit") or 0)
+    return payload
 
 
 def _result(

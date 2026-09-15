@@ -333,7 +333,7 @@ class CoreLoopExecutor:
         available = bool(provider is not None and getattr(provider, "available", False))
         deterministic = (
             provider is not None
-            and provider.__class__.__name__ == "OpenAIProvider"
+            and getattr(provider, "deterministic_core_routing", False)
             and self.main_agent._has_deterministic_core_route(context.request.user_query)
         )
         if deterministic or not callable(native_turn) or not available:

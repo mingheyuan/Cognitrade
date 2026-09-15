@@ -3,11 +3,13 @@ from __future__ import annotations
 import importlib
 import json
 import os
-from pathlib import Path
 import re
-from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Lock
+from time import sleep
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from jsonschema import Draft202012Validator
@@ -17,18 +19,27 @@ from domain_packs.finance_ashare.subagents.uzi_392_analysis import (
     AgentBuyZonePayload,
     AgentDimensionPayload,
     AgentNarrativeCorePayload,
+    _align_feature_identity,
+    _apply_scoring_exclusions,
     _canonical_evidence_path,
+    _deep_methods_compatible_raw,
+    _historical_pit_snapshot_rows,
+    _initialize_native_imports,
     _normalize_evidence_paths,
     _normalize_payload_paths,
-    _research_workflow_compatible_features,
+    _panel_with_roleplay_overrides,
+    _profile_empty_dimension_issues,
+    _profile_native_panel,
     _safe_error_detail,
     _self_review_compatible_raw,
     _snapshot_rows_for_symbol,
+    _uzi_native_environment,
+    _workflow_dimension_keys,
     execute_native_analysis,
+    run_native_self_review,
 )
-from tests.test_uzi_392_native_methods import _snapshots
 from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import Uzi392FetcherRuntime
-
+from tests.test_uzi_392_native_methods import _snapshots
 
 _LITE_DIMENSIONS = {
     "0_basic",
@@ -151,6 +162,13 @@ class _LiteAgentProvider:
                 "data_gaps": [],
             }
         if schema is AgentNarrativeCorePayload:
+            if "Agent 工作流=full" in kwargs["system_prompt"]:
+                payload["great_divide_override"] = {
+                    "punchline": "冻结价格10支持不同判断，测试数据不能当作投资建议。",
+                    **{side: [{"text": "仅根据冻结价格10审查分歧，不虚构其他事实。",
+                               "evidence_paths": [evidence_path]} for _ in range(3)]
+                       for side in ("bull_say_rounds", "bear_say_rounds")},
+                }
             return {
                 "panel_insights": payload["panel_insights"],
                 "panel_evidence_paths": payload["panel_evidence_paths"],
@@ -190,15 +208,386 @@ class _RepairingEvidenceProvider(_LiteAgentProvider):
         return result
 
 
+class _RepairingBuyZoneProvider(_LiteAgentProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.youzi_calls = 0
+
+    def parse(self, **kwargs):
+        result = super().parse(**kwargs)
+        if (
+            kwargs.get("schema") is AgentBuyZonePayload
+            and " youzi 买入区间" in str(kwargs.get("user_prompt") or "")
+        ):
+            self.youzi_calls += 1
+            if self.youzi_calls == 1:
+                result["zone"]["basis_fields"] = [
+                    "raw.dimensions.1_financials.data.revenue_history[0]"
+                ]
+        return result
+
+
+class _RepairingNarrativeProvider(_LiteAgentProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self.narrative_calls = 0
+
+    def parse(self, **kwargs):
+        result = super().parse(**kwargs)
+        if kwargs.get("schema") is AgentNarrativeCorePayload:
+            self.narrative_calls += 1
+            if self.narrative_calls == 1:
+                result["panel_evidence_paths"] = [
+                    "panel.consensus_final"
+                ]
+        return result
+
+
+class _ConcurrencyProvider(_LiteAgentProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self._active_lock = Lock()
+        self.active = 0
+        self.max_active = 0
+
+    def parse(self, **kwargs):
+        with self._active_lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        try:
+            sleep(0.02)
+            return super().parse(**kwargs)
+        finally:
+            with self._active_lock:
+                self.active -= 1
+
+
 class Uzi392AnalysisGateTests(unittest.TestCase):
-    def test_nullable_moat_is_only_normalized_for_the_legacy_idea_screen(self) -> None:
-        features = {"moat_known": False, "moat_total": None, "fcf_positive": None}
+    def test_mechanical_reviews_match_native_for_every_profile_even_with_pit_markers(self) -> None:
+        _initialize_native_imports()
+        raw = {"ticker": "600000", "market": "A", "dimensions": {
+            "0_basic": {"data": {"industry": "半导体"}},
+            "19_contests": {"data": {}, "_excluded_from_scoring": True},
+            "12_capital_flow": {"data": {}, "error": "real_provider_failure"},
+        }}
+        agent = {"agent_reviewed": True, "dim_commentary": {}}
+        panel = {"investors": [{"signal": "neutral", "score": 50}]}
+        compatible = _self_review_compatible_raw(raw)
+        ctx = {"ticker": "600000", "market": "A", "raw": compatible, "dims": compatible["dimensions"],
+               "syn": {}, "panel": panel, "ag": agent}
+        native = importlib.import_module("lib.self_review")
+        for profile in ("lite", "medium", "deep"):
+            with self.subTest(profile=profile):
+                with _uzi_native_environment(profile=profile, school=None):
+                    expected = [issue.to_dict() for check in native.CHECKS for issue in check(ctx)]
+                actual = run_native_self_review(symbol="600000", profile=profile, school=None, raw=raw,
+                    dimensions={}, panel=panel, synthesis={}, agent_analysis=agent, agent_validation_issues=[],
+                    roleplay={"required": False}, qualitative_execution={"required": False}, computation_error=None,
+                    historical_pit=True)
+                self.assertEqual(actual["issues"], expected)
 
-        compatible = _research_workflow_compatible_features(features)
+    def test_root_market_identity_overrides_suffix_only_feature_inference(self) -> None:
+        aligned = _align_feature_identity(
+            {"ticker": "688041", "market": "US", "code": "688041"},
+            {"ticker": "688041", "full": "688041.SH", "market": "A", "code": "688041"},
+        )
 
-        self.assertIsNone(features["moat_total"])
-        self.assertEqual(compatible["moat_total"], 0)
-        self.assertIsNone(compatible["fcf_positive"])
+        self.assertEqual(aligned["ticker"], "688041.SH")
+        self.assertEqual(aligned["market"], "A")
+
+    def test_grounded_roleplay_recomputes_hollow_consensus_metadata(self) -> None:
+        panel = {
+            "ticker": "688041",
+            "panel_consensus": 50.0,
+            "consensus_valid": False,
+            "hollow_verdicts": 1,
+            "hollow_pct": 50.0,
+            "hollow_ids": ["grounded"],
+            "investors": [
+                {
+                    "investor_id": "grounded",
+                    "group": "A",
+                    "signal": "bearish",
+                    "score": 0.0,
+                    "pass": [],
+                    "fail": [],
+                },
+                {
+                    "investor_id": "rule_backed",
+                    "group": "A",
+                    "signal": "neutral",
+                    "score": 50.0,
+                    "pass": ["真实规则证据"],
+                    "fail": [],
+                },
+            ],
+        }
+        profile_rows = [{"id": "grounded"}, {"id": "rule_backed"}]
+        with patch(
+            "domain_packs.finance_ashare.subagents.uzi_392_analysis.panel_for_profile",
+            return_value=profile_rows,
+        ):
+            native = _profile_native_panel(panel, "deep")
+            overridden = _panel_with_roleplay_overrides(
+                panel,
+                {
+                    "grounded": {
+                        "signal": "bearish",
+                        "score": 0.0,
+                        "headline": "PE 181.82 且规则证据不足",
+                        "reasoning": "冻结特征中的估值和盈利规则均未通过，因此维持有证据的看空判断。",
+                    }
+                },
+                profile="deep",
+            )
+
+        self.assertFalse(native["consensus_valid"])
+        self.assertEqual(native["hollow_ids"], ["grounded"])
+        self.assertTrue(overridden["consensus_valid"])
+        self.assertEqual(overridden["hollow_verdicts"], 0)
+        self.assertIsNone(overridden["consensus_warning"])
+
+    def test_historical_pit_does_not_bypass_native_full_agent_evidence_gate(self) -> None:
+        _initialize_native_imports()
+        execution = {
+            "required": True,
+            "status": "evidence_preflight_failed",
+            "agent_reviewed": False,
+            "errors": [
+                "3_macro:requires_two_cited_sources",
+                "13_policy:requires_two_cited_sources",
+            ],
+        }
+        kwargs = {
+            "symbol": "600000",
+            "profile": "deep",
+            "school": None,
+            "raw": {"ticker": "600000", "market": "A", "dimensions": {}},
+            "dimensions": {},
+            "panel": {"investors": [{"signal": "neutral", "score": 50}]},
+            "synthesis": {},
+            "agent_analysis": {"agent_reviewed": True, "dim_commentary": {}},
+            "agent_validation_issues": [],
+            "roleplay": {"required": True, "status": "completed", "agent_reviewed": True},
+            "qualitative_execution": execution,
+            "computation_error": None,
+            "full_agent_workflow": True,
+        }
+
+        current = run_native_self_review(**kwargs, historical_pit=False)
+        historical = run_native_self_review(**kwargs, historical_pit=True)
+        current_issue = next(
+            row for row in current["issues"]
+            if row.get("dim") == "qualitative_deep_dive"
+        )
+        historical_issue = next(
+            row for row in historical["issues"]
+            if row.get("dim") == "qualitative_deep_dive"
+        )
+        self.assertEqual(current_issue["severity"], "critical")
+        self.assertEqual(historical_issue, current_issue)
+        self.assertTrue(
+            _historical_pit_snapshot_rows([
+                {"query_manifest": {"pit_mode": "historical_reconstruction"}}
+            ])
+        )
+        # Removing a startup gate never removes the final native gate: both
+        # zero citations and one citation plus an honest disclosure remain
+        # incomplete after an actual Agent attempt.
+        for reason in (
+            "3_macro:no_grounded_citation_after_analysis",
+            "3_macro:grounded_citations_below_two_after_analysis:1",
+        ):
+            with self.subTest(reason=reason):
+                kwargs["qualitative_execution"] = {
+                    "required": True, "status": "incomplete",
+                    "agent_reviewed": False, "completed_group_count": 3,
+                    "errors": [reason],
+                }
+                reviewed = run_native_self_review(**kwargs, historical_pit=True)
+                self.assertFalse(reviewed["passed"])
+                self.assertTrue(any(
+                    row.get("dim") == "qualitative_deep_dive" and row.get("severity") == "critical"
+                    for row in reviewed["issues"]
+                ))
+
+    def test_terminal_historical_gap_preserves_exact_native_score_and_weight(self) -> None:
+        _initialize_native_imports()
+        raw = {
+            "ticker": "600000",
+            "dimensions": {
+                "1_financials": {
+                    "data": {
+                        "roe": 12,
+                        "roe_history": [10, 11, 12],
+                        "revenue_history": [100, 110],
+                    }
+                },
+                "12_capital_flow": {
+                    "data": {},
+                    "error": "historical_reconstruction_no_proof",
+                    "_excluded_from_scoring": True,
+                    "_degradation": {
+                        "reason_code": "historical_reconstruction_no_proof",
+                        "message": "目标日没有可验证记录",
+                    },
+                },
+            },
+        }
+        score_fns = importlib.import_module("lib.pipeline.score_fns")
+
+        scored = _apply_scoring_exclusions(score_fns.score_dimensions(raw), raw)
+
+        self.assertEqual(scored, score_fns.score_dimensions(raw))
+        self.assertGreater(scored["dimensions"]["12_capital_flow"]["weight"], 0)
+
+    def test_terminal_historical_gap_degrades_but_does_not_block_report(self) -> None:
+        rows = [row for row in _lite_snapshots() if row["snapshot_type"] != "lhb"]
+        rows.append(
+            {
+                "snapshot_type": "lhb",
+                "symbol": "600000",
+                "quality_status": "data_gap",
+                "facts": {"availability": "historically_unavailable"},
+                "query_manifest": {
+                    "degradation": {
+                        "safe_for_report": True,
+                        "excluded_from_scoring": True,
+                        "reason_code": "historical_reconstruction_no_proof",
+                        "message": "目标日没有可验证龙虎榜记录",
+                    }
+                },
+            }
+        )
+
+        result = execute_native_analysis(
+            rows,
+            ["600000"],
+            profile="lite",
+            llm_provider=_LiteAgentProvider(),
+        )
+
+        self.assertTrue(result["report_allowed"])
+        self.assertEqual(result["quality_status"], "degraded")
+        stock = result["results"][0]
+        self.assertEqual(stock["quality_status"], "degraded")
+        native = importlib.import_module("lib.pipeline.score_fns").score_dimensions(stock["raw"])
+        self.assertEqual(stock["dimensions"]["dimensions"]["16_lhb"]["weight"], native["dimensions"]["16_lhb"]["weight"])
+        disclosures = stock["synthesis"]["data_gaps"]["tasks"]
+        self.assertTrue(
+            any(
+                row.get("dim") == "16_lhb"
+                and row.get("status") == "historically_unavailable"
+                for row in disclosures
+            )
+        )
+
+    def test_independent_agent_stages_honor_configured_parallelism(self) -> None:
+        provider = _ConcurrencyProvider()
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="lite",
+            llm_provider=provider,
+        )
+
+        self.assertTrue(result["report_allowed"])
+        self.assertEqual(provider.max_active, 2)
+
+    def test_full_agent_workflow_expands_lite_to_all_dimensions_and_hard_gates(self) -> None:
+        self.assertEqual(len(_workflow_dimension_keys("lite", full_agent_workflow=True)), 20)
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="lite",
+            llm_provider=None,
+            full_agent_workflow=True,
+        )
+
+        analysis = result["results"][0]
+        self.assertEqual(result["agent_workflow_mode"], "full")
+        self.assertFalse(result["report_allowed"])
+        self.assertTrue(analysis["roleplay"]["required"])
+        self.assertTrue(analysis["qualitative_execution"]["required"])
+        self.assertEqual(len(analysis["self_review"]["enabled_dimensions"]), 7)
+        self.assertEqual(len(analysis["self_review"]["agent_dimensions"]), 20)
+
+    def test_nullable_moat_scores_are_normalized_only_for_deep_methods(self) -> None:
+        raw = {"dimensions": {"14_moat": {"data": {"scores": None}}}}
+
+        compatible = _deep_methods_compatible_raw(raw)
+
+        self.assertIsNone(raw["dimensions"]["14_moat"]["data"]["scores"])
+        self.assertEqual(
+            compatible["dimensions"]["14_moat"]["data"]["scores"],
+            {},
+        )
+
+    def test_profile_empty_check_includes_native_number_six_bonus_dimension(self) -> None:
+        issues = _profile_empty_dimension_issues(
+            {
+                "dimensions": {
+                    "6_research": {"data": {"reports": ["ok"]}},
+                    "6_fund_holders": {"data": {}, "error": "provider failed"},
+                }
+            },
+            enabled_dimension_keys={"6_research"},
+        )
+
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0]["dim"], "6_fund_holders")
+        self.assertEqual(issues[0]["severity"], "warning")
+
+    def test_profile_empty_check_does_not_treat_historical_marker_as_native_error(self) -> None:
+        issues = _profile_empty_dimension_issues(
+            {
+                "dimensions": {
+                    "19_contests": {
+                        "data": {},
+                        "_excluded_from_scoring": True,
+                        "_degradation": {
+                            "reason_code": "historical_reconstruction_no_proof"
+                        },
+                    }
+                }
+            },
+            enabled_dimension_keys={"19_contests"},
+        )
+
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0]["severity"], "critical")
+        self.assertNotIn("已排除评分", issues[0]["issue"])
+
+    def test_lite_analysis_accepts_nullable_optional_moat_scores(self) -> None:
+        rows = _lite_snapshots()
+        rows.append(
+            {
+                "snapshot_type": "moat",
+                "symbol": "600000",
+                "facts": {
+                    "_uzi_raw_result": {
+                        "data": {"scores": None},
+                        "sources": [{"provider": "fixture"}],
+                    }
+                },
+            }
+        )
+
+        result = execute_native_analysis(
+            rows,
+            ["600000"],
+            profile="lite",
+            llm_provider=_LiteAgentProvider(),
+        )
+
+        analysis = result["results"][0]
+        self.assertIsNone(
+            analysis["raw"]["dimensions"]["14_moat"]["data"]["scores"]
+        )
+        self.assertNotIn("computation_error", analysis)
+        self.assertTrue(result["report_allowed"])
 
     def test_multi_symbol_qualitative_rows_are_isolated(self) -> None:
         rows = [
@@ -410,9 +799,63 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
             )
         )
 
+    def test_unknown_buy_zone_evidence_retries_only_the_failed_stage(self) -> None:
+        provider = _RepairingBuyZoneProvider()
+        progress: list[dict] = []
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="lite",
+            llm_provider=provider,
+            progress_callback=progress.append,
+        )
+
+        self.assertTrue(result["report_allowed"])
+        self.assertEqual(provider.calls, 8)
+        self.assertEqual(provider.youzi_calls, 2)
+        self.assertEqual(
+            sum(
+                row.get("stage") == "buy_zone_youzi_repair"
+                for row in progress
+            ),
+            1,
+        )
+
+    def test_unknown_narrative_evidence_retries_only_narrative_stage(self) -> None:
+        provider = _RepairingNarrativeProvider()
+        progress: list[dict] = []
+
+        result = execute_native_analysis(
+            _lite_snapshots(),
+            ["600000"],
+            profile="lite",
+            llm_provider=provider,
+            progress_callback=progress.append,
+        )
+
+        self.assertTrue(result["report_allowed"])
+        self.assertEqual(provider.calls, 8)
+        self.assertEqual(provider.narrative_calls, 2)
+        self.assertEqual(
+            sum(
+                row.get("stage") == "narrative_core_repair"
+                for row in progress
+            ),
+            1,
+        )
+        self.assertTrue(
+            any(
+                "MECHANICAL_EVIDENCE_REPAIR=" in prompt
+                for prompt in provider.user_prompts
+            )
+        )
+
     def test_validated_agent_stages_resume_from_persistent_cache(self) -> None:
         snapshots = _lite_snapshots()
-        with TemporaryDirectory() as temporary:
+        # The complete prompt now includes native random signature copy.
+        # Fix that input for an identical-input cache regression.
+        with TemporaryDirectory() as temporary, patch("random.choice", side_effect=lambda choices: choices[0]):
             first_provider = _LiteAgentProvider()
             first_provider.settings.workspace_root = Path(temporary)
             first = execute_native_analysis(
@@ -503,7 +946,10 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
             "raw.dimensions.1_financials.",
             provider.system_prompts[-2],
         )
-        self.assertLess(max(map(len, provider.system_prompts)), 100_000)
+        # All 66 actual rule messages / persona rationales are now required
+        # input. The former 100k cap excluded them; do not drop methodology
+        # merely to preserve that incomplete-prompt size expectation.
+        self.assertLess(max(map(len, provider.system_prompts)), 125_000)
         self.assertTrue(any(row.get("stage") == "dimensions_1_5" for row in progress))
         self.assertTrue(any(row.get("stage") == "self_review" for row in progress))
         self.assertTrue(all(0 <= int(row.get("progress_percent") or 0) <= 100 for row in progress))
@@ -562,7 +1008,11 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         )
 
         analysis = result["results"][0]
-        self.assertEqual(provider.calls, 1)
+        self.assertGreaterEqual(provider.calls, 1)
+        self.assertLessEqual(
+            provider.calls,
+            provider.settings.uzi_llm_max_concurrency,
+        )
         self.assertEqual(len(analysis["recovery_history"]), 1)
         self.assertEqual(analysis["recovery_history"][0]["status"], "passed")
         self.assertTrue(result["report_allowed"])
@@ -574,7 +1024,7 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         self.assertEqual(len(timeout_issues), 1)
         self.assertEqual(timeout_issues[0]["severity"], "warning")
 
-    def test_medium_transport_timeout_does_not_retry_for_downstream_qualitative_stage(self) -> None:
+    def test_medium_prerequisite_timeout_stops_new_model_waves_and_recovery(self) -> None:
         provider = _LiteAgentProvider(timeout=True)
 
         result = execute_native_analysis(
@@ -585,15 +1035,19 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         )
 
         analysis = result["results"][0]
-        self.assertEqual(provider.calls, 1)
-        self.assertEqual(provider.reasoning_efforts, ["high"])
+        # Three independent qualitative groups may attempt the fixed input;
+        # an exhausted request never starts narrative/dimension requests or a
+        # second analysis cycle. Concurrency is not a total-call count.
+        self.assertEqual(provider.calls, 3)
+        self.assertTrue(all(prompt.startswith("负责分组：") for prompt in provider.user_prompts))
+        self.assertFalse(result["report_allowed"])
         self.assertEqual(len(analysis["recovery_history"]), 1)
         self.assertEqual(
             analysis["recovery_history"][0]["exhausted_reason"],
             "no_remaining_agent_recovery_action",
         )
 
-    def test_qualitative_repair_reuses_validated_agent_analysis(self) -> None:
+    def test_qualitative_repair_precedes_first_agent_analysis(self) -> None:
         provider = _LiteAgentProvider()
         qualitative_gap = {
             "qualitative_agent_execution": {
@@ -666,7 +1120,7 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         )
         history = result["results"][0]["recovery_history"]
         self.assertFalse(history[0]["reused_agent_analysis"])
-        self.assertTrue(history[1]["reused_agent_analysis"])
+        self.assertFalse(history[1]["reused_agent_analysis"])
         self.assertTrue(result["report_allowed"])
 
     def test_content_repair_continues_when_the_exact_critical_changes(self) -> None:
@@ -730,6 +1184,52 @@ class Uzi392AnalysisGateTests(unittest.TestCase):
         ]
         self.assertTrue(governance_issues)
         self.assertFalse(result["report_allowed"])
+
+    def test_recovery_stops_when_only_critical_evidence_text_changes(self) -> None:
+        provider = _LiteAgentProvider()
+
+        def critical(evidence: str) -> dict:
+            return {
+                "severity": "critical",
+                "category": "panel",
+                "dim": "panel",
+                "issue": "共识分包含无证据空判",
+                "evidence": evidence,
+                "suggested_fix": "补齐证据后重算",
+            }
+
+        reviews = [
+            {"issues": [critical("hollow_pct=35%")], "critical_count": 1, "warning_count": 0, "info_count": 0},
+            {"issues": [critical("hollow_pct=36%")], "critical_count": 1, "warning_count": 0, "info_count": 0},
+        ]
+        with (
+            patch(
+                "domain_packs.finance_ashare.subagents.uzi_392_analysis._generate_agent_analysis",
+                return_value=None,
+            ) as generate_mock,
+            patch(
+                "domain_packs.finance_ashare.subagents.uzi_392_analysis.run_native_self_review",
+                side_effect=reviews,
+            ),
+        ):
+            result = execute_native_analysis(
+                _lite_snapshots(),
+                ["600000"],
+                profile="lite",
+                llm_provider=provider,
+            )
+
+        history = result["results"][0]["recovery_history"]
+        self.assertEqual(generate_mock.call_count, 2)
+        self.assertEqual(len(history), 2)
+        self.assertEqual(
+            history[-1]["exhausted_reason"],
+            "unchanged_recovery_state_after_recompute",
+        )
+        self.assertEqual(
+            history[-1]["critical_issues"][0]["evidence"],
+            "hollow_pct=36%",
+        )
 
     def test_missing_agent_stage_stops_at_critical_gate_without_report_permission(self) -> None:
         result = execute_native_analysis(

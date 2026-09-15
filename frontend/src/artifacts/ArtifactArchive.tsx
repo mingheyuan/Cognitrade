@@ -8,6 +8,7 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { asOptionalNumber, asRecord } from '../utils/value'
 import { BusinessDataView } from './BusinessDataView'
 import type { FinanceArtifactType } from './generated/finance-artifact-contracts'
 import {
@@ -57,19 +58,8 @@ const GROUPS: Array<{
   },
 ]
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
-}
-
 function asArtifact(value: Record<string, unknown>): ArtifactRecordView {
   return value as ArtifactRecordView
-}
-
-function numberValue(value: unknown): number | null {
-  const parsed = Number(value)
-  return value == null || value === '' || !Number.isFinite(parsed) ? null : parsed
 }
 
 function qualityStatus(artifact: ArtifactRecordView): string {
@@ -101,7 +91,7 @@ function ArtifactCard({ artifact, artifactType, index }: { artifact: ArtifactRec
   const content = asRecord(artifact.content)
   const sourceRefs = Array.isArray(artifact.source_refs) ? artifact.source_refs : []
   const riskFlags = Array.isArray(artifact.risk_flags) ? artifact.risk_flags : []
-  const confidence = numberValue(artifact.confidence)
+  const confidence = asOptionalNumber(artifact.confidence)
   const quality = qualityStatus(artifact)
   const defaultOpen = ['research_report', 'main_agent_synthesis', 'fund_analysis', 'quick_scan'].includes(artifactType) && index === 0
   return (

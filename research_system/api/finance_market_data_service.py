@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -43,18 +43,34 @@ class FinanceMarketDataService:
         self.cache_root = Path(cache_root)
         self.collector = collector
         self.security_master = security_master or AShareSecurityMaster()
+        self._market_data_center = None
         self._lock = RLock()
+
+    def bind_market_data_center(self, service) -> None:
+        """Bind the DB-only workspace projection after the shared DB starts."""
+
+        self._market_data_center = service
 
     def search_securities(self, query: str, *, limit: int = 8) -> list[dict[str, Any]]:
         normalized_query = str(query or "").strip()
         if not normalized_query:
             return []
         normalized_limit = min(max(int(limit), 1), 20)
-        resolution = self.security_master.resolve(normalized_query, allow_network=True)
-        rows_by_symbol = self._security_rows_by_symbol()
+        db_only = self._market_data_center is not None
+        resolution = self.security_master.resolve(
+            normalized_query,
+            # Once the database-first center is bound, a GET may use only
+            # deterministic aliases/codes plus already-published Bundles.
+            allow_network=not db_only,
+        )
+        rows_by_symbol = {} if db_only else self._security_rows_by_symbol()
         results: list[dict[str, Any]] = []
         for symbol in resolution.symbols:
-            row = rows_by_symbol.get(symbol, {})
+            row = (
+                self._workspace_security_row(symbol)
+                if db_only
+                else rows_by_symbol.get(symbol, {})
+            )
             results.append(
                 {
                     "symbol": symbol,
@@ -73,7 +89,21 @@ class FinanceMarketDataService:
                         break
         return results[:normalized_limit]
 
-    def get_market_data(self, query: str, *, refresh: bool = False) -> dict[str, Any]:
+    def get_market_data(
+        self,
+        query: str,
+        *,
+        refresh: bool = False,
+        as_of_date: date | None = None,
+    ) -> dict[str, Any]:
+        if self._market_data_center is not None:
+            # ``refresh`` is intentionally ignored in DB mode. A GET must never
+            # turn into acquisition; callers use POST collection-jobs instead.
+            symbol, _ = self.resolve_security(query, allow_network=False)
+            payload = self._workspace_market_data(symbol, as_of_date=as_of_date)
+            payload["refresh_requested"] = bool(refresh)
+            payload["refresh_performed"] = False
+            return payload
         symbol, name = self.resolve_security(query)
         snapshots = self._collect(
             query=f"{name}（{symbol}）行情与基本面数据",
@@ -119,6 +149,22 @@ class FinanceMarketDataService:
         }
 
     def get_quote(self, query: str, *, refresh: bool = False) -> dict[str, Any]:
+        """Return a public, side-effect-free quote projection.
+
+        In production the market-data center is bound during application
+        startup, so this method reads only the latest published Bundle.  The
+        legacy collector remains available through :meth:`get_live_quote` for
+        explicit execution workflows, never as a GET fallback.
+        """
+
+        if self._market_data_center is not None:
+            workspace = self.get_market_data(query, refresh=refresh)
+            return self._quote_from_workspace(workspace)
+        return self.get_live_quote(query, refresh=refresh)
+
+    def get_live_quote(self, query: str, *, refresh: bool = True) -> dict[str, Any]:
+        """Acquire a quote for an explicit server-side execution workflow."""
+
         symbol, name = self.resolve_security(query)
         snapshot = self._collect(
             query=f"{name}（{symbol}）最新行情",
@@ -160,11 +206,11 @@ class FinanceMarketDataService:
             "quality_status": self._quality(market_snapshot),
         }
 
-    def resolve_security(self, query: str) -> tuple[str, str]:
+    def resolve_security(self, query: str, *, allow_network: bool = True) -> tuple[str, str]:
         normalized = str(query or "").strip()
         if not normalized:
             raise FinanceMarketDataError("security_required", "请输入股票代码或名称")
-        resolution = self.security_master.resolve(normalized, allow_network=True)
+        resolution = self.security_master.resolve(normalized, allow_network=allow_network)
         if resolution.ambiguous_terms:
             raise FinanceMarketDataError(
                 "security_ambiguous",
@@ -175,9 +221,132 @@ class FinanceMarketDataService:
         if len(resolution.symbols) > 1:
             raise FinanceMarketDataError("security_ambiguous", "识别到多只股票，请一次只输入一只")
         symbol = resolution.symbols[0]
-        row = self._security_rows_by_symbol().get(symbol, {})
+        # ``rows()`` may refresh the provider-backed security master.  Offline
+        # Bundle reads must therefore use only matches returned by the
+        # deterministic alias/code resolver.
+        row = self._security_rows_by_symbol().get(symbol, {}) if allow_network else {}
         name = str(row.get("name") or self._name_from_matches(resolution.matches, symbol) or symbol)
         return symbol, name
+
+    def _workspace_market_data(
+        self,
+        symbol: str,
+        *,
+        as_of_date: date | None = None,
+    ) -> dict[str, Any]:
+        last_error: Exception | None = None
+        for candidate in self._database_symbol_candidates(symbol):
+            try:
+                return dict(
+                    self._market_data_center.get_workspace_market_data(
+                        symbol=candidate,
+                        # Interactive reads use the exchange-local current day;
+                        # historical consumers must bind the exact replay cutoff.
+                        as_of_date=as_of_date,
+                    )
+                )
+            except Exception as exc:
+                last_error = exc
+                if str(getattr(exc, "code", "")) != "published_bundle_missing":
+                    break
+        assert last_error is not None
+        code = str(getattr(last_error, "code", "market_data_bundle_unavailable"))
+        message = str(
+            getattr(last_error, "message", "数据库中没有可读取的完整行情 Bundle")
+        )
+        raise FinanceMarketDataError(code, message) from last_error
+
+    @staticmethod
+    def _database_symbol_candidates(symbol: str) -> tuple[str, ...]:
+        normalized = str(symbol or "").strip().upper()
+        candidates = [normalized]
+        if len(normalized) == 6 and normalized.isdigit():
+            if normalized.startswith(("4", "8")):
+                suffix = "BJ"
+            elif normalized.startswith(("5", "6", "9")):
+                suffix = "SH"
+            else:
+                suffix = "SZ"
+            candidates.append(f"{normalized}.{suffix}")
+        return tuple(dict.fromkeys(candidates))
+
+    def _workspace_security_row(self, symbol: str) -> dict[str, Any]:
+        """Best-effort DB enrichment for offline security search."""
+
+        try:
+            workspace = self._workspace_market_data(symbol)
+            quote = self._quote_from_workspace(workspace)
+        except FinanceMarketDataError:
+            return {}
+        return {
+            "symbol": quote["symbol"],
+            "name": quote["name"],
+            "latest_price": quote["latest_price"],
+            "pct_change": quote.get("pct_change"),
+            "source": "market_data_bundle",
+        }
+
+    def _quote_from_workspace(self, workspace: dict[str, Any]) -> dict[str, Any]:
+        sections = dict(workspace.get("sections") or {})
+        market = dict(sections.get("market") or {})
+        overview = dict(
+            market.get("market_overview")
+            or market.get("overview")
+            or market
+        )
+        kline = dict(sections.get("kline") or {})
+        history = dict(
+            market.get("market_hist")
+            or kline.get("history")
+            or kline
+        )
+        bars = history.get("ohlcv") or history.get("bars") or []
+        latest_bar = dict(history.get("latest_bar") or {})
+        if not latest_bar and isinstance(bars, list) and bars and isinstance(bars[-1], dict):
+            latest_bar = dict(bars[-1])
+        price = self._number(
+            overview.get("latest_price"),
+            overview.get("price"),
+            latest_bar.get("close"),
+        )
+        symbol = str(workspace.get("symbol") or overview.get("symbol") or "")
+        name = str(workspace.get("name") or overview.get("name") or symbol)
+        if price is None or price <= 0:
+            raise FinanceMarketDataError(
+                "quote_unavailable",
+                f"{name}（{symbol}）的已发布 Bundle 没有有效行情价格",
+            )
+        source = {
+            "mode": "bundle_only",
+            "bundle_id": workspace.get("bundle_id"),
+            "manifest_hash": workspace.get("bundle_manifest_hash"),
+        }
+        return {
+            "symbol": symbol,
+            "name": name,
+            "latest_price": price,
+            "bid_price_1": self._number(
+                overview.get("bid_price_1"),
+                overview.get("bid1"),
+                overview.get("买一"),
+            ),
+            "ask_price_1": self._number(
+                overview.get("ask_price_1"),
+                overview.get("ask1"),
+                overview.get("卖一"),
+            ),
+            "pct_change": self._number(overview.get("pct_change")),
+            "as_of": (
+                overview.get("observed_at")
+                or latest_bar.get("date")
+                or workspace.get("cutoff_at")
+                or workspace.get("as_of_date")
+            ),
+            "source": source,
+            "quality_status": str(workspace.get("quality_status") or "available"),
+            "refresh_requested": bool(workspace.get("refresh_requested")),
+            "refresh_performed": False,
+        }
 
     def _collect(
         self,

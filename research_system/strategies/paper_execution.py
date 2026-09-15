@@ -13,6 +13,8 @@ from research_system.strategies.contracts import (
     SignalState,
     StrategyDocumentV1,
     StrategyLifecycle,
+    is_report_conditions,
+    parse_strategy_document,
 )
 from research_system.strategies.database import StrategyDatabase
 from research_system.strategies.errors import StrategyConflict, StrategyDomainError
@@ -317,7 +319,12 @@ class StrategyPaperExecutionService:
             or report.status not in {"final", "final_partial"}
         ):
             raise StrategyConflict("paper_signal_point_in_time_invalid", "信号来源日报不满足 point-in-time 交易边界")
-        document = StrategyDocumentV1.model_validate(version.document_json)
+        document = parse_strategy_document(version.document_json)
+        if is_report_conditions(document):
+            raise StrategyConflict(
+                "report_condition_paper_execution_unsupported",
+                "原生报告条件当前仅支持冻结回测；模拟委托不能使用旧均线和基金门禁执行该版本",
+            )
         if side == "buy":
             if strategy.lifecycle == StrategyLifecycle.ARCHIVED.value or assignment.paused or not assignment.enabled:
                 raise StrategyConflict("paper_strategy_paused", "归档、暂停或禁用的策略绑定不能新增买入")
@@ -421,7 +428,9 @@ class StrategyPaperExecutionService:
             None,
         )
         current_value = float((position or {}).get("market_value") or 0.0)
-        quote = self.paper_trading.market_data.get_quote(symbol, refresh=True)
+        # Strategy submission is an explicit execution path; unlike public
+        # quote GETs it deliberately acquires the current executable quote.
+        quote = self.paper_trading.market_data.get_live_quote(symbol, refresh=True)
         requested_value = int(quantity) * float(quote["latest_price"])
         maximum_value = equity * target_weight
         if current_value + requested_value > maximum_value + 0.01:

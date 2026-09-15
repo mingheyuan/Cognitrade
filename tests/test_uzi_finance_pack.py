@@ -1,38 +1,38 @@
 from __future__ import annotations
 
 import copy
-import json
 import hashlib
+import json
+import unittest
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
-import unittest
 
 import jsonschema
 import yaml
-
 from fastapi.testclient import TestClient
 
-from domain_packs.finance_ashare.subagents.uzi_methodology import (
-    build_features,
-    select_profile,
-)
 from domain_packs.finance_ashare.subagents.runtime import (
     _collection_research_profile,
     _requested_snapshot_types,
     collect_snapshot,
 )
-from domain_packs.finance_ashare.vendor.uzi_3_9_2 import verify_vendored_uzi_integrity
+from domain_packs.finance_ashare.subagents.uzi_methodology import (
+    build_features,
+    select_profile,
+)
+from domain_packs.finance_ashare.tools import snapshot_collector
 from domain_packs.finance_ashare.tools.snapshot_collector import collect_snapshots
-import domain_packs.finance_ashare.tools.snapshot_collector as snapshot_collector
+from domain_packs.finance_ashare.vendor.uzi_3_9_2 import verify_vendored_uzi_integrity
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.planning.capability_planner import CapabilityPlanner
 from research_system.runtime.platform.settings import Settings
 from research_system.schemas.domain_pack import CapabilityPlanningRequest
+from tests.market_data.test_pit_core import seed_strict_bundle
 
 
 def _snapshots() -> list[dict]:
@@ -165,6 +165,7 @@ class UziFinancePackTests(unittest.TestCase):
             "finance.sector.research": {"snapshot", "stock_snapshot_bundle"},
             "finance.uzi.native.analyze_stock": {
                 "snapshot",
+                "user_request",
                 "normalized_query",
                 "stock_snapshot_bundle",
             },
@@ -179,6 +180,10 @@ class UziFinancePackTests(unittest.TestCase):
                 self.assertFalse(by_type["stock_snapshot_bundle"].required)
                 if "normalized_query" in by_type:
                     self.assertFalse(by_type["normalized_query"].required)
+                if "user_request" in by_type:
+                    # Carries the immutable report Manifest / auxiliary recording.
+                    self.assertFalse(by_type["user_request"].required)
+                    self.assertFalse(by_type["user_request"].multiple)
 
     def test_main_agent_synthesis_contract_accepts_full_artifact_lineage(self) -> None:
         schema = json.loads(
@@ -271,7 +276,7 @@ class UziFinancePackTests(unittest.TestCase):
                 "16_lhb", "17_sentiment", "18_trap", "19_contests", "6_fund_holders", "similar_stocks",
             },
         )
-        self.assertEqual(mapping["source"]["commit"], "b004d7a988ca53a4805bf36784af091fa1209f22")
+        self.assertEqual(mapping["source"]["commit"], "b3665e85b8666477038e11157d8e8feb0e006b76")
         self.assertEqual(mapping["profiles"]["lite"]["panel_seats"], 66)
         self.assertEqual(mapping["profiles"]["medium"]["panel_seats"], 66)
         self.assertEqual(mapping["profiles"]["deep"]["panel_seats"], 66)
@@ -645,6 +650,42 @@ class UziFinancePackTests(unittest.TestCase):
         self.assertTrue(features["ai_chain_hit"])
         self.assertIn("stage_num=Weinstein", " ".join(features["feature_derivations"]))
 
+    def test_latest_reported_revenue_yoy_overrides_annual_history_growth(self) -> None:
+        rows = [
+            {
+                "snapshot_type": "fundamental",
+                "symbol": "600000",
+                "snapshot_date": "2026-08-31",
+                "facts": {
+                    "financial_abstract": {
+                        "revenue_growth_yoy": 7.25,
+                        "revenue_growth": "+7.2%",
+                        "revenue_growth_period": "2026-06-30",
+                        "revenue_growth_basis": "reported_yoy",
+                        "revenue_growth_source": (
+                            "akshare.stock_financial_analysis_indicator:"
+                            "营业总收入同比增长(%)"
+                        ),
+                    },
+                    "financial_abstract_history": [
+                        {"报告期": 2024, "营业总收入": "100亿"},
+                        {"报告期": 2025, "营业总收入": "150亿"},
+                    ],
+                },
+                "source": {"vendor": "fixture"},
+            }
+        ]
+
+        features = build_features(rows, "600000")
+
+        self.assertEqual(features["revenue_growth_latest"], 7.25)
+        self.assertEqual(features["revenue_growth_period"], "2026-06-30")
+        self.assertEqual(features["revenue_growth_basis"], "reported_yoy")
+        self.assertIn(
+            "营业总收入同比增长",
+            features["revenue_growth_source"],
+        )
+
     def test_uzi_market_currency_is_explicit_for_a_h_us_and_global_symbols(self) -> None:
         cases = {
             "600519": ("A", "CN", "CNY", "¥"),
@@ -926,24 +967,32 @@ class UziFinancePackTests(unittest.TestCase):
             root = Path(temporary_directory)
             settings = Settings.from_env(repository_root).model_copy(
                 update={
+                    "workspace_root": root,
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
                     # This case asserts partial delivery when synthesis is
                     # unavailable; keep the provider state deterministic.
-                    "openai_api_key": None,
+                    "codex_enabled": False,
                 }
             )
             with TestClient(
                 create_app(settings=settings, api_config=ApiConfig(api_token="uzi-test"))
             ) as client:
+                as_of = seed_strict_bundle(
+                    client.app.state.api_runtime.strategies.database,
+                    "600000.SH",
+                )
                 response = client.post(
                     "/api/v1/runs",
                     headers={"Authorization": "Bearer uzi-test"},
                     json={
                         "intent": "stock_check",
                         "user_query": "分析 600000",
-                        "constraints": {"research_profile": "lite"},
+                        "constraints": {
+                            "research_profile": "lite",
+                            "analysis_as_of_date": as_of.isoformat(),
+                        },
                         "slots": {"symbols": ["600000"], "snapshots": _snapshots()},
                     },
                 )
@@ -1017,25 +1066,33 @@ class UziFinancePackTests(unittest.TestCase):
             root = Path(temporary_directory)
             settings = Settings.from_env(repository_root).model_copy(
                 update={
+                    "workspace_root": root,
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
                     # The test validates graph/artifact materialization rather
                     # than an external model response. Keep it deterministic
                     # even when the developer machine has a real API key.
-                    "openai_api_key": None,
+                    "codex_enabled": False,
                 }
             )
             with TestClient(
                 create_app(settings=settings, api_config=ApiConfig(api_token="uzi-medium-test"))
             ) as client:
+                as_of = seed_strict_bundle(
+                    client.app.state.api_runtime.strategies.database,
+                    "600000.SH",
+                )
                 response = client.post(
                     "/api/v1/runs",
                     headers={"Authorization": "Bearer uzi-medium-test"},
                     json={
                         "intent": "stock_check",
                         "user_query": "深度分析 600000",
-                        "constraints": {"research_profile": "medium"},
+                        "constraints": {
+                            "research_profile": "medium",
+                            "analysis_as_of_date": as_of.isoformat(),
+                        },
                         "slots": {"symbols": ["600000"], "snapshots": _snapshots()},
                     },
                 )

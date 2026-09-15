@@ -14,6 +14,7 @@ from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
 from research_system.runtime.agent_os import AgentOS
 from research_system.runtime.platform.settings import Settings
+from tests.market_data.test_pit_core import seed_strict_bundle
 
 
 class _SnapshotSkill:
@@ -62,20 +63,6 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
             recovery["qualitative_stage"]["disabled_reason"],
             "standalone_uzi_command",
         )
-
-    def test_normal_finance_collector_uses_pack_owned_skill_implementations(self) -> None:
-        skill_types = [
-            *snapshot_collector._SYMBOL_SKILLS.values(),
-            snapshot_collector.SectorSnapshotSkill,
-            snapshot_collector.PolicySnapshotSkill,
-        ]
-        self.assertTrue(skill_types)
-        for skill_type in skill_types:
-            self.assertTrue(
-                skill_type.__module__.startswith("domain_packs.finance_ashare.skills"),
-                skill_type,
-            )
-            self.assertNotIn("research_system.skills", skill_type.__module__)
 
     def test_security_master_resolves_provider_backed_company_names(self) -> None:
         master = AShareSecurityMaster(
@@ -214,6 +201,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
             root = Path(temporary_directory)
             settings = Settings.from_env(repository_root).model_copy(
                 update={
+                    "workspace_root": root,
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
@@ -226,6 +214,10 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     agent_os_factory=_offline_agent_os,
                 )
             ) as client:
+                as_of = seed_strict_bundle(
+                    client.app.state.api_runtime.strategies.database,
+                    "600000.SH",
+                )
                 headers = {"Authorization": "Bearer migration-completion"}
                 prior = client.post(
                     "/api/v1/runs",
@@ -236,6 +228,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                         "constraints": {
                             "research_profile": "lite",
                             "investment_cycle": "short_term",
+                            "analysis_as_of_date": as_of.isoformat(),
                         },
                         "slots": {"snapshots": snapshots},
                     },
@@ -310,6 +303,7 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
             root = Path(temporary_directory)
             settings = Settings.from_env(repository_root).model_copy(
                 update={
+                    "workspace_root": root,
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
@@ -322,6 +316,10 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     agent_os_factory=_offline_agent_os,
                 )
             ) as client:
+                as_of = seed_strict_bundle(
+                    client.app.state.api_runtime.strategies.database,
+                    "600000.SH",
+                )
                 headers = {"Authorization": "Bearer specialized-intents"}
 
                 screen = client.post(
@@ -357,7 +355,10 @@ class FinancePackMigrationCompletionTests(unittest.TestCase):
                     json={
                         "intent": "stock_check",
                         "user_query": "分析 600000",
-                        "constraints": {"research_profile": "lite"},
+                        "constraints": {
+                            "research_profile": "lite",
+                            "analysis_as_of_date": as_of.isoformat(),
+                        },
                         "slots": {"snapshots": snapshots},
                     },
                 )

@@ -19,6 +19,7 @@
       "required": ["snapshot_type", "facts"],
       "properties": {
         "snapshot_type": {"type": "string"},
+        "dimension_id": {"type": ["string", "null"]},
         "scope": {"type": "string"},
         "symbol": {"type": ["string", "null"]},
         "sector": {"type": ["string", "null"]},
@@ -29,6 +30,17 @@
         "retrieved_at": {"type": ["string", "null"]},
         "created_at": {"type": ["string", "null"]},
         "quality_status": {"type": "string"},
+        "query_manifest": {"type": "object", "x-business-extensible": true},
+        "scoring_policy": {
+          "type": "object",
+          "required": ["excluded", "reason_code", "reason"],
+          "properties": {
+            "excluded": {"type": "boolean"},
+            "reason_code": {"type": ["string", "null"]},
+            "reason": {"type": ["string", "null"]}
+          },
+          "additionalProperties": false
+        },
         "facts": {"type": "object", "x-business-extensible": true},
         "source": {"$ref": "#/$defs/snapshot_source"},
         "primary_source": {"anyOf": [{"$ref": "#/$defs/snapshot_source"}, {"type": "null"}]},

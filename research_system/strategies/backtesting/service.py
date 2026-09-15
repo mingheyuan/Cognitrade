@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from threading import Event, RLock, Thread
@@ -16,16 +15,39 @@ from research_system.strategies.backtesting.adapters import (
     ExchangeExecutionAdapter,
     OTCExecutionAdapter,
 )
-from research_system.strategies.backtesting.instruments import AssetType, InstrumentResolver
-from research_system.strategies.backtesting.market_data_gateway import MarketDataGateway
+from research_system.strategies.backtesting.instruments import (
+    AssetType,
+    InstrumentResolver,
+)
+from research_system.strategies.backtesting.market_data_gateway import (
+    MarketDataGateway,
+    MarketSeries,
+)
 from research_system.strategies.backtesting.portfolio_ledger import (
     run_exchange_single_asset,
     run_holdings_portfolio,
     run_otc_single_asset,
 )
-from research_system.strategies.backtesting.result_store import ContentAddressedResultStore
-from research_system.strategies.backtesting.signal_core import HikyuuSignalCore, TechnicalSignalCore
-from research_system.strategies.contracts import BacktestMode, StrategyDocumentV1
+from research_system.strategies.backtesting.report_condition_ledger import (
+    ENGINE_VERSION as REPORT_CONDITION_ENGINE,
+)
+from research_system.strategies.backtesting.report_condition_ledger import (
+    run_report_conditions,
+)
+from research_system.strategies.backtesting.result_store import (
+    ContentAddressedResultStore,
+    json_content_hash,
+)
+from research_system.strategies.backtesting.signal_core import (
+    HikyuuSignalCore,
+    TechnicalSignalCore,
+)
+from research_system.strategies.contracts import (
+    BacktestMode,
+    StrategyDocument,
+    is_report_conditions,
+    parse_strategy_document,
+)
 from research_system.strategies.database import StrategyDatabase
 from research_system.strategies.errors import StrategyConflict, StrategyDomainError
 from research_system.strategies.models import (
@@ -46,6 +68,38 @@ from research_system.strategies.trading_calendar import trading_dates
 
 class _BacktestControlRequested(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class _BacktestInputs:
+    request: dict[str, Any]
+    start_date: date
+    end_date: date
+    mode: BacktestMode
+    strategy: Strategy
+    version: StrategyVersion
+    assignment: StrategyAssignment
+    document: StrategyDocument
+    signals: list[TradeSignal]
+    reports: list[DailyReportSet]
+    nodes_by_report: dict[str, list[DailyReportNode]]
+
+    @property
+    def initial_cash(self) -> float:
+        return float(self.request["initial_cash"])
+
+    @property
+    def warmup_start(self) -> date:
+        if is_report_conditions(self.document):
+            return self.start_date
+        return self.start_date - timedelta(days=self.document.execution.slow_period * 3)
+
+
+@dataclass(frozen=True)
+class _ModeResult:
+    ledger: dict[str, Any]
+    benchmarks: dict[str, Any]
+    instruments: list[dict[str, Any]]
 
 
 class StrategyBacktestService:
@@ -75,23 +129,12 @@ class StrategyBacktestService:
         self._lock = RLock()
         self._futures: dict[str, Future] = {}
         self._closed = False
-        self._shutdown_complete = Event()
         if recover:
             self._recover()
 
     def close(self) -> None:
-        with self._lock:
-            should_shutdown = not self._closed
-            self._closed = True
-        if not should_shutdown:
-            self._shutdown_complete.wait()
-            return
-        try:
-            # The database owner is normally closed immediately after this service.
-            # Wait for queued/running jobs so no worker can outlive its connection pool.
-            self._executor.shutdown(wait=True, cancel_futures=False)
-        finally:
-            self._shutdown_complete.set()
+        self._closed = True
+        self._executor.shutdown(wait=False, cancel_futures=False)
 
     def preflight(
         self,
@@ -102,6 +145,7 @@ class StrategyBacktestService:
         mode: BacktestMode,
         start_date: date,
         end_date: date,
+        market_data_manifest_hash: str | None = None,
     ) -> dict[str, Any]:
         with self.database.session() as session:
             strategy, version, assignment, document = self._context(
@@ -130,15 +174,24 @@ class StrategyBacktestService:
                         TradeSignal.user_id == scope.user_id,
                         TradeSignal.assignment_id == assignment.id,
                         TradeSignal.strategy_version_id == version.id,
-                        TradeSignal.kind == "fund",
+                        TradeSignal.kind == ("holding_stock" if is_report_conditions(document) else "fund"),
                         TradeSignal.effective_from <= end_date,
                     )
                 )
             )
+            if is_report_conditions(document):
+                signals = [row for row in signals if row.expires_after is not None and row.expires_after >= start_date]
+            native_symbols = sorted(set(session.scalars(select(DailyReportNode.subject_code).where(
+                DailyReportNode.report_set_id.in_({row.source_report_set_id for row in signals}),
+                DailyReportNode.node_type == "holding_uzi",
+            )))) if is_report_conditions(document) else []
         expected = _trading_dates(start_date, end_date)
+        if is_report_conditions(document):
+            linked_reports = {row.source_report_set_id for row in signals}
+            available_reports = [row for row in available_reports if row.id in linked_reports]
         report_dates = {row.as_of_date for row in available_reports}
         missing = [value for value in expected if value not in report_dates]
-        return {
+        payload = {
             "strategy_id": strategy.id,
             "strategy_version_id": version.id,
             "strategy_content_hash": version.content_hash,
@@ -154,6 +207,61 @@ class StrategyBacktestService:
             "ready": bool(signals) and not missing,
             "carry_days": document.signal_thresholds.missing_report_carry_days,
         }
+        if is_report_conditions(document):
+            covered_days = [day for day in expected if any(
+                row.effective_from <= day and row.expires_after is not None and day <= row.expires_after
+                for row in signals
+            )]
+            plan_readiness = _native_plan_readiness(
+                [_signal_payload(row) for row in signals], expected,
+            )
+            market_errors = self._native_market_preflight(
+                scope, symbols=native_symbols, start_date=start_date, end_date=end_date,
+                market_data_manifest_hash=market_data_manifest_hash,
+                price_basis_date=min([start_date, *(row.as_of_date for row in signals)]),
+            )
+            payload.update({
+                "signal_model": document.report_signal.model,
+                **plan_readiness,
+                "can_run": bool(plan_readiness["executable_plan_covered_dates"]) and bool(native_symbols) and not market_errors,
+                # Native plans remain valid without a newly published report
+                # every day. Strict daily coverage is an explicit create policy.
+                "ready": bool(plan_readiness["executable_plan_covered_dates"]) and bool(native_symbols) and not market_errors,
+                "report_coverage": len(report_dates) / max(1, len(expected)),
+                "signal_coverage": len(covered_days) / max(1, len(expected)),
+                "signal_uncovered_dates": [day for day in expected if day not in covered_days],
+                "market_data_checked": True,
+                "market_data_missing": market_errors,
+                "market_data_symbol_count": len(native_symbols),
+                "limitations": ["日线收盘触发、次一真实开盘成交；无有效入场许可时保留现金"],
+            })
+        return payload
+
+    def _native_market_preflight(
+        self, scope: OwnerScope, *, symbols: list[str], start_date: date, end_date: date,
+        market_data_manifest_hash: str | None, price_basis_date: date | None = None,
+    ) -> list[dict[str, Any]]:
+        manifest = self._read_market_manifest(
+            market_data_manifest_hash, tenant_id=scope.tenant_id, user_id=scope.user_id,
+            start_date=start_date, end_date=end_date,
+        ) if market_data_manifest_hash else None
+        missing = []
+        for symbol in symbols:
+            try:
+                instrument = InstrumentResolver.resolve_stock(symbol.split(".")[0])
+                if manifest is not None:
+                    source = manifest["observations"].get(instrument.instrument_id, {}).get("source", {})
+                    if not source:
+                        raise StrategyConflict("market_manifest_symbol_missing", "冻结清单缺少证券行情")
+                else:
+                    loader = getattr(self.market_data_gateway, "get_frozen_series", None)
+                    if not callable(loader):
+                        raise StrategyConflict("frozen_market_gateway_unavailable", "缺少数据中心只读行情入口")
+                    source = loader(instrument, start_date=price_basis_date or start_date, end_date=end_date, as_of_date=end_date).source
+                _validate_report_price_basis(source, price_basis_date or start_date, end_date)
+            except StrategyDomainError as exc:
+                missing.append({"symbol": symbol, "code": exc.code, "message": exc.message, **exc.details})
+        return missing
 
     def create(
         self,
@@ -168,6 +276,7 @@ class StrategyBacktestService:
         benchmark: dict[str, Any] | None = None,
         report_policy: str = "existing_only",
         parent_backtest_run_id: str | None = None,
+        market_data_manifest_hash: str | None = None,
     ) -> dict[str, Any]:
         if end_date < start_date:
             raise StrategyDomainError("invalid_date_range", "回测结束日期不能早于开始日期")
@@ -183,9 +292,21 @@ class StrategyBacktestService:
             mode=mode,
             start_date=start_date,
             end_date=end_date,
+            market_data_manifest_hash=market_data_manifest_hash,
         )
         if not preflight["signal_count"]:
             raise StrategyConflict("backtest_signals_missing", "该策略版本在区间内没有可回放信号")
+        if preflight.get("signal_model") == "report_conditions_v1" and not preflight["can_run"]:
+            if preflight.get("market_data_missing"):
+                raise StrategyConflict("backtest_market_data_incomplete", "数据中心行情尚不满足回放，请先显式补采",
+                                       details={"market_data_missing": preflight["market_data_missing"]})
+            if preflight.get("report_plan_blockers") and not preflight.get("executable_plan_covered_dates"):
+                raise StrategyConflict(
+                    "backtest_report_plans_blocked", "报告计划均未满足可执行契约，不能用全现金结果代替报告/输入阻断",
+                    details={"report_plan_blockers": preflight["report_plan_blockers"],
+                             "executable_plan_coverage": preflight["executable_plan_coverage"]},
+                )
+            raise StrategyConflict("backtest_conditions_outside_period", "回测区间没有处于有效期内的报告条件")
         if report_policy == "require_complete" and preflight["missing_report_dates"]:
             raise StrategyConflict(
                 "backtest_reports_incomplete",
@@ -203,53 +324,108 @@ class StrategyBacktestService:
             "report_policy": report_policy,
             "assignment_id": preflight["assignment_id"],
         }
-        with self.database.session() as session:
-            version = session.get(StrategyVersion, strategy_version_id)
-            assignment = session.get(StrategyAssignment, preflight["assignment_id"])
-            if version is None or assignment is None:
-                raise StrategyConflict("backtest_context_changed", "回测上下文已变化，请重新预检")
-            row = BacktestRun(
-                parent_backtest_run_id=parent_backtest_run_id,
-                tenant_id=scope.tenant_id,
-                user_id=scope.user_id,
-                strategy_id=version.strategy_id,
-                strategy_version_id=version.id,
-                strategy_content_hash=version.content_hash,
-                fund_code=fund_code,
-                fund_name=assignment.fund_name,
-                mode=mode.value,
-                start_date=start_date,
-                end_date=end_date,
-                initial_cash=float(initial_cash),
-                benchmark_json=benchmark_config,
-                request_json=request,
-                input_snapshot_hash=_hash(request),
-                engine_version=self.signal_core.engine_version,
-                status="queued",
+        if market_data_manifest_hash is not None:
+            if preflight.get("signal_model") != "report_conditions_v1":
+                raise StrategyConflict("market_manifest_mode_unsupported", "冻结行情清单入口仅用于原生报告条件回放")
+            self._read_market_manifest(
+                market_data_manifest_hash, tenant_id=scope.tenant_id, user_id=scope.user_id,
+                start_date=start_date, end_date=end_date,
             )
-            session.add(row)
-            session.flush()
+            request["market_data_manifest_hash"] = market_data_manifest_hash
+        request_hash = json_content_hash(request)
+        # Coalesce rapid duplicate submissions while keeping completed runs
+        # replayable for deterministic verification.
+        with self._lock, self.database.session() as session:
+            active_query = (
+                select(BacktestRun)
+                .where(
+                    BacktestRun.tenant_id == scope.tenant_id,
+                    BacktestRun.user_id == scope.user_id,
+                    BacktestRun.input_snapshot_hash == request_hash,
+                    BacktestRun.status.in_(["queued", "running"]),
+                    BacktestRun.cancel_requested.is_(False),
+                )
+            )
+            if parent_backtest_run_id is not None:
+                # A retry is a child of one specific attempt. Reusing an
+                # unrelated active run would silently erase that lineage.
+                active_query = active_query.where(
+                    BacktestRun.parent_backtest_run_id == parent_backtest_run_id
+                )
+            active = session.scalar(
+                active_query.order_by(BacktestRun.created_at.asc()).limit(1)
+            )
+            if active is not None:
+                row = active
+            else:
+                version = session.get(StrategyVersion, strategy_version_id)
+                assignment = session.get(
+                    StrategyAssignment,
+                    preflight["assignment_id"],
+                )
+                if version is None or assignment is None:
+                    raise StrategyConflict(
+                        "backtest_context_changed",
+                        "回测上下文已变化，请重新预检",
+                    )
+                row = BacktestRun(
+                    parent_backtest_run_id=parent_backtest_run_id,
+                    tenant_id=scope.tenant_id,
+                    user_id=scope.user_id,
+                    strategy_id=version.strategy_id,
+                    strategy_version_id=version.id,
+                    strategy_content_hash=version.content_hash,
+                    fund_code=fund_code,
+                    fund_name=assignment.fund_name,
+                    mode=mode.value,
+                    start_date=start_date,
+                    end_date=end_date,
+                    initial_cash=float(initial_cash),
+                    benchmark_json=benchmark_config,
+                    request_json=request,
+                    input_snapshot_hash=request_hash,
+                    engine_version=(REPORT_CONDITION_ENGINE if preflight.get("signal_model") == "report_conditions_v1"
+                                    else self.signal_core.engine_version),
+                    status="queued",
+                )
+                session.add(row)
+                session.flush()
             payload = self._payload(row)
-        self._submit(row.id)
+            backtest_id = row.id
+        self._submit(backtest_id)
         return payload
 
-    def list(self, scope: OwnerScope) -> dict[str, Any]:
+    def list(
+        self,
+        scope: OwnerScope,
+        *,
+        strategy_id: str | None = None,
+        strategy_version_id: str | None = None,
+        fund_code: str | None = None,
+        mode: BacktestMode | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
         with self.database.session() as session:
             rows = self.repository.list_backtests(
                 session,
                 tenant_id=scope.tenant_id,
                 user_id=scope.user_id,
+                strategy_id=strategy_id,
+                strategy_version_id=strategy_version_id,
+                fund_code=fund_code,
+                mode=mode.value if mode else None,
+                status=status,
+                limit=limit,
             )
-            payloads = [self._payload(row) for row in rows]
-        return {"backtests": [self._visible_payload(row) for row in payloads]}
+            return {"backtests": [self._payload(row) for row in rows]}
 
     def get(self, scope: OwnerScope, backtest_id: str, *, include_result: bool = True) -> dict[str, Any]:
         with self.database.session() as session:
             row = self._require(session, scope, backtest_id)
             payload = self._payload(row)
             uri = row.result_object_uri
-        payload = self._visible_payload(payload)
-        if include_result and uri and payload["status"] not in {"queued", "running"}:
+        if include_result and uri:
             payload["result"] = self.result_store.get_json(uri)
         return payload
 
@@ -259,6 +435,11 @@ class StrategyBacktestService:
             if row.status in {"queued", "running"}:
                 raise StrategyConflict("backtest_still_running", "回测仍在运行")
             request = dict(row.request_json or {})
+            if row.result_object_uri:
+                result = self.result_store.get_json(row.result_object_uri)
+                frozen_hash = (result.get("market_data_manifest") or {}).get("content_hash")
+                if frozen_hash:
+                    request["market_data_manifest_hash"] = frozen_hash
         return self.create(
             scope,
             strategy_version_id=str(request["strategy_version_id"]),
@@ -270,6 +451,7 @@ class StrategyBacktestService:
             benchmark=dict(request.get("benchmark") or {}),
             report_policy=str(request.get("report_policy") or "existing_only"),
             parent_backtest_run_id=backtest_id,
+            market_data_manifest_hash=request.get("market_data_manifest_hash"),
         )
 
     def cancel(self, scope: OwnerScope, backtest_id: str) -> dict[str, Any]:
@@ -281,9 +463,9 @@ class StrategyBacktestService:
             return self._payload(row)
 
     def _submit(self, backtest_id: str) -> None:
+        if self._closed:
+            return
         with self._lock:
-            if self._closed:
-                return
             current = self._futures.get(backtest_id)
             if current is not None and not current.done():
                 return
@@ -297,24 +479,6 @@ class StrategyBacktestService:
         with self._lock:
             if self._futures.get(backtest_id) is future:
                 self._futures.pop(backtest_id, None)
-
-    def _visible_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
-        with self._lock:
-            future = self._futures.get(str(payload["id"]))
-            in_flight = future is not None and not future.done()
-        if not in_flight or payload["status"] in {"queued", "running"}:
-            return payload
-        # SQLite in-memory tests share one connection across threads and can
-        # observe transaction-local fields. Never publish a terminal state until
-        # the worker (including lineage writes and heartbeat cleanup) has exited.
-        return {
-            **payload,
-            "status": "running",
-            "metrics": {},
-            "result_content_hash": None,
-            "error_summary": None,
-            "completed_at": None,
-        }
 
     def _execute(self, backtest_id: str) -> None:
         heartbeat_stop = Event()
@@ -346,10 +510,12 @@ class StrategyBacktestService:
                     row.lease_owner = None
                     row.lease_until = None
                     return
+                row.status = "completed"
                 row.input_snapshot_hash = input_hash
                 row.metrics_json = dict(result["metrics"])
                 row.result_object_uri = stored.uri
                 row.result_content_hash = stored.content_hash
+                row.completed_at = datetime.now(UTC)
                 row.lease_owner = None
                 row.lease_until = None
                 for link in signal_links:
@@ -368,8 +534,12 @@ class StrategyBacktestService:
                     uri=stored.uri,
                     size_bytes=stored.size_bytes,
                 )
-                row.status = "completed"
-                row.completed_at = datetime.now(UTC)
+                manifest = result.get("market_data_manifest")
+                if manifest:
+                    self._retain_result_object(
+                        session, backtest_id=row.id, content_hash=manifest["content_hash"],
+                        uri=manifest["uri"], size_bytes=manifest["size_bytes"],
+                    )
         except _BacktestControlRequested:
             with self.database.session() as session:
                 row = session.get(BacktestRun, backtest_id)
@@ -384,13 +554,15 @@ class StrategyBacktestService:
                 if row is not None:
                     row.status = "failed"
                     row.error_summary = str(exc)
+                    if isinstance(exc, StrategyDomainError):
+                        row.metrics_json = {"error_code": exc.code, "error_details": exc.details}
                     row.completed_at = datetime.now(UTC)
                     row.lease_owner = None
                     row.lease_until = None
         finally:
             heartbeat_stop.set()
             if heartbeat is not None:
-                heartbeat.join()
+                heartbeat.join(timeout=1.0)
 
     def _run(
         self,
@@ -400,6 +572,425 @@ class StrategyBacktestService:
         control: Callable[[], None] = lambda: None,
     ) -> tuple[dict[str, Any], str, list[dict[str, Any]]]:
         control()
+        inputs = self._load_inputs(scope, request)
+        start_date = inputs.start_date
+        end_date = inputs.end_date
+        mode = inputs.mode
+        strategy = inputs.strategy
+        version = inputs.version
+        assignment = inputs.assignment
+        signals = inputs.signals
+        reports = inputs.reports
+        signal_payloads = [_signal_payload(row) for row in signals]
+        control()
+        fund_signals = [row for row in signal_payloads if row["kind"] == "fund"]
+        native_conditions = is_report_conditions(inputs.document)
+        if not fund_signals and not native_conditions:
+            raise StrategyConflict("fund_signal_missing", "回测区间没有基金总门禁信号")
+        market_hashes: dict[str, str] = {}
+        benchmark_config = dict(request.get("benchmark") or {})
+        if native_conditions:
+            mode_result = self._run_report_conditions(
+                inputs, signal_payloads=signal_payloads, benchmark_config=benchmark_config,
+                market_hashes=market_hashes, control=control,
+            )
+        elif mode == BacktestMode.FUND_ONLY:
+            mode_result = self._run_fund_only(
+                inputs,
+                fund_signals=fund_signals,
+                benchmark_config=benchmark_config,
+                market_hashes=market_hashes,
+                control=control,
+            )
+        else:
+            mode_result = self._run_holdings_portfolio(
+                inputs,
+                signal_payloads=signal_payloads,
+                fund_signals=fund_signals,
+                benchmark_config=benchmark_config,
+                market_hashes=market_hashes,
+                control=control,
+            )
+        custom_code = str(benchmark_config.get("custom_code") or "").strip()
+        if custom_code and not native_conditions:
+            mode_result.benchmarks["custom"] = self._index_benchmark(
+                code=custom_code,
+                name=str(benchmark_config.get("custom_name") or custom_code),
+                start_date=start_date,
+                end_date=end_date,
+                market_hashes=market_hashes,
+            )
+        _enrich_trade_lineage(
+            mode_result.ledger["trades"],
+            strategy=strategy,
+            version=version,
+            assignment=assignment,
+            signals=signals,
+            report_ids={report.id for report in reports},
+        )
+        control()
+        result = {
+            "schema_version": "2" if native_conditions else "1",
+            "engine": {
+                "technical_core": REPORT_CONDITION_ENGINE if native_conditions else self.signal_core.engine_version,
+                "ledger": REPORT_CONDITION_ENGINE if native_conditions else "cognitrade-deterministic-ledger-v1",
+            },
+            "strategy": {
+                "id": strategy.id,
+                "version_id": version.id,
+                "content_hash": version.content_hash,
+            },
+            "assignment_id": assignment.id,
+            "fund_code": assignment.fund_code,
+            "fund_name": assignment.fund_name,
+            "mode": mode.value,
+            "period": {"start": start_date, "end": end_date},
+            "instruments": mode_result.instruments,
+            "market_data_hashes": market_hashes,
+            "report_set_ids": [report.id for report in reports],
+            "benchmarks": mode_result.benchmarks,
+            **mode_result.ledger,
+        }
+        links = _lineage_links(result["trades"], allowed_signal_ids={row.id for row in signals})
+        input_hash = json_content_hash(
+            {
+                "request": {key: value for key, value in request.items() if key != "market_data_manifest_hash"},
+                "strategy_content_hash": version.content_hash,
+                "reports": [(row.id, row.source_hash, row.revision) for row in reports],
+                "signals": [(row.id, row.content_hash) for row in signals],
+                "market_data_hashes": market_hashes,
+            }
+        )
+        return result, input_hash, links
+
+    def _run_report_conditions(
+        self, inputs: _BacktestInputs, *, signal_payloads: list[dict[str, Any]],
+        benchmark_config: dict[str, Any], market_hashes: dict[str, str], control: Callable[[], None],
+    ) -> _ModeResult:
+        schedule = _report_schedule(inputs.reports, inputs.nodes_by_report, include_unavailable=True)
+        symbols = sorted({node.subject_code for nodes in inputs.nodes_by_report.values()
+                          for node in nodes if node.node_type == "holding_uzi"})
+        instruments = {symbol: InstrumentResolver.resolve_stock(symbol.split(".")[0], _holding_name(symbol, inputs.nodes_by_report))
+                       for symbol in symbols}
+        stock_signals = {symbol: [row for row in signal_payloads if row["kind"] == "holding_stock"
+                                 and row["subject_code"] == symbol] for symbol in symbols}
+        # Recheck queued/recovered jobs as well: old preflight success must not
+        # turn ten blocked plans into a seemingly valid all-cash replay.
+        plan_readiness = _native_plan_readiness(
+            [row for rows in stock_signals.values() for row in rows],
+            _trading_dates(inputs.start_date, inputs.end_date),
+        )
+        if not plan_readiness["executable_plan_covered_dates"]:
+            raise StrategyConflict(
+                "backtest_report_plans_blocked", "区间内没有可执行报告计划；这不是合法零成交",
+                details={"report_plan_blockers": plan_readiness["report_plan_blockers"],
+                         "executable_plan_coverage": plan_readiness["executable_plan_coverage"]},
+            )
+        price_basis_date = min([inputs.start_date, *(row.as_of_date for row in inputs.signals)])
+        if any(not row.get("execution_plan") for rows in stock_signals.values() for row in rows):
+            raise StrategyConflict("native_execution_plan_missing", "原生回放需要冻结的报告条件，不能使用旧四态信号")
+        loader = getattr(self.market_data_gateway, "get_frozen_series", None)
+        if not callable(loader) and not inputs.request.get("market_data_manifest_hash"):
+            raise StrategyConflict("frozen_market_gateway_unavailable", "原生条件回测需要数据中心只读行情入口")
+        observations: dict[str, dict[str, Any]] = {}
+        replay_hash = inputs.request.get("market_data_manifest_hash")
+        replay_manifest = self._read_market_manifest(
+            replay_hash, tenant_id=inputs.assignment.tenant_id, user_id=inputs.assignment.user_id,
+            start_date=inputs.start_date, end_date=inputs.end_date,
+        ) if replay_hash else None
+        benchmark_failures: dict[str, dict[str, Any]] = {}
+
+        def frozen_series(instrument):
+            control()
+            if replay_manifest is not None:
+                observation = replay_manifest["observations"].get(instrument.instrument_id)
+                if not observation:
+                    raise StrategyConflict("market_manifest_symbol_missing", "冻结行情清单不含所需证券，不能联网补取",
+                                           details={"symbol": instrument.code})
+                if observation.get("instrument", {}).get("instrument_id") != instrument.instrument_id:
+                    raise StrategyConflict("market_manifest_instrument_mismatch", "冻结行情证券身份不一致")
+                series = MarketSeries(instrument, tuple(observation["bars"]), observation["content_hash"],
+                                      observation["source"], tuple(observation.get("degraded_reasons") or []))
+            else:
+                series = loader(instrument, start_date=price_basis_date, end_date=inputs.end_date, as_of_date=inputs.end_date)
+            _validate_report_price_basis(series.source, price_basis_date, inputs.end_date)
+            market_hashes[instrument.instrument_id] = series.content_hash
+            observations[instrument.instrument_id] = series.payload()
+            return list(series.bars)
+
+        bars = {symbol: frozen_series(instrument) for symbol, instrument in instruments.items()}
+        ledger = run_report_conditions(
+            instruments=instruments, bars_by_symbol=bars, stock_signals=stock_signals,
+            adapter=ExchangeExecutionAdapter.stock(inputs.document), initial_cash=inputs.initial_cash,
+            start_date=inputs.start_date, end_date=inputs.end_date, control=control,
+        )
+        ledger["report_plan_readiness"] = plan_readiness
+        benchmarks = {}
+        if benchmark_config.get("initial_disclosed_weights_static", True):
+            benchmarks["initial_disclosed_weights_static"] = _static_holdings_benchmark(
+                schedule, bars, inputs.start_date, inputs.end_date,
+            )
+        requested_indexes = []
+        if benchmark_config.get("hs300", True):
+            requested_indexes.append(("hs300", "000300", "沪深300"))
+        if benchmark_config.get("custom_code"):
+            requested_indexes.append(("custom", str(benchmark_config["custom_code"]), str(benchmark_config.get("custom_name") or "自定义基准")))
+        for key, code, name in requested_indexes:
+            if replay_manifest is not None and key in replay_manifest.get("benchmark_failures", {}):
+                benchmarks[key] = replay_manifest["benchmark_failures"][key]
+                benchmark_failures[key] = benchmarks[key]
+                continue
+            try:
+                benchmark_bars = frozen_series(InstrumentResolver.resolve_index(code, name))
+                if benchmark_bars and benchmark_bars[0].get("open") is None:
+                    raise StrategyConflict("benchmark_open_unavailable", "基准首日缺少真实开盘价")
+                benchmarks[key] = _buy_hold_benchmark(benchmark_bars, inputs.start_date, inputs.end_date)
+            except StrategyDomainError as exc:
+                benchmarks[key] = {"status": "unavailable", "reason": exc.code, "details": exc.details}
+                benchmark_failures[key] = benchmarks[key]
+        manifest = self.result_store.put_json({
+            "schema_version": "1", "purpose": "report_condition_backtest_prices",
+            "tenant_id": inputs.assignment.tenant_id, "user_id": inputs.assignment.user_id,
+            "period": {"start": inputs.start_date, "end": inputs.end_date}, "observations": observations,
+            "benchmark_failures": benchmark_failures,
+        })
+        ledger["market_data_manifest"] = {"uri": manifest.uri, "content_hash": manifest.content_hash,
+                                          "size_bytes": manifest.size_bytes}
+        ledger["report_execution_plans"] = {row["id"]: row["execution_plan"] for rows in stock_signals.values() for row in rows}
+        return _ModeResult(ledger=ledger, benchmarks=benchmarks, instruments=[row.payload() for row in instruments.values()])
+
+    def _read_market_manifest(
+        self, content_hash: str, *, tenant_id: str, user_id: str, start_date: date, end_date: date,
+    ) -> dict[str, Any]:
+        if len(content_hash) != 64 or any(character not in "0123456789abcdef" for character in content_hash):
+            raise StrategyConflict("market_manifest_hash_invalid", "行情清单必须使用有效的 SHA-256 内容哈希")
+        root = self.result_store.root.resolve()
+        path = (root / content_hash[:2] / f"{content_hash}.json").resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise StrategyConflict("market_manifest_not_found", "未找到可访问的冻结行情清单")
+        try:
+            payload = self.result_store.get_json(str(path))
+        except (OSError, ValueError) as exc:
+            raise StrategyConflict("market_manifest_integrity_failed", "冻结行情清单无法解码") from exc
+        if json_content_hash(payload) != content_hash or payload.get("purpose") != "report_condition_backtest_prices":
+            raise StrategyConflict("market_manifest_integrity_failed", "冻结行情清单内容校验失败")
+        if payload.get("tenant_id") != tenant_id or payload.get("user_id") != user_id:
+            raise StrategyConflict("market_manifest_not_found", "未找到可访问的冻结行情清单")
+        if payload.get("period") != {"start": start_date.isoformat(), "end": end_date.isoformat()}:
+            raise StrategyConflict("market_manifest_period_mismatch", "请求区间与冻结行情清单不一致")
+        return payload
+
+    def _run_fund_only(
+        self,
+        inputs: _BacktestInputs,
+        *,
+        fund_signals: list[dict[str, Any]],
+        benchmark_config: dict[str, Any],
+        market_hashes: dict[str, str],
+        control: Callable[[], None],
+    ) -> _ModeResult:
+        fund_sources = [
+            {
+                "report_as_of": report.as_of_date,
+                "source": next(
+                    (
+                        dict(node.source_json or {})
+                        for node in inputs.nodes_by_report[report.id]
+                        if node.node_type == "fund_report"
+                    ),
+                    {},
+                ),
+            }
+            for report in inputs.reports
+        ]
+        latest_fund_payload = next(
+            (entry["source"] for entry in reversed(fund_sources) if entry["source"]),
+            {},
+        )
+        instrument = InstrumentResolver.resolve_fund(
+            latest_fund_payload,
+            code=inputs.assignment.fund_code,
+            name=inputs.assignment.fund_name,
+        )
+        series = self.market_data_gateway.get_series(
+            instrument,
+            start_date=inputs.warmup_start,
+            end_date=inputs.end_date,
+            as_of_date=inputs.end_date,
+            fund_sources=fund_sources,
+        )
+        control()
+        bars = list(series.bars)
+        market_hashes[instrument.instrument_id] = series.content_hash
+        events = self.signal_core.events(
+            instrument=instrument,
+            bars=bars,
+            signals=fund_signals,
+            fast_period=inputs.document.execution.fast_period,
+            slow_period=inputs.document.execution.slow_period,
+        )
+        control()
+        if instrument.asset_type == AssetType.OTC_FUND:
+            ledger = run_otc_single_asset(
+                instrument=instrument,
+                bars=bars,
+                events=events,
+                fund_signals=fund_signals,
+                adapter=OTCExecutionAdapter.from_document(inputs.document),
+                initial_cash=inputs.initial_cash,
+                start_date=inputs.start_date,
+                end_date=inputs.end_date,
+            )
+        else:
+            ledger = run_exchange_single_asset(
+                instrument=instrument,
+                bars=bars,
+                events=events,
+                adapter=ExchangeExecutionAdapter.exchange_fund(inputs.document),
+                initial_cash=inputs.initial_cash,
+                start_date=inputs.start_date,
+                end_date=inputs.end_date,
+            )
+        benchmarks: dict[str, Any] = {}
+        if benchmark_config.get("fund_buy_and_hold", True):
+            benchmarks["fund_buy_and_hold"] = _buy_hold_benchmark(
+                bars,
+                inputs.start_date,
+                inputs.end_date,
+            )
+        if benchmark_config.get("category_index"):
+            category_code, category_name = _category_benchmark(latest_fund_payload)
+            benchmarks["category_index"] = (
+                self._index_benchmark(
+                    code=category_code,
+                    name=category_name,
+                    start_date=inputs.start_date,
+                    end_date=inputs.end_date,
+                    market_hashes=market_hashes,
+                )
+                if category_code
+                else {
+                    "status": "unavailable",
+                    "reason": "category_index_code_unavailable",
+                }
+            )
+        if benchmark_config.get("hs300"):
+            benchmarks["hs300"] = self._index_benchmark(
+                code="000300",
+                name="沪深300",
+                start_date=inputs.start_date,
+                end_date=inputs.end_date,
+                market_hashes=market_hashes,
+            )
+        return _ModeResult(
+            ledger=ledger,
+            benchmarks=benchmarks,
+            instruments=[instrument.payload()],
+        )
+
+    def _run_holdings_portfolio(
+        self,
+        inputs: _BacktestInputs,
+        *,
+        signal_payloads: list[dict[str, Any]],
+        fund_signals: list[dict[str, Any]],
+        benchmark_config: dict[str, Any],
+        market_hashes: dict[str, str],
+        control: Callable[[], None],
+    ) -> _ModeResult:
+        report_schedule = _report_schedule(inputs.reports, inputs.nodes_by_report)
+        symbols = sorted(
+            {
+                symbol
+                for report in report_schedule
+                for symbol in report["target_weights"]
+            }
+        )
+        instruments = {
+            symbol: InstrumentResolver.resolve_stock(
+                symbol,
+                _holding_name(symbol, inputs.nodes_by_report),
+            )
+            for symbol in symbols
+        }
+        stock_signals = {
+            symbol: [
+                row
+                for row in signal_payloads
+                if row["kind"] == "holding_stock" and row["subject_code"] == symbol
+            ]
+            for symbol in symbols
+        }
+        bars_by_symbol: dict[str, list[dict[str, Any]]] = {}
+        events_by_symbol: dict[str, list[dict[str, Any]]] = {}
+        for symbol, instrument in instruments.items():
+            control()
+            if not stock_signals[symbol]:
+                raise StrategyConflict(
+                    "holding_signal_missing",
+                    f"持仓 {symbol} 缺少可追溯个股信号",
+                )
+            series = self.market_data_gateway.get_series(
+                instrument,
+                start_date=inputs.warmup_start,
+                end_date=inputs.end_date,
+                as_of_date=inputs.end_date,
+            )
+            bars_by_symbol[symbol] = list(series.bars)
+            market_hashes[instrument.instrument_id] = series.content_hash
+            events_by_symbol[symbol] = self.signal_core.events(
+                instrument=instrument,
+                bars=bars_by_symbol[symbol],
+                signals=stock_signals[symbol],
+                fast_period=inputs.document.execution.fast_period,
+                slow_period=inputs.document.execution.slow_period,
+            )
+            control()
+        ledger = run_holdings_portfolio(
+            instruments=instruments,
+            bars_by_symbol=bars_by_symbol,
+            events_by_symbol=events_by_symbol,
+            stock_signals=stock_signals,
+            fund_signals=fund_signals,
+            report_schedule=report_schedule,
+            adapter=ExchangeExecutionAdapter.stock(inputs.document),
+            initial_cash=inputs.initial_cash,
+            start_date=inputs.start_date,
+            end_date=inputs.end_date,
+            max_single_stock_pct=inputs.document.execution.max_single_stock_pct,
+            drift_pct_points=inputs.document.execution.rebalance_drift_pct_points,
+            fallback_trading_days=trading_dates(inputs.start_date, inputs.end_date),
+        )
+        control()
+        benchmarks: dict[str, Any] = {}
+        if benchmark_config.get("initial_disclosed_weights_static", True):
+            benchmarks["initial_disclosed_weights_static"] = (
+                _static_holdings_benchmark(
+                    report_schedule,
+                    bars_by_symbol,
+                    inputs.start_date,
+                    inputs.end_date,
+                )
+            )
+        if benchmark_config.get("hs300", True):
+            benchmarks["hs300"] = self._index_benchmark(
+                code="000300",
+                name="沪深300",
+                start_date=inputs.start_date,
+                end_date=inputs.end_date,
+                market_hashes=market_hashes,
+            )
+        return _ModeResult(
+            ledger=ledger,
+            benchmarks=benchmarks,
+            instruments=[value.payload() for value in instruments.values()],
+        )
+
+    def _load_inputs(
+        self,
+        scope: OwnerScope,
+        request: dict[str, Any],
+    ) -> _BacktestInputs:
         start_date = date.fromisoformat(str(request["start_date"]))
         end_date = date.fromisoformat(str(request["end_date"]))
         mode = BacktestMode(str(request["mode"]))
@@ -419,17 +1010,36 @@ class StrategyBacktestService:
                         TradeSignal.assignment_id == assignment.id,
                         TradeSignal.strategy_version_id == version.id,
                         TradeSignal.effective_from <= end_date,
-                    ).order_by(TradeSignal.effective_from.asc(), TradeSignal.revision.asc())
+                    ).order_by(
+                        TradeSignal.effective_from.asc(),
+                        TradeSignal.revision.asc(),
+                    )
                 )
             )
+            if is_report_conditions(document):
+                signals = [row for row in signals if row.kind == "holding_stock" and row.expires_after is not None and row.expires_after >= start_date]
             if not signals:
                 raise StrategyConflict("backtest_signals_missing", "回测信号不存在")
-            report_ids = list(dict.fromkeys(signal.source_report_set_id for signal in signals))
+            report_ids = self._report_ids_for_valuation(
+                session,
+                scope=scope,
+                assignment=assignment,
+                version=version,
+                signals=signals,
+                end_date=end_date,
+            )
+            if is_report_conditions(document):
+                # Initial holdings are empty. Old expired permissions cannot
+                # contribute positions and must not require years of prices.
+                report_ids = list({row.source_report_set_id for row in signals})
             reports = list(
                 session.scalars(
                     select(DailyReportSet)
                     .where(DailyReportSet.id.in_(report_ids))
-                    .order_by(DailyReportSet.effective_date.asc(), DailyReportSet.revision.asc())
+                    .order_by(
+                        DailyReportSet.effective_date.asc(),
+                        DailyReportSet.revision.asc(),
+                    )
                 )
             )
             nodes_by_report = {
@@ -442,219 +1052,51 @@ class StrategyBacktestService:
                 )
                 for report in reports
             }
-        signal_payloads = [_signal_payload(row) for row in signals]
-        control()
-        fund_signals = [row for row in signal_payloads if row["kind"] == "fund"]
-        if not fund_signals:
-            raise StrategyConflict("fund_signal_missing", "回测区间没有基金总门禁信号")
-        fund_sources = [
-            {
-                "report_as_of": report.as_of_date,
-                "source": next(
-                    (
-                        dict(node.source_json or {})
-                        for node in nodes_by_report[report.id]
-                        if node.node_type == "fund_report"
-                    ),
-                    {},
-                ),
-            }
-            for report in reports
-        ]
-        latest_fund_payload = next(
-            (entry["source"] for entry in reversed(fund_sources) if entry["source"]),
-            {},
-        )
-        warmup_start = start_date - timedelta(days=document.execution.slow_period * 3)
-        market_hashes: dict[str, str] = {}
-        benchmark_config = dict(request.get("benchmark") or {})
-        if mode == BacktestMode.FUND_ONLY:
-            instrument = InstrumentResolver.resolve_fund(
-                latest_fund_payload,
-                code=assignment.fund_code,
-                name=assignment.fund_name,
-            )
-            series = self.market_data_gateway.get_series(
-                instrument,
-                start_date=warmup_start,
-                end_date=end_date,
-                as_of_date=end_date,
-                fund_sources=fund_sources,
-            )
-            control()
-            bars = list(series.bars)
-            market_hashes[instrument.instrument_id] = series.content_hash
-            events = self.signal_core.events(
-                instrument=instrument,
-                bars=bars,
-                signals=fund_signals,
-                fast_period=document.execution.fast_period,
-                slow_period=document.execution.slow_period,
-            )
-            control()
-            if instrument.asset_type == AssetType.OTC_FUND:
-                ledger = run_otc_single_asset(
-                    instrument=instrument,
-                    bars=bars,
-                    events=events,
-                    adapter=OTCExecutionAdapter.from_document(document),
-                    initial_cash=float(request["initial_cash"]),
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-            else:
-                ledger = run_exchange_single_asset(
-                    instrument=instrument,
-                    bars=bars,
-                    events=events,
-                    adapter=ExchangeExecutionAdapter.exchange_fund(document),
-                    initial_cash=float(request["initial_cash"]),
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-            benchmarks: dict[str, Any] = {}
-            if benchmark_config.get("fund_buy_and_hold", True):
-                benchmarks["fund_buy_and_hold"] = _buy_hold_benchmark(bars, start_date, end_date)
-            if benchmark_config.get("category_index"):
-                category_code, category_name = _category_benchmark(latest_fund_payload)
-                benchmarks["category_index"] = (
-                    self._index_benchmark(
-                        code=category_code,
-                        name=category_name,
-                        start_date=start_date,
-                        end_date=end_date,
-                        market_hashes=market_hashes,
-                    )
-                    if category_code
-                    else {"status": "unavailable", "reason": "category_index_code_unavailable"}
-                )
-            instruments_payload = [instrument.payload()]
-        else:
-            report_schedule = _report_schedule(reports, nodes_by_report)
-            symbols = sorted(
-                {
-                    symbol
-                    for report in report_schedule
-                    for symbol in report["target_weights"]
-                }
-            )
-            instruments = {
-                symbol: InstrumentResolver.resolve_stock(symbol, _holding_name(symbol, nodes_by_report))
-                for symbol in symbols
-            }
-            stock_signals: dict[str, list[dict[str, Any]]] = {
-                symbol: [
-                    row
-                    for row in signal_payloads
-                    if row["kind"] == "holding_stock" and row["subject_code"] == symbol
-                ]
-                for symbol in symbols
-            }
-            bars_by_symbol: dict[str, list[dict[str, Any]]] = {}
-            events_by_symbol: dict[str, list[dict[str, Any]]] = {}
-            for symbol, instrument in instruments.items():
-                control()
-                if not stock_signals[symbol]:
-                    raise StrategyConflict("holding_signal_missing", f"持仓 {symbol} 缺少可追溯个股信号")
-                series = self.market_data_gateway.get_series(
-                    instrument,
-                    start_date=warmup_start,
-                    end_date=end_date,
-                    as_of_date=end_date,
-                )
-                bars_by_symbol[symbol] = list(series.bars)
-                market_hashes[instrument.instrument_id] = series.content_hash
-                events_by_symbol[symbol] = self.signal_core.events(
-                    instrument=instrument,
-                    bars=bars_by_symbol[symbol],
-                    signals=stock_signals[symbol],
-                    fast_period=document.execution.fast_period,
-                    slow_period=document.execution.slow_period,
-                )
-                control()
-            ledger = run_holdings_portfolio(
-                instruments=instruments,
-                bars_by_symbol=bars_by_symbol,
-                events_by_symbol=events_by_symbol,
-                stock_signals=stock_signals,
-                fund_signals=fund_signals,
-                report_schedule=report_schedule,
-                adapter=ExchangeExecutionAdapter.stock(document),
-                initial_cash=float(request["initial_cash"]),
-                start_date=start_date,
-                end_date=end_date,
-                max_single_stock_pct=document.execution.max_single_stock_pct,
-                drift_pct_points=document.execution.rebalance_drift_pct_points,
-            )
-            control()
-            benchmarks = {}
-            if benchmark_config.get("initial_disclosed_weights_static", True):
-                benchmarks["initial_disclosed_weights_static"] = _static_holdings_benchmark(
-                    report_schedule,
-                    bars_by_symbol,
-                    start_date,
-                    end_date,
-                )
-            if benchmark_config.get("hs300", True):
-                benchmarks["hs300"] = self._index_benchmark(
-                    code="000300",
-                    name="沪深300",
-                    start_date=start_date,
-                    end_date=end_date,
-                    market_hashes=market_hashes,
-                )
-            instruments_payload = [value.payload() for value in instruments.values()]
-        custom_code = str(benchmark_config.get("custom_code") or "").strip()
-        if custom_code:
-            benchmarks["custom"] = self._index_benchmark(
-                code=custom_code,
-                name=str(benchmark_config.get("custom_name") or custom_code),
-                start_date=start_date,
-                end_date=end_date,
-                market_hashes=market_hashes,
-            )
-        _enrich_trade_lineage(
-            ledger["trades"],
+        return _BacktestInputs(
+            request=request,
+            start_date=start_date,
+            end_date=end_date,
+            mode=mode,
             strategy=strategy,
             version=version,
             assignment=assignment,
+            document=document,
             signals=signals,
-            report_ids={report.id for report in reports},
+            reports=reports,
+            nodes_by_report=nodes_by_report,
         )
-        control()
-        result = {
-            "schema_version": "1",
-            "engine": {
-                "technical_core": self.signal_core.engine_version,
-                "ledger": "cognitrade-deterministic-ledger-v1",
-            },
-            "strategy": {
-                "id": strategy.id,
-                "version_id": version.id,
-                "content_hash": version.content_hash,
-            },
-            "assignment_id": assignment.id,
-            "fund_code": assignment.fund_code,
-            "fund_name": assignment.fund_name,
-            "mode": mode.value,
-            "period": {"start": start_date, "end": end_date},
-            "instruments": instruments_payload,
-            "market_data_hashes": market_hashes,
-            "report_set_ids": [report.id for report in reports],
-            "benchmarks": benchmarks,
-            **ledger,
-        }
-        links = _lineage_links(result["trades"], allowed_signal_ids={row.id for row in signals})
-        input_hash = _hash(
-            {
-                "request": request,
-                "strategy_content_hash": version.content_hash,
-                "reports": [(row.id, row.source_hash, row.revision) for row in reports],
-                "signals": [(row.id, row.content_hash) for row in signals],
-                "market_data_hashes": market_hashes,
-            }
+
+    @staticmethod
+    def _report_ids_for_valuation(
+        session,
+        *,
+        scope: OwnerScope,
+        assignment: StrategyAssignment,
+        version: StrategyVersion,
+        signals: list[TradeSignal],
+        end_date: date,
+    ) -> list[str]:
+        # A final-session report is valid NAV evidence even when its signal is
+        # only actionable on T+1. Keep those reports out of execution signals.
+        valuation_report_ids = list(
+            session.scalars(
+                select(TradeSignal.source_report_set_id)
+                .where(
+                    TradeSignal.tenant_id == scope.tenant_id,
+                    TradeSignal.user_id == scope.user_id,
+                    TradeSignal.assignment_id == assignment.id,
+                    TradeSignal.strategy_version_id == version.id,
+                    TradeSignal.as_of_date <= end_date,
+                )
+                .distinct()
+            )
         )
-        return result, input_hash, links
+        return list(
+            dict.fromkeys(
+                [signal.source_report_set_id for signal in signals]
+                + valuation_report_ids
+            )
+        )
 
     def _claim(self, backtest_id: str) -> tuple[OwnerScope | None, dict[str, Any] | None]:
         now = datetime.now(UTC)
@@ -787,7 +1229,7 @@ class StrategyBacktestService:
         strategy_version_id: str,
         fund_code: str,
         mode: BacktestMode,
-    ) -> tuple[Strategy, StrategyVersion, StrategyAssignment, StrategyDocumentV1]:
+    ) -> tuple[Strategy, StrategyVersion, StrategyAssignment, StrategyDocument]:
         version = session.get(StrategyVersion, strategy_version_id)
         if version is None:
             raise StrategyDomainError("strategy_version_not_found", "策略版本不存在", status_code=404)
@@ -812,7 +1254,7 @@ class StrategyBacktestService:
         )
         if assignment is None:
             raise StrategyConflict("strategy_assignment_missing", "该基金和模式没有策略 Assignment")
-        document = StrategyDocumentV1.model_validate(version.document_json)
+        document = parse_strategy_document(version.document_json)
         if mode not in document.report_inputs.enabled_backtest_modes:
             raise StrategyConflict("backtest_mode_disabled", "策略版本未启用该回测模式")
         return strategy, version, assignment, document
@@ -867,6 +1309,9 @@ class StrategyBacktestService:
             "end_date": row.end_date,
             "initial_cash": row.initial_cash,
             "benchmark": row.benchmark_json,
+            "report_policy": str(
+                (row.request_json or {}).get("report_policy") or "existing_only"
+            ),
             "input_snapshot_hash": row.input_snapshot_hash,
             "engine_version": row.engine_version,
             "status": row.status,
@@ -948,19 +1393,75 @@ def _signal_payload(row: TradeSignal) -> dict[str, Any]:
         "effective_from": row.effective_from.isoformat(),
         "expires_after": row.expires_after.isoformat() if row.expires_after else None,
         "source_report_set_id": row.source_report_set_id,
+        "execution_plan": row.execution_plan_json,
+    }
+
+
+def _native_plan_readiness(signals: list[dict[str, Any]], expected: list[date]) -> dict[str, Any]:
+    """Executable WATCH plans are valid inputs; BLOCKED plans are not cash signals.
+
+    This projection never removes blocked stocks from the market-data universe.
+    Coverage follows the latest report per stock/day, like the replay ledger,
+    so an older executable plan cannot hide its blocked replacement.
+    """
+    blockers = []
+    executable_ids = set()
+    by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for signal in signals:
+        by_symbol.setdefault(signal["subject_code"], []).append(signal)
+        plan = signal.get("execution_plan") or {}
+        reasons = list(plan.get("errors") or [])
+        if not plan:
+            reasons.append("native_execution_plan_missing")
+        if plan.get("executable") is not True:
+            reasons.append("report_plan_not_executable")
+        if plan.get("price_basis_verified") is not True:
+            reasons.append("report_reference_price_unverified")
+        if signal.get("state") == "BLOCKED":
+            reasons.append("report_signal_blocked")
+        if reasons:
+            blockers.append({
+                "symbol": signal["subject_code"], "signal_id": signal["id"],
+                "source_report_set_id": signal.get("source_report_set_id"),
+                "reasons": list(dict.fromkeys(reasons)),
+                "suggested_collection": plan.get("suggested_collection"),
+            })
+        else:
+            executable_ids.add(signal["id"])
+    covered_dates = []
+    for day in expected:
+        day_text = day.isoformat()
+        for rows in by_symbol.values():
+            latest = max(
+                (row for row in rows if str(row["effective_from"]) <= day_text),
+                key=lambda row: (str(row["effective_from"]), int(row.get("revision") or 0)),
+                default=None,
+            )
+            if latest and latest["id"] in executable_ids and day_text <= str(latest.get("expires_after") or ""):
+                covered_dates.append(day)
+                break
+    return {
+        "executable_plan_count": len(executable_ids),
+        "blocked_plan_count": len(blockers),
+        "executable_plan_coverage": len(covered_dates) / max(1, len(expected)),
+        "executable_plan_covered_dates": covered_dates,
+        "executable_plan_uncovered_dates": [day for day in expected if day not in covered_dates],
+        "report_plan_blockers": blockers,
     }
 
 
 def _report_schedule(
     reports: list[DailyReportSet],
     nodes_by_report: dict[str, list[DailyReportNode]],
+    *, include_unavailable: bool = False,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for report in reports:
         targets = {
-            node.subject_code: max(0.0, float(node.effective_weight_pct or node.disclosed_weight_pct or 0.0)) / 100.0
+            node.subject_code: max(0.0, float((node.disclosed_weight_pct if include_unavailable else
+                                             node.effective_weight_pct or node.disclosed_weight_pct) or 0.0)) / 100.0
             for node in nodes_by_report[report.id]
-            if node.node_type == "holding_uzi" and node.status == "completed"
+            if node.node_type == "holding_uzi" and (include_unavailable or node.status == "completed")
         }
         rows.append(
             {
@@ -985,11 +1486,21 @@ def _buy_hold_benchmark(bars: list[dict[str, Any]], start: date, end: date) -> d
     rows = [row for row in bars if start.isoformat() <= str(row["date"]) <= end.isoformat()]
     if len(rows) < 2:
         return {"status": "unavailable"}
+    initial_value = float(rows[0]["open"])
+    curve = [
+        {
+            "date": str(row["date"]),
+            "value": round(float(row["close"]) / initial_value * 100, 6),
+            "return_pct": round((float(row["close"]) / initial_value - 1) * 100, 6),
+        }
+        for row in rows
+    ]
     return {
         "status": "available",
         "start": rows[0]["date"],
         "end": rows[-1]["date"],
         "return_pct": round((float(rows[-1]["close"]) / float(rows[0]["open"]) - 1) * 100, 6),
+        "equity_curve": curve,
     }
 
 
@@ -1007,6 +1518,8 @@ def _static_holdings_benchmark(
     for symbol, weight in weights.items():
         rows = [row for row in bars_by_symbol.get(symbol, []) if start.isoformat() <= str(row["date"]) <= end.isoformat()]
         if len(rows) < 2:
+            continue
+        if rows[0].get("open") is None:
             continue
         weighted_return += float(weight) * (float(rows[-1]["close"]) / float(rows[0]["open"]) - 1)
         invested_weight += float(weight)
@@ -1123,12 +1636,29 @@ def _trading_dates(start: date, end: date) -> list[date]:
     return trading_dates(start, end)
 
 
-def _hash(payload: Any) -> str:
-    return hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode(
-            "utf-8"
+def _validate_report_price_basis(source: dict[str, Any], start: date, end: date) -> None:
+    if (source.get("adjustment") != "raw" or source.get("currency") != "CNY"
+            or source.get("price_unit") != "per_share"):
+        raise StrategyConflict("report_price_basis_mismatch", "原生人民币每股价位必须使用已核实的未复权 CNY 行情")
+    # Dependency-injected test data must identify itself, never masquerade as
+    # audited production observations in a frozen replay manifest.
+    if source.get("evidence_mode") == "fixture":
+        return
+    coverage = source.get("corporate_action_coverage") or {}
+    try:
+        first = date.fromisoformat(str(coverage.get("start")))
+        last = date.fromisoformat(str(coverage.get("end")))
+    except (TypeError, ValueError):
+        first = last = None
+    sessions = trading_dates(start, end)
+    if (coverage.get("verified") is not True or first is None or last is None
+            or first > start or not sessions or last < sessions[-1]):
+        raise StrategyConflict(
+            "report_price_action_coverage_unverified",
+            "缺少报告定价日至回测结束日的公司行动/复权查询证明，不能假定未发生除权",
+            details={"required_price_basis_range": {"start": start.isoformat(), "end": end.isoformat()},
+                     "snapshot_id": source.get("snapshot_id")},
         )
-    ).hexdigest()
 
 
 def _aware(value: datetime | None) -> datetime | None:

@@ -7,9 +7,14 @@ API v2 提供 Finance Workspace、版本化基金报告策略、回测与模拟�
 ```text
 Frontend
   -> /api/v2/finance
+    -> MarketDataCenterService
+      -> PostgreSQL / SQLite PIT snapshots, evidence and immutable Bundles
+      -> explicit collection jobs / explicitly enabled archive subscriptions
+      -> UZI 3.9.4 provider adapters (collection phase only)
+      -> frozen single-stock / portfolio report manifests
     -> FinanceMarketDataService
-      -> finance_ashare DomainPack snapshots
-      -> UZI 3.9.4 provider chains (AkShare/eFinance/TuShare/BaoStock/direct HTTP/DDGS/browser)
+      -> DB-only security / market-data / quote GET projections
+      -> explicit server-side execution quotes for paper-order POSTs
     -> PaperTradingService
       -> VeighNa PaperAccount headless tick crossing
       -> server-side quote
@@ -27,16 +32,16 @@ Frontend
 
 | 业务域 | 主要路径 | 用途 |
 | --- | --- | --- |
-| 行情 | `/securities`、`/market-data/{symbol}`、`/quotes/{symbol}` | 证券解析、快照与成交行情 |
+| 行情数据中心 | `/market-data/**` | PIT 快照/证据、显式采集、归档、不可变 Bundle 和报告输入冻结 |
+| 兼容行情与报价预览 | `/securities`、`/market-data/{symbol}`、`/quotes/{symbol}` | 本地证券解析与已发布 Bundle 只读投影；GET 不请求上游 |
 | 策略 CRUD | `/strategy-catalog`、`/strategies/**` | 草稿、不可变版本、diff、归档、恢复与审计 |
 | 基金绑定 | `/strategy-assignments/**` | 把已发布版本绑定到基金和回测模式 |
 | 日报编排 | `/report-jobs/**`、`/report-backfills/**`、`/daily-report-sets/**` | 日任务、补跑、失败节点重试、暂停/恢复和 revision |
 | 信号 | `/signal-previews`、`/trade-signals/**` | 基于真实日报预演、生成和查询四态信号 |
-| 策略回测 | `/strategy-backtests/**` | 版本合同预检、运行、重试、取消和结果查询 |
+| 基金回测 | `/strategy-backtests/**` | 唯一公开回测入口；版本合同预检、运行、重试、取消和结果查询 |
 | 治理 | `/strategy-verifications/**`、`/strategies/{id}/versions/{id}/promote` | 自动验证、人工确认和晋级 |
 | 策略模拟盘 | `/paper-strategy-bindings`、`/paper-strategy-bindings/{id}/orders`、`/strategy-paper-orders` | Promoted 版本的受控下单与 lineage |
 | 通用模拟盘 | `/paper/**` | VeighNa 撮合、账户、组合、订单和撤单 |
-| 旧技术诊断 | `/backtests/**` | 兼容性 Hikyuu 单股票技术回测；新前端不再调用 |
 
 ## 认证、请求 ID 与错误
 
@@ -63,7 +68,7 @@ Authorization: Bearer <COGNITRADE_API_TOKEN>
 ```
 
 所有资源查询和变更都按认证主体的 `tenant_id + user_id` 作用域隔离；系统模板只读共享。
-前端对 `/api/v2/finance` 的 `POST/PATCH/DELETE` 自动发送 `Idempotency-Key`。调用方也可
+前端对 `/api/v2/finance` 的 `POST/PUT/PATCH/DELETE` 自动发送 `Idempotency-Key`。调用方也可
 自行提供 1–128 个可见 ASCII 字符：同一 owner、方法、目标和 body 会持久化重放成功 JSON
 响应并返回 `Idempotent-Replay: true`；相同 key 改变请求返回 `409
 idempotency_key_reused`，仍在租约中的重复请求返回 `409 idempotency_request_in_progress`。
@@ -87,6 +92,14 @@ idempotency_key_reused`，仍在租约中的重复请求返回 `409 idempotency_
 | `422` | `insufficient_kline_history` | K 线数量不足以运行策略 |
 | `503` | `backtest_engine_unavailable` | Hikyuu 未安装 |
 | `504` | `backtest_timeout` | 隔离回测超过 120 秒 |
+| `409` | `published_bundle_missing` | 指定标的/日期没有已发布 Bundle |
+| `409` | `market_data_bundle_incomplete` | 股票 22 个 UZI 结果槽未冻结，或基金父契约槽未通过严格验收 |
+| `422` | `mixed_asset_collection_unsupported` | 同一采集 Job 混合了基金和股票 |
+| `409` | `fund_holding_bundle_required` | 基金报告未指定已发布的父基金 Bundle |
+| `409` | `published_bundle_invalidated` | 报告输入引用的 Bundle 已失效 |
+| `409` | `bundle_cutoff_not_reached` | Bundle cutoff 尚未到达，不能提前冻结报告 |
+| `409` | `bundle_after_report_evaluation` | Bundle cutoff 晚于请求的 `evaluation_at`，存在未来数据风险 |
+| `409` | `report_evaluation_in_future` | 请求的 `evaluation_at` 晚于当前时间 |
 | `422` | `validation_error` | 请求字段或范围无效 |
 
 ## 证券解析
@@ -113,7 +126,7 @@ GET /api/v2/finance/securities?query=茅台&limit=8
       "name": "贵州茅台",
       "latest_price": 1420.5,
       "pct_change": 1.15,
-      "source": "akshare_security_master"
+      "source": "market_data_bundle"
     }
   ]
 }
@@ -121,104 +134,328 @@ GET /api/v2/finance/securities?query=茅台&limit=8
 
 ## 行情与研究数据
 
-### `GET /api/v2/finance/market-data/{symbol}`
+正式研究数据已改为数据库唯一事实源。页面、任何 GET、coverage 查询和报告
+创建均不会触发 provider；数据缺失时客户端必须显式创建采集 Job，或先显式启用
+归档订阅。旧 UZI/Finance Pack 文件缓存不迁移、不回退。
 
-`symbol` 可为六位代码或可唯一解析的证券名称。`refresh=true` 跳过已有 Finance Pack 分区缓存并重新请求上游；默认使用各快照自己的 TTL。
+### 统一证券身份解析
 
-接口并行读取以下快照：
+采集和报告入口共享同一类型化身份解析器，不得只依赖六位数字前缀猜测
+资产类型。客户端可先调用统一解析端点：
 
-| section | Snapshot | 主要字段 |
-| --- | --- | --- |
-| `market` | `market` | 最新价、涨跌幅、开高低收、量额、PE/PB/PEG/PCF/PS、市值、估值日期 |
-| `kline` | `kline` | 起止日期、复权、条数、最后交易日 OHLC/量/额/换手 |
-| `fundamental` | `fundamental` | 公司资料、财务摘要、盈利、资产负债、现金流、财务分析、银行指标与同行比较 |
-| `capital_flow` | `capital_flow` | 最近资金流与主力资金排名 |
-| `sentiment` | `sentiment` | 热度排名、关键词和新闻样本 |
-| `notices` | `notice` | 最近 30 天公告窗口与公告记录 |
-| `events` | `events` | 回购、增减持、中标、业绩等事件关键词和时间线 |
-| `lhb` | `lhb` | 最近上榜日期、买卖席位、买卖额和统计记录 |
+```http
+POST /api/v2/finance/market-data/instruments/resolve
+Content-Type: application/json
 
-```json
 {
-  "symbol": "600519",
-  "name": "贵州茅台",
-  "retrieved_at": "2026-07-13T09:00:00+00:00",
-  "quality_status": "partial",
-  "quality": {
-    "market": "available",
-    "kline": "available",
-    "fundamental": "available",
-    "capital_flow": "degraded",
-    "sentiment": "available",
-    "notice": "available",
-    "events": "available",
-    "lhb": "data_gap"
-  },
-  "sources": {
-    "market": {"provider_id": "akshare_market", "vendor": "akshare"}
-  },
-  "sections": {
-    "market": {
-      "overview": {
-        "latest_price": 1420.5,
-        "pct_change": 1.15,
-        "pe_ttm": 22.8,
-        "pb": 7.3,
-        "peg": 2.1,
-        "pcf": 21.4,
-        "ps": 9.8,
-        "market_cap": 1780000000000,
-        "float_market_cap": 1780000000000,
-        "valuation_date": "2026-07-13"
-      },
-      "history_summary": {
-        "bar_count": 20,
-        "latest_bar": {"open": 1402, "high": 1435, "low": 1398, "close": 1420.5}
-      }
-    },
-    "kline": {
-      "start_date": "20260413",
-      "end_date": "20260713",
-      "adjust": "",
-      "bar_count": 60,
-      "latest_bar": {
-        "date": "2026-07-13",
-        "open": 1402,
-        "high": 1435,
-        "low": 1398,
-        "close": 1420.5,
-        "volume": 2500000,
-        "amount": 3540000000,
-        "turnover": 0.2
-      }
-    },
-    "fundamental": {},
-    "capital_flow": {},
-    "sentiment": {},
-    "notices": {},
-    "events": {},
-    "lhb": {}
-  }
+  "query": "020464",
+  "asset_family": "auto"
 }
 ```
 
-`quality_status` 为 `available`、`partial` 或具体不可用状态。数据源快照使用
-`available`、`no_data`、`provider_unavailable`、`rate_limited`、`parse_failed`；
-Pack 质量 Gate 还可能标记 `degraded`、`data_gap` 或 `assumption_only`。数据源失败
-不会被静默替换成演示数据，也不会向客户端暴露上游连接异常原文。
+其中 `asset_family` 可为 `auto`、`equity` 或 `fund`。`020464` 这类场外基金会返回
+类型化身份，不会被当成深市股票：
+
+```json
+{
+  "query": "020464",
+  "candidates": [
+    {
+      "symbol": "020464",
+      "code": "020464",
+      "asset_type": "otc_fund",
+      "market": "CN_FUND",
+      "exchange": "OTC",
+      "exchange_timezone": "Asia/Shanghai",
+      "security_type": "etf_feeder",
+      "name": "招商中证半导体产业ETF发起式联接A",
+      "currency": "CNY",
+      "resolution_source": "fund_security_master",
+      "instrument_id": "otc_fund:OTC:020464"
+    }
+  ],
+  "resolved": {
+    "symbol": "020464",
+    "code": "020464",
+    "asset_type": "otc_fund",
+    "market": "CN_FUND",
+    "exchange": "OTC",
+    "exchange_timezone": "Asia/Shanghai",
+    "security_type": "etf_feeder",
+    "name": "招商中证半导体产业ETF发起式联接A",
+    "currency": "CNY",
+    "resolution_source": "fund_security_master",
+    "instrument_id": "otc_fund:OTC:020464"
+  },
+  "ambiguous": false
+}
+```
+
+解析结果决定后续使用 `CN_EQUITY` 还是 `CN_FUND`
+契约；客户端不应将基金代码送入股票 22 槽收集器。
+
+### 股票 22 槽与基金父单槽契约
+
+`GET /api/v2/finance/market-data/contract?market=CN_EQUITY` 是股票维度数、
+顺序、required fields、freshness、历史窗口和 `verified_empty` 规则的
+唯一客户端契约。当前股票契约版本为 `uzi-3.9.4-b3665e8-v1`；旧版
+`uzi-3.9.4-1b5cdcb-v1` Bundle 保持只读兼容，新采集不会再写入旧契约，
+`expected_dimension_count=22`：
+
+- 20 个编号 collector：`0_basic`–`19_contests`。
+- 2 个采集 collector：`6_fund_holders`、`similar_stocks`。
+- 3 个报告派生维度 `20_valuation_models`、`21_research_workflow`、
+  `22_deep_methods` 不在采集契约和 22/22 分母中。
+
+客户端必须读取 `expected_dimension_count` 和有序 `dimensions`，不得自行硬编码。
+该契约的 required fields、freshness、PIT 和证据等字段供数据质量审计，
+不取代 UZI 自己的可用性判定和报告 self-review。
+
+`GET /api/v2/finance/market-data/contract?market=CN_FUND` 则返回独立的
+`cognitrade-fund-top-holdings-pit-v1` 契约，`expected_dimension_count=1`，且唯一槽为
+`fund_top_holdings`。该父槽必须准确包含 10 只唯一、可用的标准 A 股代码，
+`verified_empty` 不合法。基金契约是持仓展开入口，不是股票 22 槽的子集
+或 Deep superset。
+
+### 覆盖与完整性
+
+```http
+GET /api/v2/finance/market-data/coverage?symbol=600519.SH&market=CN_EQUITY&as_of_date=2026-08-20
+```
+
+响应返回 `expected_dimension_count`、`ready_dimension_count`、`counts`、
+`structurally_complete`、`report_ready`、`report_generatable`、`audit_ready`、
+`uzi_integrity_by_profile`、`latest_bundle` 以及逐维 `status`、`native_quality`、
+`eligible`、`reason`、`audit_eligible`、`audit_reason`、`evidence_grade`、`stale` 和 `conflict`。
+
+对股票，`eligible` 只表示 UZI 原生结果是否有可用 payload；A/B 证据、
+required fields、PIT、过期和冲突在 `audit_*` 中单独披露，不重写 UZI 状态。
+`report_generatable=true` 表示 22 个槽均有原生结果或明确缺口，可进入 UZI Agent 恢复流程；
+`report_ready` 是 Medium 档数据阶段预检，不是最终 HTML 发布结论。最终完整
+Agent self-review 仅在 `critical_count > 0` 时阻断，warning 允许出报告并留痕。
+基金父 `fund_top_holdings` 契约仍是严格 PIT/A-B 验收，不适用股票 UZI 门语义。
+
+`GET /api/v2/finance/market-data/snapshots` 支持按 `symbol`、`dimension_id`、
+`as_of_date` 过滤；`GET /api/v2/finance/market-data/snapshots/{snapshot_id}` 额外返回
+payload、字段 provenance、四个 PIT
+时间、证据、query manifest 和冲突。列表 `limit` 范围 1–200，默认 50；
+`offset` 默认 0。
+
+### 显式采集任务
+
+```http
+POST /api/v2/finance/market-data/collection-jobs
+Content-Type: application/json
+
+{
+  "symbols": ["600519.SH"],
+  "start_date": "2026-08-20",
+  "end_date": "2026-08-20",
+  "dimensions": "all",
+  "mode": "missing_or_stale",
+  "max_concurrency": 5,
+  "publish_when_complete": false,
+  "asset_family": "equity"
+}
+```
+
+`dimensions` 可为 `all` 或契约维度 ID 数组；`mode` 可为 `missing_or_stale` 或
+`force_all`；`max_concurrency` 范围 1–5，默认 5；超出范围返回 `422 validation_error`。
+该值限制同时运行的股票采集 Pipeline 数，每只股票内部仍使用 UZI 原生 6 路 fetcher。
+任务、标的 × 维度子任务、attempt、
+checkpoint 和每日结果持久化。重启后只恢复已由用户创建的 pending Job，不会
+自行创建新 Job。
+人工 Job 的 `publish_when_complete` 必须为 `false`（省略时也是 `false`）；传
+`true` 返回 `422 manual_auto_publish_not_allowed`。采集完成只生成可审阅的冻结候选，
+不会生成 Bundle。
+
+基金只是前十大持仓股票分析的父入口。一个基金 Job 只接受一只基金、
+一个自然日和固定 `top_n=10`；不允许与股票混合创建，也不允许只选部分
+持仓股票维度：
+
+```http
+POST /api/v2/finance/market-data/collection-jobs
+Content-Type: application/json
+
+{
+  "symbols": ["020464"],
+  "start_date": "2026-08-20",
+  "end_date": "2026-08-20",
+  "dimensions": "all",
+  "mode": "missing_or_stale",
+  "max_concurrency": 5,
+  "publish_when_complete": false,
+  "asset_family": "fund",
+  "top_n": 10
+}
+```
+
+后端先为 `020464 / CN_FUND` 验收并落库单槽
+`fund_top_holdings` 父 Snapshot，再按父快照固定的精确 10 只 A 股展开
+10 份完整 22 槽采集。基金 Job 响应会标记 `asset_family=fund`、
+`top_n=10`，并在 checkpoint 就绪后返回 `expanded_holdings`、
+`child_collection_job_ids`、`parent_snapshot_id`；用户确认冻结后才返回
+`parent_bundle_id`，
+便于审计整条展开链。
+
+```text
+GET  /api/v2/finance/market-data/collection-jobs
+GET  /api/v2/finance/market-data/collection-jobs/{job_id}
+POST /api/v2/finance/market-data/collection-jobs/{job_id}/retry-failed
+POST /api/v2/finance/market-data/collection-jobs/{job_id}/agent-recovery
+POST /api/v2/finance/market-data/collection-jobs/{job_id}/confirm-freeze
+POST /api/v2/finance/market-data/collection-jobs/{job_id}/cancel
+```
+
+`retry-failed` 只重置可重试且尚有 attempt 预算的失败/部分维度，不全量重跑。
+对基金 Job，父 `fund_top_holdings` 快照一旦成功落库并写入 checkpoint，
+后续重试会复用该父快照，只为仍缺失或过期的持仓股票槽创建
+child Job；不会因一只持仓股失败而重采整份基金披露。
+`agent-recovery` 是用户显式启动的 UZI 完整缺口恢复阶段。原生 Stage 1 先完成
+MX→DDGS 与 Playwright 自动兜底；随后 Agent 按 suggested-fix 缺口循环、三组定性
+Agent evidence 和完整性复检顺序追加新 Snapshot，并重新计算候选。
+`confirm-freeze` 必须提交当前候选的 64 位 `proposal_hash`；候选为 degraded 时
+还必须提交 `acknowledge_degraded=true`。股票确认发布 1 个 Bundle；基金确认在同一事务
+发布父基金与 10 只持仓股票共 11 个 Bundle。已冻结 Job 不允许重试或 Agent 补采。
+运行中 Job 与 Agent stage 会续租并用 owner token 防止过期 worker 覆盖新 worker；
+服务重启只接管已过期租约。内部调度或父子任务重放同一 idempotency key 时，只有
+规范化请求完全一致才会复用原 Job，否则返回 `409 collection_idempotency_conflict`。
+股票历史采集把 `as_of_date/cutoff_at` 传入支持 PIT 的 Skill 与 provider adapter，
+并逐字段返回 `collection_outcome`：`available`、`partial`、`verified_empty`、
+`retryable_failure` 或 `unavailable`。其中 `partial` 表示 UZI payload 可用但可选字段或
+扩展审计有缺口，不自动排除评分；`verified_empty` 表示有界查询成功且确实为零条；
+`retryable_failure` 才进入定向重试；`unavailable` 只用于已确认没有历史档案的
+current-only 数据。仍不支持历史参数的 provider 不会拿当前值回填，而是记录明确能力缺口。
+基金持仓 provider 更严格：历史日先查询已落库且通过 PIT 契约的快照/Bundle；缺失时
+只调用历史持仓专用适配器，不调用当前净值、排名或最新页面。适配器按 cutoff 选择
+官方定期报告，下载并保存 PDF SHA-256，并逐项核对归档持仓的报告期、代码、名称和
+权重。受支持的直接持股权益基金需一条持仓 lineage；单目标 ETF 联接基金需父基金
+目标配置与目标 ETF 持仓两条 lineage，全部 `published_at <= cutoff` 才形成 B 级
+历史快照，且保留真实
+`observed_at`。临时 provider/PDF 故障标记为可重试；数据源不支持历史重建时仍返回
+`fund_historical_pit_unavailable`，无匹配公告或内容不一致则以不可重试契约缺口披露。
+普通多目标 FOF 的历史穿透当前不在该适配器覆盖范围内。
+
+### 人工证据、冲突与撤销
+
+`POST /api/v2/finance/market-data/manual-snapshots` 仅允许 B 级，必须提供可验证的不可变证据，且
+`published_at <= cutoff_at`；人工录入仍必须满足该维度的 required fields，不能绕过契约。
+`POST /api/v2/finance/market-data/conflicts/{conflict_id}/resolve` 用于选择合法候选或标记无效；
+人工覆盖要求先录入 B 级快照。
+`POST /api/v2/finance/market-data/snapshots/{snapshot_id}/revoke` 只撤销/替代，
+不物理删除已引用数据。
+
+### 不可变 Bundle
+
+```text
+GET  /api/v2/finance/market-data/bundles
+GET  /api/v2/finance/market-data/bundles/{bundle_id}
+POST /api/v2/finance/market-data/bundles/publish
+```
+
+发布动作是纯数据库操作，不访问 provider。`CN_EQUITY` 严格候选要求 UZI 22 维
+质量门全部通过；若 22 个槽均有原生结果或明确 `data_gap`，则可形成 degraded 候选，
+但必须由用户明确确认缺口披露。`CN_FUND` 父 Bundle 必须通过唯一的
+`fund_top_holdings` 槽（精确 10 只 A 股）。候选不成立时返回
+`409 market_data_bundle_incomplete`。相同 manifest 幂等，内容变化产生新 revision，
+不覆盖旧 Bundle；并发发布在同一 symbol/market/day/contract scope 内串行分配 revision。
+发布与 Snapshot 撤销共用数据库锁，基金 11 个 scope 还会按全局稳定顺序预锁；不会留下
+引用已撤销 Snapshot 的 published Bundle，也不会发布半套基金组合。人工 Job 推荐只经
+`confirm-freeze` 发布其精确候选。
+
+### 归档订阅与 provider 能力
+
+```text
+GET /api/v2/finance/market-data/subscriptions
+PUT /api/v2/finance/market-data/subscriptions/{symbol}
+GET /api/v2/finance/market-data/providers
+POST /api/v2/finance/market-data/providers/{provider_id}/test
+```
+
+单标的归档订阅默认 `enabled=false`。即使某订阅已开，也只有同时设置
+`COGNITRADE_MARKET_DATA_AUTO_COLLECTION_ENABLED=true` 后，调度器才会按订阅创建采集
+Job；默认全局值为 `false`。基金和股票共享这个“单标的 `enabled=true`
++ 全局开关”双 opt-in 门禁；基金订阅请求必须使用 `market=CN_FUND`，
+且调度仍固定为前十大持仓 × 每只股票完整 22 槽。订阅的 `max_concurrency`
+同样限定为 1–5，默认 5。
+
+provider 列表只暴露 dependency/credential/policy 是否就绪，不暴露密钥。
+`POST .../providers/{provider_id}/test` 当前仅检查配置和本地依赖，不发起网络请求；
+成功不等于上游数据在当时可获得。
+
+### 报告输入 manifest
+
+`POST /api/v2/finance/market-data/report-manifests` 从已发布 Bundle 冻结单股或组合的
+`symbol -> bundle_id`、权重、父依赖、workflow pins 和 manifest hash。该端点只持久化并返回
+`status=frozen` 的报告输入，不直接启动 Agent OS run。Lite / Medium / Deep、基金持仓子报告
+和日报的正式执行会通过各自入口冻结/校验同等 manifest，并设置
+`constraints.data_source_mode=bundle_only`。报告缺 Bundle 时直接预检失败，不会转入采集。
+
+```http
+POST /api/v2/finance/market-data/report-manifests
+Content-Type: application/json
+
+{
+  "symbols": ["600519.SH"],
+  "market_by_symbol": {"600519.SH": "CN_EQUITY"},
+  "as_of_date": "2026-08-20",
+  "evaluation_at": "2026-08-20T15:30:00+08:00",
+  "report_kind": "single_stock",
+  "workflow_pins": {"profile": "deep"},
+  "weights": {}
+}
+```
+
+基金前十大持仓 manifest 不接受客户端自行组装的子股列表或权重。
+`symbols` 只传父基金代码，并必须指定同日已发布的父基金 Bundle：
+
+```http
+POST /api/v2/finance/market-data/report-manifests
+Content-Type: application/json
+
+{
+  "symbols": ["020464"],
+  "as_of_date": "2026-08-20",
+  "evaluation_at": "2026-08-20T15:30:00+08:00",
+  "report_kind": "fund_top_holdings",
+  "workflow_pins": {"profile": "deep"},
+  "asset_family": "fund",
+  "fund_bundle_id": "01M..."
+}
+```
+
+服务端从该父 Bundle 的唯一 `fund_top_holdings` 快照中派生精确 10 只 A 股、
+披露权重和顺序，然后冻结它们各自的完整 22 槽 Bundle。响应中的
+`items` 是这 10 个股票 Bundle；`dependencies` 另外持久化父基金的
+`bundle_id`、`bundle_manifest_hash`、`snapshot_id` 和
+`snapshot_content_hash`。父依赖也进入规范化 manifest hash，所以即使 10 只
+股票 Bundle 未变，基金披露修订也不会误复用旧报告输入；父 Bundle 被撤销
+或失效时，关联 report manifest 一并失效。
 
 每个 Snapshot 同时携带 `source`、`primary_source`、`fallback_sources`、
-`field_sources` 与 `source_trace`。来源目录固定对齐 UZI 3.9.4 的 73 个 source ID，
-但目录项只是候选来源；客户端必须以本次 `source_trace[].status` 判断实际是否取到数据，
-不能把“存在于目录”解释成“数据可用”。Token/Cookie/API Key 只通过运行环境配置，任何
-响应都不会返回密钥值。
+`field_sources` 与 `source_trace`。来源目录固定对齐 UZI 3.9.4 的候选来源，
+但目录项只是候选能力；客户端必须以本次 `source_trace[].status` 判断实际是否取到数据，
+不能把“存在于目录”解释成“数据可用”。Token、Cookie 和 API Key 只通过运行环境配置，
+任何响应都不会返回凭据值。
 
-K 线响应包含区间元数据、`bars` 历史序列与最后交易日记录。前端行情图和
-Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格。
+`evaluation_at` 是报告防未来数据边界，必须是带时区的时间，且满足“不早于本次
+所有股票 Bundle 和父依赖 Bundle 的 cutoff、不晚于服务器当前时间”。
+早于任一 Bundle cutoff 返回
+`409 bundle_after_report_evaluation`，晚于当前时间返回
+`409 report_evaluation_in_future`；Bundle 自身 cutoff 尚未到达时返回
+`409 bundle_cutoff_not_reached`。未传时由服务端取组合中最晚 Bundle cutoff。合法的
+`evaluation_at` 进入 manifest 的规范化 hash，因此同日不同评估时点不会误复用输入。
+
+### 兼容 `GET /api/v2/finance/market-data/{symbol}`
+
+该路径现在只读当日已发布且通过完整性校验的 Bundle，并投影为旧 Finance
+Workspace 的 `sections`、`snapshots` 和 `source_refs` 格式。建议传入可本地解析的代码；
+无 Bundle 时由 Finance 兼容路由返回 `409 published_bundle_missing`。`refresh=true` 只为兼容旧客户端而保留，
+响应会标记 `refresh_requested=true`、`refresh_performed=false`，不读文件缓存、不联网。
 
 ### `GET /api/v2/finance/quotes/{symbol}`
 
-返回模拟盘采用的服务端报价：
+只读当日已发布 Bundle 中的报价投影；`refresh=true` 仍不请求上游：
 
 ```json
 {
@@ -229,12 +466,19 @@ Hikyuu 回测均消费同一真实 `bars` 数据，不由浏览器生成价格�
   "ask_price_1": 1421.0,
   "pct_change": 1.15,
   "as_of": "2026-07-13",
-  "source": {"provider_id": "akshare_market", "vendor": "akshare"},
-  "quality_status": "available"
+  "source": {
+    "mode": "bundle_only",
+    "bundle_id": "01M...",
+    "manifest_hash": "..."
+  },
+  "quality_status": "available",
+  "refresh_requested": false,
+  "refresh_performed": false
 }
 ```
 
-客户端报价仅供预览。提交订单时后端会重新取价，且不接受客户端成交价。
+客户端报价仅供预览。显式提交订单或请求挂单重新撮合时，后端会走独立的实时执行
+报价路径并且不接受客户端成交价；该实时价不会回写研究 Bundle，也不会被正式报告消费。
 
 ## 模拟交易
 
@@ -434,14 +678,15 @@ carry 天数、MA 执行规则、三类资产费率/确认规则、模型与 UZI
   "strategy_id": "01J...",
   "fund_code": "110011",
   "fund_name": "易方达优质精选混合",
-  "mode": "holdings_portfolio",
+  "mode": "fund_only",
   "enabled": true,
   "schedule": {"time": "18:00", "timezone": "Asia/Shanghai"}
 }
 ```
 
-`mode` 为 `fund_only` 或 `holdings_portfolio`，且必须在该版本允许的模式内。Assignment 可
-暂停、恢复或删除；已有历史信号时删除会转为禁用，不破坏 lineage。
+`mode` 默认为产品主线 `fund_only`；`holdings_portfolio` 是披露持仓的高级穿透研究模拟，
+不等于基金真实仓位。两者都必须在该版本允许的模式内。Assignment 可暂停、恢复或删除；
+已有历史信号时删除会转为禁用，不破坏 lineage。
 
 ### point-in-time 日报、补跑与 UZI
 
@@ -450,11 +695,41 @@ carry 天数、MA 执行规则、三类资产费率/确认规则、模型与 UZI
 调用量。任务持久化 lease、attempt 和进度，可通过 `/retry` 只重试失败股票，或在
 `full_rerun=true, confirmed=true` 时创建新 revision；`/pause` 与 `/resume` 不删除旧 attempt。
 
+重试的数据绑定语义是刻意区分的：节点级/失败股票重试复用原 attempt 的不可变 report
+manifest，保证同一输入可重放；已补采并发布新版 Bundle 后，只有确认过的 `full_rerun`
+会重新解析目标日可用的最新 Bundle revision，并为新 attempt 冻结新的 report manifest。
+因此补采后的验证请求必须使用完整重跑；系统不会悄悄替换普通重试的历史输入。
+
+持仓批次外层等待预算按研究档位为 Lite 60 分钟、Medium 120 分钟、Deep 180 分钟；多日
+历史补跑每个交易日仍至少使用独立的 6 小时预算。该预算不同于单个模型请求的超时，避免
+Deep 十大持仓仍在正常生成时被旧的固定 30 分钟截止时间整批取消。
+
+历史 report manifest 中若六类定性维度存在结构化 PIT 快照、但没有目标日可审计网页 URL，
+`qualitative_execution.status` 会保留为 `evidence_preflight_failed`，自检同时生成
+`agent-os-boundary` warning，说明“目标日没有足够 PIT-safe URL，六维定性研究已降级披露”。
+这只豁免完全由 `*:requires_two_cited_sources` 构成的历史证据预检失败；UZI 编号维度、
+66 席角色评审、核心评分门禁以及其他 Agent/来源错误仍按 critical 处理。当前日报告也不
+应用该豁免，以免把真实抓取或模型故障误报成可交付结果。
+
+角色评审使用 root transport 的 `full/market/code` 校正 UZI 上游 suffix-only 市场推断，
+Agent 的逐席覆盖成功后会重新计算 `panel.consensus_valid`、`hollow_verdicts`、`hollow_pct`
+和 `hollow_ids`。同一 critical 的重复恢复以 `category + dim + issue` 判重；变化的 evidence
+只进入 `recovery_history[].critical_issues` 供诊断，不会被误认为新问题而无限重跑。
+角色票在 headline、reasoning、comment、verdict 的合并解释中校验证据；明确
+`skip/insufficient_evidence` 的弃权说明是合法结果，非弃权票仍必须包含数字、观测事实或
+明确数据缺口。`G+H+I` 与 `G+H+I · 量化、科技领袖与AI瓶颈` 视为同一展示标签，成员集合
+仍严格校验，不能增删评委。
+
 每个 `DailyReportSet` 固定 `as_of_date`、`effective_date`、revision、input/source/content
 hash、coverage 和 Artifact 引用。基金公开信息必须在回测日期当时可获得；没有可信
-`published_at/first_seen_at` 的历史证据输出 `BLOCKED`，不会借用当前数据。配置的 top
-5/10/20 每只股票都需要 canonical UZI 子报告；同一股票、日期和 pin 跨基金复用一次，基金
-上下文只作为独立节点保存。
+`published_at/first_seen_at` 的历史证据输出 `BLOCKED`，不会借用当前数据。当前严格
+父 Bundle 路径固定对 10 只股票生成 canonical UZI 子报告；同一股票、日期和 pin
+跨基金复用一次，基金上下文只作为独立节点保存。
+
+这里的 5–20 仅描述已有 `StrategyDocument` 可能保存的旧配置，不是当前可执行的
+基金持仓合同。`/market-data/collection-jobs` 基金采集、
+`/market-data/report-manifests` 基金 Bundle 入口及公开持仓报告 API 都固定精确
+10 只 A 股；严格父 Bundle 执行会拒绝非 10 请求，旧文档必须显式迁移。
 
 ### 确定性四态信号
 
@@ -479,7 +754,7 @@ hash、coverage 和 Artifact 引用。基金公开信息必须在回测日期当
 {
   "strategy_version_id": "01J...",
   "fund_code": "110011",
-  "mode": "holdings_portfolio",
+  "mode": "fund_only",
   "start_date": "2025-01-01",
   "end_date": "2025-12-31",
   "initial_cash": 1000000,
@@ -493,6 +768,16 @@ NAV 确认日账本；`holdings_portfolio` 以基金信号作为总门禁，以�
 规则形成 A 股目标权重。每笔成交必须包含 strategy/version hash、report set、signal ID、
 资产适配器、费用模型和数据 snapshot hash。结果曲线进入内容寻址对象存储，数据库保存
 指标、状态、hash 与 URI。失败/取消任务可 `/retry`，排队或运行任务可 `/cancel`。
+
+持仓与场内基金回测把请求的 `as_of_date` 原样传给数据中心，只读取该回放日已发布的
+Bundle，不再隐式读取服务器“今天”的 Bundle。K 线兼容 Bundle 原生 `ohlcv` 与旧版
+`bars/history` 投影；目标交易日缺少 Bundle 或没有该日可审计 bar 时仍按门禁失败。报告
+信号从 `effective_date` 起才能参与回放，因此收盘报告不能用于同日交易，late revision
+也不会回写到其生效日前的历史区间。
+
+`GET /strategy-backtests` 支持 `strategy_id`、`strategy_version_id`、`fund_code`、`mode`、
+`status` 和 `limit=1..200`。前端只查询当前策略，再按当前基金与模式展示；相同输入的重复
+运行与重试默认合并，完整原始记录仍保留供审计和验证。
 
 ### Verified、Promoted 与策略模拟单
 
@@ -511,55 +796,6 @@ point-in-time、报告/信号/成交 lineage、确定性复跑、coverage、样�
 规则，并保存完整 strategy/report/signal/order lineage。该操作必须提供与 `client_order_id`
 一致的 `Idempotency-Key`。
 
-## 旧单股票 Hikyuu 技术回测（兼容诊断）
-
-这些 `/backtests/**` 端点为旧技术诊断兼容接口，新 `/strategies` 前端不再调用，也不能
-用于 Verified 或 Promoted。服务端把 Finance Pack `kline.bars` 转换为 Hikyuu 外部
-`Stock/KRecord`，使用 `SYS_Simple + SG_Cross + MM_FixedCount` 执行注册策略。
-每次回测在 120 秒受控子进程中运行，隔离 HOME 已预置本地空策略仓库，因此不会
-自动下载 Hikyuu Hub，也不会影响 API 主进程。
-
-`GET /api/v2/finance/backtests/engine` 的 `strategies` 返回可用策略及其动态参数合同。
-当前包括 `ma_cross`（双均线交叉）和 `price_ma_cross`（价格均线趋势）；前端严格按
-该合同生成参数表单。新增内置策略统一在
-`research_system/api/backtest_strategies.py` 注册，并由隔离 runner 显式实现，不执行
-用户提交的任意 Python 代码。
-
-### `POST /api/v2/finance/backtests`
-
-```json
-{
-  "symbol": "600519",
-  "strategy": "ma_cross",
-  "strategy_parameters": {
-    "fast_period": 5,
-    "slow_period": 20
-  },
-  "initial_cash": 1000000,
-  "trade_size": 1000,
-  "refresh": false
-}
-```
-
-约束由所选策略的参数合同决定；双均线策略要求 `slow_period > fast_period >= 2`。
-`trade_size` 为 100 股整数倍，有效 K 线至少为策略最长周期加 5 根。未知策略、未知
-参数、越界参数都会以结构化 422 错误拒绝。结果包含：
-
-- 回测 ID、Hikyuu 版本、标的、参数和数据来源；
-- 初始/期末权益、总收益、年化收益、最大回撤、胜率和盈亏比；
-- 全量账户权益曲线；
-- Hikyuu 原生成交记录及费用。
-
-结果默认持久化到：
-
-```text
-<workspace_root>/backtests/<backtest_id>.json
-```
-
-`GET /api/v2/finance/backtests` 返回摘要列表，支持 `limit=1..100` 与从 0 开始的
-`offset`，响应同时包含 `total_count`、`limit`、`offset`；`GET
-/api/v2/finance/backtests/{backtest_id}` 返回完整可回放结果。
-
 ## 前端配置
 
 研究 API 地址仍配置为：
@@ -569,7 +805,9 @@ VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
 ```
 
 前端 API Client 对 Finance Workspace 请求自动将同一 host 的 `/api/v1` 替换为 `/api/v2`，
-并为变更请求生成幂等 key。Bearer token 与 v1 共用。
+并为变更请求生成幂等 key。Bearer token 与 v1 共用。GitHub Pages 构建还设置
+`VITE_BASE_PATH`，并生成与 `index.html` 同内容的 `404.html`；路由器会剥离仓库 base path，
+因此仓库子路径下的 `/strategies` 可直接访问。
 
 ## UZI 数据完整性与真实兜底字段
 
@@ -578,12 +816,12 @@ VITE_COGNITRADE_API_BASE_URL=http://127.0.0.1:8000/api/v1
 
 - `uzi_integrity.before_recovery`：主 provider 完成后的 18 项检查、关键/可选缺口、16 个扩展维度缺口与逐项恢复任务；
 - `uzi_integrity.after_recovery`：MX、DDGS、Playwright 全部结束后的复检；顶层覆盖率字段与此一致；
-- `uzi_recovery.stage_order`：固定为 `primary_providers → integrity_check → mx_api → ddgs → playwright → integrity_recheck`；
+- `uzi_recovery.stage_order`：固定为 `primary_providers → integrity_check → mx_api → ddgs → playwright → suggested_fix_loop → qualitative_agent_evidence → integrity_recheck`；
 - `uzi_recovery.qualitative_stage`：六类定性维度的 MX→DDGS 尝试及完整 `source_trace`；
 - `uzi_recovery.playwright_stage`：按 Lite/Medium/Deep 白名单触发的浏览器最终兜底、质量触发原因、策略来源和解析状态；
 - `uzi_recovery.attempts`：供列表展示的统一摘要。失败保留为 `data_gap`，不生成模拟值。
 
-`uzi_native_analysis.results[].panel.investors[]` 严格按固定 UZI 源码执行规则，并保留：
+`investor_panel_review.votes[]` 严格按 UZI 3.9.2 执行 242 条规则，并新增：
 
 - `uzi_confidence`：UZI 原始 0–100 置信度；`confidence` 仍为 Agent OS 的 0–1 归一化值；
 - `investor_name_en`、`methodology_source`、`avatar_seed`、`tier`：上游席位元数据；

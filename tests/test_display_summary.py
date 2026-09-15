@@ -22,7 +22,10 @@ class DisplaySummaryTests(unittest.TestCase):
                     },
                 },
             },
-            summary_payload={"status": "completed", "message": "Run completed successfully"},
+            summary_payload={
+                "status": "completed",
+                "message": "Run completed successfully",
+            },
         )
 
         self.assertEqual(
@@ -38,7 +41,10 @@ class DisplaySummaryTests(unittest.TestCase):
                     "conclusion": "A concise stock conclusion.",
                 },
             },
-            summary_payload={"status": "completed", "message": "Run completed successfully"},
+            summary_payload={
+                "status": "completed",
+                "message": "Run completed successfully",
+            },
         )
 
         self.assertEqual(payload, "A concise stock conclusion.")
@@ -73,6 +79,43 @@ class DisplaySummaryTests(unittest.TestCase):
         self.assertRegex(payload["degrade_reason"], r"[\u3400-\u9fff]")
         self.assertEqual(payload["source_id"], "em_data")
 
+    def test_input_gaps_keep_machine_readable_recovery_actions(self) -> None:
+        gap = {
+            "status": "blocked",
+            "message": "missing archived research evidence",
+            "error": "Connection aborted: RemoteDisconnected",
+            "next_action": "collect_research_evidence",
+            "action": "collect_data",
+            "kind": "source_gap",
+            "code": "input_preflight_blocked",
+            "reason_codes": [
+                "missing_research_evidence",
+                "historical_archive_required",
+            ],
+        }
+        payload = localize_public_error_fields(
+            {"status": "failed", "evidence_gaps": [gap]}
+        )
+        public_gap = payload["evidence_gaps"][0]
+
+        for key in ("next_action", "action", "kind", "code", "reason_codes"):
+            self.assertEqual(public_gap[key], gap[key])
+        self.assertRegex(public_gap["message"], r"[\u3400-\u9fff]")
+        self.assertRegex(public_gap["error"], r"[\u3400-\u9fff]")
+        self.assertEqual(gap["message"], "missing archived research evidence")
+
+    def test_failed_event_keeps_recovery_action_code(self) -> None:
+        event = localize_runtime_event(
+            {
+                "event_type": "input_preflight_failed",
+                "next_action": "collect_research_evidence",
+                "message": "missing archived research evidence",
+            }
+        )
+
+        self.assertEqual(event["next_action"], "collect_research_evidence")
+        self.assertRegex(event["message"], r"[\u3400-\u9fff]")
+
     def test_redacts_technical_details_from_mixed_language_errors(self) -> None:
         message = localize_runtime_error("行情加载失败：RemoteDisconnected")
 
@@ -85,12 +128,17 @@ class DisplaySummaryTests(unittest.TestCase):
                 "status": "failed",
                 "checks": [
                     {"status": "passed", "detail": "https://provider.example/health"},
-                    {"status": "failed", "detail": "Traceback: provider process failed"},
+                    {
+                        "status": "failed",
+                        "detail": "Traceback: provider process failed",
+                    },
                 ],
             }
         )
 
-        self.assertEqual(payload["checks"][0]["detail"], "https://provider.example/health")
+        self.assertEqual(
+            payload["checks"][0]["detail"], "https://provider.example/health"
+        )
         self.assertRegex(payload["checks"][1]["detail"], r"[\u3400-\u9fff]")
         self.assertNotIn("Traceback", payload["checks"][1]["detail"])
 

@@ -1,7 +1,7 @@
 schema_version: "2"
 upstream:
   repository: https://github.com/wbh604/UZI-Skill
-  commit: b004d7a988ca53a4805bf36784af091fa1209f22
+  commit: b3665e85b8666477038e11157d8e8feb0e006b76
   version: 3.9.4
   vendored_root: domain_packs/finance_ashare/vendor/uzi_3_9_2
   runtime_boundary: in_process_vendored_pure_capability
@@ -36,7 +36,7 @@ vendored_methodology_resources:
   acceptance: tests.test_uzi_392_vendor_runtime.Uzi392VendorRuntimeTests.test_all_referenced_standalone_skill_resources_are_vendored
 
 # These are upstream 3.9.4 behaviours explicitly preserved or deliberately
-# bounded by the Agent OS host.  None is an old UZI runtime compatibility path.
+# bounded by the Agent OS host. Recovery boundaries never tighten native gates.
 upstream_3_9_4_regressions:
   - {id: direct_report_path_reuse, status: source_parity, target: finance.uzi.native.report.compose}
   - {id: cloudflare_no_implicit_install, status: host_boundary, target: deployment_owned_web_runtime}
@@ -56,7 +56,7 @@ upstream_3_9_4_regressions:
   - {id: profile_ui_executable_panel_count, status: host_boundary, target: fund_holding_report_profile_selector}
   - {id: recovery_artifact_refresh, status: source_parity, target: finance.uzi.native.analyze_stock}
   - {id: safe_rule_placeholder_rendering, status: source_parity, target: finance.uzi.native.analyze_stock}
-  - {id: nullable_moat_idea_screen_bridge, status: host_boundary, target: finance.uzi.native.analyze_stock}
+  - {id: nullable_moat_deep_method_recovery, status: host_boundary, target: finance.uzi.native.analyze_stock}
 
 integration_contracts:
   root_collection:
@@ -157,6 +157,7 @@ integration_contracts:
       wave_3_sequential: [13_policy, 3_macro, 7_industry, 9_futures]
       dependency_context: 0_basic_plus_8_materials_and_1_financials_when_present
       per_fetcher_hard_timeout_seconds: 120
+      host_optional_fetcher_timeout_seconds: {similar_stocks: 30}
       per_wave_hard_timeout_seconds: 300
       timeout_env: {fetcher: UZI_PIPELINE_FETCHER_TIMEOUT, wave: UZI_PIPELINE_WAVE_TIMEOUT}
       provider_error_semantics: normalize_validate_and_return_dim_result_error
@@ -177,7 +178,7 @@ integration_contracts:
       wave_3_configured_fetcher_seconds: 120
       timeout_semantics: completion_classification_windows_not_hard_thread_cancellation
       mini_racer_policy: run_fetcher_lock_disable_force_and_crash_sentinel
-    host_transport_guard: context-scoped requests default timeout 20s applies to direct_and_legacy_UZI_threads;pipeline_spawn_workers_are_bounded_by_upstream_hard_process_timeout;peer_Agent_OS_traffic_is_unaffected
+    host_transport_guard: context-scoped requests default timeout 20s applies to direct_and_legacy_UZI_threads;pipeline_spawn_workers_use_upstream_process_scheduler_with_similar_stocks_narrowed_to_30s;peer_Agent_OS_traffic_is_unaffected
     sensitive_source_guard: request_local_Xueqiu_policy_is_transported_to_the_spawned_19_contests_worker
     legacy_long_running_worker_risk: a provider performing many bounded requests may finish after the classification window because Python threads cannot be force-cancelled
   self_review_compatibility_view:
@@ -352,11 +353,11 @@ native_report:
   status: source_parity
   template: domain_packs/finance_ashare/vendor/uzi_3_9_2/assets/report-template.html
   presentation_version: 3.9.4
-  presentation_commit: b004d7a988ca53a4805bf36784af091fa1209f22
+  presentation_commit: b3665e85b8666477038e11157d8e8feb0e006b76
   template_sha256: 1984dbf7a5c07dc35e0bd553082c7fe2ab7dffa4c5eb2e23c942fcd4c98ad7c8
   renderer_helpers:
     lib/report/dim_viz.py: 032dd9e0429f8d5e4ffd030dcc33c6360817b4ac81f6983479b4f82adef29304
-    lib/report/institutional.py: ca2e0ff2ba3dcc2690834da994e5a292e466b137875f660306be4687506e3fef
+    lib/report/institutional.py: 899a02316dcc110a2f8ce20cfd6de59579ec51f3e3b160861e98fd5651f59525
     lib/report/panel_cards.py: 28dfdb0b9ba226cc92236b0f31e7032c22fe624c2069b140410429923c82e828
     lib/report/svg_primitives.py: 2b13c6fdc9bfc1a5182a39c74d75d8c14ce1d52c26b7e88ae32975d1b547f93e
   html_pdf_same_source: true

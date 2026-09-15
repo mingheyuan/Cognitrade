@@ -66,8 +66,8 @@ def score_from_cache(ticker: str) -> dict:
     # （此前 pipeline 从未计算这三个维度，导致默认路径报告缺整个机构建模章节）
     try:
         from compute_deep_methods import compute_dim_20, compute_dim_21, compute_dim_22
-        from lib.stock_features import extract_features
-        _features_pre = extract_features(raw, raw.get("dimensions", {}))
+        from lib.stock_features import extract_features, sanitize_features
+        _features_pre = sanitize_features(extract_features(raw, raw.get("dimensions", {})))
         raw["dimensions"]["20_valuation_models"] = compute_dim_20(_features_pre, raw)
         _d20 = raw["dimensions"]["20_valuation_models"]["data"]
         raw["dimensions"]["21_research_workflow"] = compute_dim_21(_features_pre, raw, _d20)

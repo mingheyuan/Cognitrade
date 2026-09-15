@@ -27,16 +27,10 @@ from research_system.api.models import (
     FundHoldingReportCreateRequest,
     FundHoldingReportRetryRequest,
 )
+from research_system.api.route_support import call_public_service
 from research_system.api.validation import safe_identifier
-from research_system.runtime.presentation.display import localize_public_error_fields
-
 
 router = APIRouter(tags=["fund-holding-reports"])
-
-
-async def _public_call(operation, *args, **kwargs):
-    result = await run_in_threadpool(operation, *args, **kwargs)
-    return localize_public_error_fields(result)
 
 
 def _scope(principal: ApiPrincipal) -> dict[str, str]:
@@ -77,6 +71,13 @@ def _translate(exc: Exception) -> ApiError:
     raise exc
 
 
+async def _call(operation, *args, **kwargs):
+    try:
+        return await call_public_service(operation, *args, **kwargs)
+    except Exception as exc:
+        raise _translate(exc) from exc
+
+
 @router.post("/runs/{source_run_id}/holding-reports", status_code=202)
 async def create_holding_reports(
     source_run_id: str,
@@ -85,20 +86,17 @@ async def create_holding_reports(
     principal: ApiPrincipal = Depends(require_principal),
 ) -> dict:
     resolved = safe_identifier(source_run_id, field_name="source_run_id")
-    try:
-        return await _public_call(
-            service.create_batch,
-            resolved,
-            fund_code=payload.fund_code,
-            profile=payload.profile,
-            source_artifact_id=payload.source_artifact_id,
-            confirm_stale=payload.confirm_stale,
-            force=payload.force,
-            top_n=payload.top_n,
-            **_scope(principal),
-        )
-    except Exception as exc:
-        raise _translate(exc) from exc
+    return await _call(
+        service.create_batch,
+        resolved,
+        fund_code=payload.fund_code,
+        profile=payload.profile,
+        source_artifact_id=payload.source_artifact_id,
+        confirm_stale=payload.confirm_stale,
+        force=payload.force,
+        top_n=payload.top_n,
+        **_scope(principal),
+    )
 
 
 @router.get("/runs/{source_run_id}/holding-report-batches")
@@ -109,7 +107,7 @@ async def list_holding_report_batches(
     principal: ApiPrincipal = Depends(require_principal),
 ) -> list[dict]:
     resolved = safe_identifier(source_run_id, field_name="source_run_id")
-    return await _public_call(
+    return await call_public_service(
         service.list_batches,
         source_run_id=resolved,
         fund_code=fund_code,
@@ -124,10 +122,7 @@ async def holding_report_batch_detail(
     principal: ApiPrincipal = Depends(require_principal),
 ) -> dict:
     resolved = safe_identifier(batch_id, field_name="batch_id")
-    try:
-        return await _public_call(service.detail, resolved, **_scope(principal))
-    except Exception as exc:
-        raise _translate(exc) from exc
+    return await _call(service.detail, resolved, **_scope(principal))
 
 
 @router.post("/holding-report-batches/{batch_id}/cancel")
@@ -137,10 +132,7 @@ async def cancel_holding_report_batch(
     principal: ApiPrincipal = Depends(require_principal),
 ) -> dict:
     resolved = safe_identifier(batch_id, field_name="batch_id")
-    try:
-        return await _public_call(service.cancel, resolved, **_scope(principal))
-    except Exception as exc:
-        raise _translate(exc) from exc
+    return await _call(service.cancel, resolved, **_scope(principal))
 
 
 @router.post("/holding-report-batches/{batch_id}/retry")
@@ -151,17 +143,14 @@ async def retry_holding_report_batch(
     principal: ApiPrincipal = Depends(require_principal),
 ) -> dict:
     resolved = safe_identifier(batch_id, field_name="batch_id")
-    try:
-        return await _public_call(
-            service.retry,
-            resolved,
-            symbols=payload.symbols,
-            include_cancelled=False,
-            force=payload.force,
-            **_scope(principal),
-        )
-    except Exception as exc:
-        raise _translate(exc) from exc
+    return await _call(
+        service.retry,
+        resolved,
+        symbols=payload.symbols,
+        include_cancelled=False,
+        force=payload.force,
+        **_scope(principal),
+    )
 
 
 @router.post("/holding-report-batches/{batch_id}/continue")
@@ -172,16 +161,13 @@ async def continue_holding_report_batch(
     principal: ApiPrincipal = Depends(require_principal),
 ) -> dict:
     resolved = safe_identifier(batch_id, field_name="batch_id")
-    try:
-        return await _public_call(
-            service.retry,
-            resolved,
-            symbols=payload.symbols,
-            include_cancelled=True,
-            **_scope(principal),
-        )
-    except Exception as exc:
-        raise _translate(exc) from exc
+    return await _call(
+        service.retry,
+        resolved,
+        symbols=payload.symbols,
+        include_cancelled=True,
+        **_scope(principal),
+    )
 
 
 @router.get("/holding-report-batches/{batch_id}/reports.zip")

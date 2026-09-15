@@ -27,7 +27,15 @@ import {
   Trash2,
   type LucideIcon,
 } from 'lucide-react'
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  type Dispatch,
+  type FormEvent,
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 import { CognitradeApiClient, CognitradeApiError } from '../api-client'
 import { useCognitrade } from '../CognitradeContext'
 import type {
@@ -35,9 +43,12 @@ import type {
   BacktestPreflight,
   DailyReportSet,
   PaperStrategyBinding,
+  ResearchProfile,
   ReportJob,
   StrategyBacktest,
   StrategyDocument,
+  StrategyDocumentV1,
+  StrategyDocumentV2,
   StrategyEvent,
   StrategyRecord,
   StrategyVerification,
@@ -45,22 +56,85 @@ import type {
   TradeSignal,
   VersionDiff,
 } from '../strategy-contracts'
+import { isReportConditionsDocument } from '../strategy-contracts'
 import { asString, dashboardItems, dashboardValue } from '../live-data'
+import { AppSelect } from './AppSelect'
+import { ReportEvidenceRepair } from './ReportEvidenceRepair'
+import {
+  BackfillProgress,
+  BacktestResultPanel,
+  ReportJobProgressMeter,
+} from './StrategyBacktest'
+import {
+  backtestMetricSummary as metricSummary,
+  backtestModeLabel as modeLabel,
+  compactBacktestRuns,
+} from './strategy-backtest-utils'
 
 const LEGACY_POLICY_KEY = 'cognitrade.report-signal-policy.v1'
 const UNSAVED_FORM_KEY = 'cognitrade.strategy-draft.v1'
 
 type StrategyTab = 'rules' | 'signals' | 'versions' | 'assignments' | 'backtests' | 'governance'
 type StrategyFilter = 'all' | 'template' | 'draft' | 'published' | 'archived'
+type BacktestReportPolicy = 'existing_only' | 'require_complete'
+type BacktestBenchmarkChoice = 'default' | 'hs300' | 'none'
+
+const DEFAULT_BACKTEST_HISTORY_LIMIT = 3
+const ACTIVE_JOB_STATUSES = new Set(['queued', 'running'])
+const BACKFILL_PENDING_STATUSES = new Set(['queued', 'running', 'paused'])
 
 const tabs: Array<{ id: StrategyTab; label: string; icon: LucideIcon }> = [
   { id: 'rules', label: '规则编辑', icon: SlidersHorizontal },
   { id: 'signals', label: '信号预览', icon: GitBranch },
   { id: 'versions', label: '版本历史', icon: History },
   { id: 'assignments', label: '基金绑定', icon: Link2 },
-  { id: 'backtests', label: '策略回测', icon: FlaskConical },
+  { id: 'backtests', label: '基金回测', icon: FlaskConical },
   { id: 'governance', label: '方法论治理', icon: ShieldCheck },
 ]
+
+function useActiveRecordPolling<T extends { id: string; status: string }>(
+  records: T[],
+  setRecords: Dispatch<SetStateAction<T[]>>,
+  loadRecord: (id: string) => Promise<T>,
+  reloadDetail: () => Promise<void>,
+): void {
+  const activeIds = records
+    .filter((record) => ACTIVE_JOB_STATUSES.has(record.status))
+    .map((record) => record.id)
+    .sort()
+    .join(',')
+
+  useEffect(() => {
+    if (!activeIds) return undefined
+    const ids = activeIds.split(',')
+    let polling = false
+    let disposed = false
+
+    const poll = async () => {
+      if (polling || disposed) return
+      polling = true
+      try {
+        const refreshed = await Promise.all(ids.map(loadRecord))
+        if (disposed) return
+        const refreshedById = new Map(refreshed.map((record) => [record.id, record]))
+        setRecords((current) => current.map((record) => refreshedById.get(record.id) || record))
+        if (refreshed.some((record) => !ACTIVE_JOB_STATUSES.has(record.status))) {
+          await reloadDetail()
+        }
+      } catch {
+        // Keep the last persisted state during transient transport errors.
+      } finally {
+        polling = false
+      }
+    }
+
+    const timer = window.setInterval(() => { void poll() }, 2000)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+    }
+  }, [activeIds, loadRecord, reloadDetail, setRecords])
+}
 
 export function Strategies({ initialContext = null }: { initialContext?: StrategyWorkspaceContext | null }) {
   const { settings, methodologyDashboard } = useCognitrade()
@@ -124,21 +198,23 @@ export function Strategies({ initialContext = null }: { initialContext?: Strateg
       const [jobs, reports, runs, verificationRows, eventRows, bindingRows, signalRows] = await Promise.all([
         client.listReportJobs(),
         client.listDailyReportSets(),
-        client.listStrategyBacktests(),
+        client.listStrategyBacktests({ strategyId: row.id, limit: 200 }),
         row.latest_version ? client.listStrategyVerifications(row.latest_version.id) : Promise.resolve({ verifications: [] }),
         row.is_system_template ? Promise.resolve({ events: [] }) : client.listStrategyEvents(row.id),
         client.listPaperStrategyBindings(),
         Promise.all((row.assignments || []).map((assignment) => client.listTradeSignals({ assignmentId: assignment.id }))),
       ])
-      const assignmentIds = new Set((row.assignments || []).map((assignment) => assignment.id))
-      const fundCodes = new Set((row.assignments || []).map((assignment) => assignment.fund_code))
-      setReportJobs(jobs.jobs.filter((job) => row.assignments?.some((assignment) => assignment.id === String(job.request.assignment_id))))
+      const assignments = row.assignments || []
+      const assignmentIds = new Set(assignments.map((assignment) => assignment.id))
+      const fundCodes = new Set(assignments.map((assignment) => assignment.fund_code))
+      const versionIds = new Set((row.versions || []).map((version) => version.id))
+      setReportJobs(jobs.jobs.filter((job) => assignmentIds.has(String(job.request.assignment_id))))
       setReportSets(reports.report_sets.filter((report) => fundCodes.has(report.fund_code)))
       setSignals(signalRows.flatMap((payload) => payload.signals).filter((signal) => assignmentIds.has(signal.assignment_id)))
-      setBacktests(runs.backtests.filter((run) => run.strategy_id === row.id))
+      setBacktests(runs.backtests)
       setVerifications(verificationRows.verifications)
       setEvents(eventRows.events)
-      setBindings(bindingRows.bindings.filter((binding) => row.versions?.some((version) => version.id === binding.strategy_version_id)))
+      setBindings(bindingRows.bindings.filter((binding) => versionIds.has(binding.strategy_version_id)))
     } catch (loadError) {
       setError(errorMessage(loadError))
     } finally {
@@ -171,6 +247,16 @@ export function Strategies({ initialContext = null }: { initialContext?: Strateg
     }))
   }, [detail, dirty, document, name])
 
+  const detailId = detail?.id || ''
+  const reloadDetail = useCallback(async () => {
+    if (detailId) await loadDetail(detailId)
+  }, [detailId, loadDetail])
+  const loadReportJob = useCallback((id: string) => client.getReportJob(id), [client])
+  const loadBacktest = useCallback((id: string) => client.getStrategyBacktest(id), [client])
+
+  useActiveRecordPolling(reportJobs, setReportJobs, loadReportJob, reloadDetail)
+  useActiveRecordPolling(backtests, setBacktests, loadBacktest, reloadDetail)
+
   const filteredStrategies = strategies.filter((row) => {
     if (filter === 'all') return true
     if (filter === 'template') return row.is_system_template
@@ -185,8 +271,9 @@ export function Strategies({ initialContext = null }: { initialContext?: Strateg
     try {
       await action()
     } catch (actionError) {
-      if (actionError instanceof CognitradeApiError && actionError.code === 'draft_revision_conflict') setConflict(true)
-      if (actionError instanceof CognitradeApiError && actionError.code === 'draft_revision_conflict' && detail) {
+      const isDraftConflict = actionError instanceof CognitradeApiError && actionError.code === 'draft_revision_conflict'
+      if (isDraftConflict) setConflict(true)
+      if (isDraftConflict && detail) {
         try {
           setConflictLatest(await client.getStrategy(detail.id))
         } catch {
@@ -277,12 +364,12 @@ export function Strategies({ initialContext = null }: { initialContext?: Strateg
 
   const importLegacy = () => perform('legacy', async () => {
     const raw = localStorage.getItem(LEGACY_POLICY_KEY)
-    const template = strategies.find((row) => row.is_system_template)
+    const template = strategies.find((row) => row.system_key === 'equity_fund_report_v1')
     if (!raw || !template) throw new Error('没有可导入的旧草稿或系统模板。')
     const legacy = JSON.parse(raw) as Record<string, unknown>
     const created = await client.cloneStrategy(template.id, `${String(legacy.policyName || '旧规则')}（已导入）`)
     const base = created.draft?.document
-    if (!base) throw new Error('复制模板后没有生成工作草稿。')
+    if (!base || isReportConditionsDocument(base)) throw new Error('旧草稿只能导入 V1 复合策略模板，不转换原生报告规则。')
     const imported = structuredClone(base)
     imported.signal_thresholds.buy = Number(legacy.buyThreshold ?? imported.signal_thresholds.buy)
     imported.signal_thresholds.watch = Number(legacy.watchThreshold ?? imported.signal_thresholds.watch)
@@ -318,7 +405,7 @@ export function Strategies({ initialContext = null }: { initialContext?: Strateg
         <div className="strategies-heading-actions">
           {legacyAvailable && <button className="secondary-button" onClick={() => void importLegacy()} disabled={Boolean(busy)}><Import size={14} />导入旧本机草稿</button>}
           <button className="secondary-button" onClick={() => void createBlank()} disabled={Boolean(busy)}><FilePlus2 size={14} />空白策略</button>
-          <button className="primary-button" onClick={() => clone(strategies.find((row) => row.is_system_template) || null)} disabled={Boolean(busy)}><Copy size={14} />复制系统模板</button>
+          <button className="primary-button" onClick={() => clone(strategies.find((row) => row.system_key === 'uzi_report_conditions_v2') || strategies.find((row) => row.is_system_template) || null)} disabled={Boolean(busy)}><Copy size={14} />复制系统模板</button>
         </div>
       </header>
 
@@ -369,7 +456,7 @@ export function Strategies({ initialContext = null }: { initialContext?: Strateg
               {tab === 'signals' && <SignalsPanel key={detail.id} client={client} detail={detail} context={context} reportJobs={reportJobs} reportSets={reportSets} signals={signals} setSignals={setSignals} reload={() => loadDetail(detail.id)} perform={perform} />}
               {tab === 'versions' && <VersionsPanel key={detail.id} client={client} detail={detail} />}
               {tab === 'assignments' && <AssignmentsPanel key={detail.id} client={client} detail={detail} context={context} reload={() => loadDetail(detail.id)} perform={perform} />}
-              {tab === 'backtests' && <BacktestsPanel key={detail.id} client={client} detail={detail} context={context} backtests={backtests} reload={() => loadDetail(detail.id)} perform={perform} />}
+              {tab === 'backtests' && <BacktestsPanel key={detail.id} client={client} detail={detail} context={context} reportJobs={reportJobs} backtests={backtests} busy={busy} reload={() => loadDetail(detail.id)} perform={perform} />}
               {tab === 'governance' && <GovernancePanel key={detail.id} client={client} detail={detail} backtests={backtests} verifications={verifications} events={events} bindings={bindings} methodologyDashboard={methodologyDashboard} reload={() => loadDetail(detail.id)} perform={perform} />}
             </div>
           </>}
@@ -381,13 +468,59 @@ export function Strategies({ initialContext = null }: { initialContext?: Strateg
   )
 }
 
-function RulesEditor({ detail, name, document, setName, mutate, onReplace }: { detail: StrategyRecord; name: string; document: StrategyDocument; setName: (value: string) => void; mutate: (fn: (next: StrategyDocument) => void) => void; onReplace: (value: StrategyDocument) => void }) {
+type RulesEditorProps<T extends StrategyDocument> = { detail: StrategyRecord; name: string; document: T; setName: (value: string) => void; mutate: (fn: (next: T) => void) => void; onReplace: (value: StrategyDocument) => void }
+
+function RulesEditor(props: RulesEditorProps<StrategyDocument>) {
+  if (isReportConditionsDocument(props.document)) {
+    return <ReportConditionsEditor {...props} document={props.document} mutate={(fn) => props.mutate((next) => { if (isReportConditionsDocument(next)) fn(next) })} />
+  }
+  return <LegacyRulesEditor {...props} document={props.document} mutate={(fn) => props.mutate((next) => { if (!isReportConditionsDocument(next)) fn(next) })} />
+}
+
+function ReportConditionsEditor({ detail, name, document, setName, mutate, onReplace }: RulesEditorProps<StrategyDocumentV2>) {
+  const readOnly = detail.is_system_template || detail.lifecycle === 'archived'
+  return <div className={`strategy-rule-editor ${readOnly ? 'is-readonly' : ''}`}>
+    {readOnly && <div className="strategy-readonly-note"><LockKeyhole size={15} />{detail.is_system_template ? '系统模板只读，请先复制为个人策略。' : '归档策略恢复后才能编辑。'}</div>}
+    <RuleSection index="01" title="原生 UZI 报告条件回放 V2" description="研究结论直接取自冻结报告；V2 只回放持仓股票，不生成自定义基金复合信号。">
+      <div className="strategy-form-grid">
+        <Field label="策略名称"><input value={name} disabled={readOnly} onChange={(event) => setName(event.target.value)} /></Field>
+        <Field label="持仓分析强度"><AppSelect aria-label="持仓分析强度" value={document.report_inputs.research_profile} disabled={readOnly} onChange={(event) => mutate((next) => { next.report_inputs.research_profile = event.target.value as ResearchProfile })}><option value="lite">Lite · 完整 Agent 轻量深度</option><option value="medium">Medium · 完整 Agent 标准深度</option><option value="deep">Deep · 完整 Agent 深度研究</option></AppSelect></Field>
+        <NumberField label="UZI 持仓数量" value={document.report_inputs.top_n} min={5} max={20} disabled={readOnly} onChange={(value) => mutate((next) => { next.report_inputs.top_n = value })} />
+        <Field label="策略说明" wide><textarea value={document.metadata.description} disabled={readOnly} onChange={(event) => mutate((next) => { next.metadata.description = event.target.value })} /></Field>
+      </div>
+      <div className="strategy-lock-contract"><LockKeyhole size={14} /><span>数据中心冻结 Bundle → 完整 Agent 报告 → 原生评级与综合作战计划。数据与研究引用缺口交给 Agent 按原生规则判断，不单独禁止启动，也不用中性分补齐；冻结 hash、来源权限与 PIT 安全校验保持独立。</span></div>
+    </RuleSection>
+    <RuleSection index="02" title="已固定的报告执行约定" description="以下是回放成交约定，不改变 UZI 评分、评级、入场价、止损价或目标价。">
+      <div className="publish-review-grid">
+        <article><strong>信号来源</strong><code>{document.report_signal.source}</code><small>{document.report_signal.extractor_version}</small></article>
+        <article><strong>首批仓位</strong><span>原始披露权重 × 50%</span><small>剩余资金保留现金，不归一化持仓权重</small></article>
+        <article><strong>成交时点</strong><span>日线收盘触发，次交易日开盘</span><small>入场条件有效 3 个交易日</small></article>
+        <article><strong>持仓计划</strong><span>入场后锁定原报告计划</span><small>开盘跳出止损/目标范围则取消入场</small></article>
+      </div>
+      <NumberField label="单票仓位上限 (%)" value={document.execution.max_single_stock_pct} min={1} max={100} disabled={readOnly} onChange={(value) => mutate((next) => { next.execution.max_single_stock_pct = value })} />
+      <div className="strategy-checkbox-row"><CheckField label="仅持仓组合回测" checked disabled /><CheckField label="严格 point-in-time" checked disabled /><CheckField label="冻结报告及来源可追溯" checked disabled /></div>
+    </RuleSection>
+    <RuleSection index="03" title="调度与不可变来源" description="自动日报默认关闭；报告生成不会隐式联网补数。未冻结输入请先到数据中心补齐。">
+      <div className="strategy-form-grid">
+        <Field label="日报时间"><input type="time" disabled={readOnly} value={document.schedule_defaults.local_time} onChange={(event) => mutate((next) => { next.schedule_defaults.local_time = event.target.value })} /></Field>
+        <Field label="模型 ID"><input disabled={readOnly} value={document.pins.model_id} onChange={(event) => mutate((next) => { next.pins.model_id = event.target.value })} /></Field>
+        <Field label="UZI 方法版本"><input disabled value={document.pins.uzi_methodology_version} /></Field>
+        <Field label="源码 commit"><input disabled value={document.pins.uzi_source_commit} /></Field>
+      </div>
+      <CheckField label="启用自动日报" checked={document.schedule_defaults.enabled} disabled={readOnly} onChange={(value) => mutate((next) => { next.schedule_defaults.enabled = value })} />
+      {!readOnly && <AdvancedDocumentEditor document={document} onReplace={onReplace} />}
+    </RuleSection>
+  </div>
+}
+
+function LegacyRulesEditor({ detail, name, document, setName, mutate, onReplace }: RulesEditorProps<StrategyDocumentV1>) {
   const readOnly = detail.is_system_template || detail.lifecycle === 'archived'
   return <div className={`strategy-rule-editor ${readOnly ? 'is-readonly' : ''}`}>
     {readOnly && <div className="strategy-readonly-note"><LockKeyhole size={15} />{detail.is_system_template ? '系统模板只读，请先复制为个人策略。' : '归档策略恢复后才能编辑。'}</div>}
     <RuleSection index="01" title="策略身份与报告输入" description="持仓个股 UZI 是权益基金策略的必需输入，不能关闭。">
       <div className="strategy-form-grid">
         <Field label="策略名称"><input value={name} disabled={readOnly} onChange={(event) => setName(event.target.value)} /></Field>
+        <Field label="持仓分析强度"><AppSelect aria-label="持仓分析强度" value={document.report_inputs.research_profile} disabled={readOnly} onChange={(event) => mutate((next) => { next.report_inputs.research_profile = event.target.value as ResearchProfile })}><option value="lite">Lite · 快速回测补跑</option><option value="medium">Medium · 标准研究</option><option value="deep">Deep · 完整深度研究</option></AppSelect></Field>
         <Field label="UZI 持仓数量"><input type="number" min="5" max="20" value={document.report_inputs.top_n} disabled={readOnly} onChange={(event) => mutate((next) => { next.report_inputs.top_n = Number(event.target.value) })} /></Field>
         <Field label="策略说明" wide><textarea value={document.metadata.description} disabled={readOnly} onChange={(event) => mutate((next) => { next.metadata.description = event.target.value })} /></Field>
       </div>
@@ -437,6 +570,13 @@ function RulesEditor({ detail, name, document, setName, mutate, onReplace }: { d
         <NumberField label="单票仓位上限 (%)" value={document.execution.max_single_stock_pct} min={1} max={100} disabled={readOnly} onChange={(value) => mutate((next) => { next.execution.max_single_stock_pct = value })} />
         <NumberField label="再平衡偏离百分点" value={document.execution.rebalance_drift_pct_points} min={0} max={100} disabled={readOnly} onChange={(value) => mutate((next) => { next.execution.rebalance_drift_pct_points = value })} />
       </div>
+      <div className="strategy-form-grid is-four">
+        <NumberField label="基金最大仓位 (%)" value={Number(document.asset_execution.otc_fund.max_position_pct ?? 100)} min={1} max={100} disabled={readOnly} onChange={(value) => mutate((next) => { next.asset_execution.otc_fund.max_position_pct = value })} />
+        <NumberField label="单次建仓比例 (%)" value={Number(document.asset_execution.otc_fund.entry_tranche_pct ?? 100)} min={1} max={100} disabled={readOnly} onChange={(value) => mutate((next) => { next.asset_execution.otc_fund.entry_tranche_pct = value })} />
+        <NumberField label="最大建仓次数" value={Number(document.asset_execution.otc_fund.max_entry_tranches ?? 1)} min={1} max={100} disabled={readOnly} onChange={(value) => mutate((next) => { next.asset_execution.otc_fund.max_entry_tranches = value })} />
+        <NumberField label="建仓间隔估值日" value={Number(document.asset_execution.otc_fund.minimum_entry_interval_days ?? 0)} min={0} max={250} disabled={readOnly} onChange={(value) => mutate((next) => { next.asset_execution.otc_fund.minimum_entry_interval_days = value })} />
+      </div>
+      <div className="strategy-lock-contract"><ShieldCheck size={14} /><span>场外基金每批金额按当日账户权益计算，并受最大仓位约束；一个买入事件可按确认周期与间隔持续分批，直到达到仓位或次数上限。</span></div>
       <AssetFeeEditor document={document} disabled={readOnly} mutate={mutate} />
     </RuleSection>
 
@@ -474,7 +614,7 @@ function SignalsPanel({ client, detail, context, reportJobs, reportSets, signals
   const preview = () => perform('preview', async () => {
     const result = await client.previewTradeSignal({ assignment_id: assignmentId, report_set_id: effectiveReportSetId, ...(detail.has_draft ? { draft_strategy_id: detail.id } : {}) })
     const report = reportSets.find((row) => row.id === effectiveReportSetId)
-    const normalize = (value: typeof result.fund_signal, kind: TradeSignal['kind'], subjectCode: string, index: number): TradeSignal => ({
+    const normalize = (value: NonNullable<typeof result.fund_signal>, kind: TradeSignal['kind'], subjectCode: string, index: number): TradeSignal => ({
       id: `preview-${kind}-${subjectCode}-${index}`,
       assignment_id: result.assignment_id,
       strategy_version_id: result.strategy_version_id,
@@ -489,13 +629,14 @@ function SignalsPanel({ client, detail, context, reportJobs, reportSets, signals
       coverage: value.coverage,
       confidence: value.confidence,
       reasons: value.reasons,
+      execution_plan: value.execution_plan,
     })
     setSignals([
-      normalize(result.fund_signal, 'fund', assignment?.fund_code || '', 0),
+      ...(result.fund_signal ? [normalize(result.fund_signal, 'fund', assignment?.fund_code || '', 0)] : []),
       ...(result.stock_signals || []).map((row, index) => normalize(row, 'holding_stock', row.subject_code || `holding-${index + 1}`, index + 1)),
     ])
   })
-  const runDay = () => perform('report-day', async () => { await client.createReportJob({ assignment_id: assignmentId, as_of_date: asOfDate }); await reload() })
+  const runDay = () => perform('report-day', async () => { await client.createReportJob({ assignment_id: assignmentId, as_of_date: asOfDate, ...(context?.fundBundleId ? { fund_bundle_id: context.fundBundleId } : {}) }); await reload() })
   const estimateBackfill = () => perform('estimate', async () => { setEstimate(await client.estimateReportBackfill({ assignment_id: assignmentId, start_date: startDate, end_date: endDate })) })
   const runBackfill = () => perform('backfill', async () => { await client.createReportJob({ assignment_id: assignmentId, start_date: startDate, end_date: endDate }, true); await reload() })
 
@@ -504,7 +645,7 @@ function SignalsPanel({ client, detail, context, reportJobs, reportSets, signals
     <section className="strategy-subpanel">
       <PanelTitle kicker="DAILY REPORT" title="日报生成、补跑与手动重试" description="一天一份 point-in-time 报告；失败节点可以重试，完整重跑必须二次确认。" />
       <div className="strategy-inline-form">
-        <Field label="基金绑定"><select value={assignmentId} onChange={(event) => setAssignmentId(event.target.value)}>{detail.assignments.map((row) => <option key={row.id} value={row.id}>{row.fund_name || row.fund_code} · {modeLabel(row.mode)}</option>)}</select></Field>
+        <Field label="基金绑定"><AppSelect value={assignmentId} onChange={(event) => setAssignmentId(event.target.value)}>{detail.assignments.map((row) => <option key={row.id} value={row.id}>{row.fund_name || row.fund_code} · {modeLabel(row.mode)}</option>)}</AppSelect></Field>
         <Field label="报告日期"><input type="date" value={asOfDate} onChange={(event) => setAsOfDate(event.target.value)} /></Field>
         <button className="primary-button" onClick={runDay} disabled={!assignmentId}><Play size={13} />生成当日报告</button>
       </div>
@@ -516,13 +657,35 @@ function SignalsPanel({ client, detail, context, reportJobs, reportSets, signals
       </div>
       {estimate && <pre className="strategy-json-summary">{JSON.stringify(estimate, null, 2)}</pre>}
       <div className="strategy-record-list">
-        {reportJobs.map((job) => <article key={job.id}><span className={`record-state is-${job.status}`}>{job.status}</span><div><strong>{String(job.request.start_date || job.request.as_of_date || '')} — {String(job.request.end_date || job.request.as_of_date || '')}</strong><small>{job.id} · 尝试 {job.attempts?.length || 0} 次</small>{job.error_summary && <p>{job.error_summary}</p>}</div><div className="record-actions">{['queued', 'running'].includes(job.status) && <button onClick={() => void perform(`pause-${job.id}`, async () => { await client.setReportJobPaused(job.id, true); await reload() })}><Pause size={12} />暂停</button>}{job.status === 'paused' && <button onClick={() => void perform(`resume-${job.id}`, async () => { await client.setReportJobPaused(job.id, false); await reload() })}><Play size={12} />恢复</button>}{['failed', 'completed_partial'].includes(job.status) && <button onClick={() => void perform(`retry-${job.id}`, async () => { await client.retryReportJob(job.id, {}); await reload() })}><RefreshCw size={12} />失败节点重试</button>}{!['queued', 'running'].includes(job.status) && <button onClick={() => { if (window.confirm('完整重跑会生成新 revision，确认继续？')) void perform(`rerun-${job.id}`, async () => { await client.retryReportJob(job.id, { full_rerun: true, confirmed: true }); await reload() }) }}><RotateCcw size={12} />完整重跑</button>}</div></article>)}
+        {reportJobs.map((job) => <article key={job.id}>
+          <span className={`record-state is-${job.status}`}>{job.status}</span>
+          <div>
+            <strong>{String(job.request.start_date || job.request.as_of_date || '')} — {String(job.request.end_date || job.request.as_of_date || '')}</strong>
+            <small>{job.id} · 尝试 {job.attempts?.length || 0} 次</small>
+            <ReportJobProgressMeter job={job} />
+            {job.error_summary && <p>{job.error_summary}</p>}
+            {!ACTIVE_JOB_STATUSES.has(job.status) && <ReportEvidenceRepair client={client} jobId={job.id} onRevised={reload} />}
+          </div>
+          <div className="record-actions">
+            {ACTIVE_JOB_STATUSES.has(job.status) && <button onClick={() => void perform(`pause-${job.id}`, async () => { await client.setReportJobPaused(job.id, true); await reload() })}><Pause size={12} />暂停</button>}
+            {job.status === 'paused' && <button onClick={() => void perform(`resume-${job.id}`, async () => { await client.setReportJobPaused(job.id, false); await reload() })}><Play size={12} />恢复</button>}
+            {['failed', 'completed_partial'].includes(job.status) && <>
+              <button onClick={() => void perform(`retry-${job.id}`, async () => { await client.retryReportJob(job.id, {}); await reload() })}><RefreshCw size={12} />原数据重试失败节点</button>
+              <button onClick={() => {
+                if (window.confirm('请先在数据中心补采并确认冻结。仅更新失败股票的输入，保留其余股票和基金持仓，生成新报告修订；不会自动补采。确认继续？')) {
+                  void perform(`refresh-inputs-${job.id}`, async () => { await client.retryReportJob(job.id, { refresh_inputs: true, confirmed: true }); await reload() })
+                }
+              }}><ListRestart size={12} />使用已补采数据重试</button>
+            </>}
+            {!ACTIVE_JOB_STATUSES.has(job.status) && <button onClick={() => { if (window.confirm('完整重跑会生成新 revision，确认继续？')) void perform(`rerun-${job.id}`, async () => { await client.retryReportJob(job.id, { full_rerun: true, confirmed: true }); await reload() }) }}><RotateCcw size={12} />完整重跑</button>}
+          </div>
+        </article>)}
         {!reportJobs.length && <p className="strategy-inline-empty">暂无日报任务。</p>}
       </div>
     </section>
     <section className="strategy-subpanel">
-      <PanelTitle kicker="REAL REPORT PREVIEW" title="基于真实日报预演信号" description="草稿只替换映射规则；报告、持仓、UZI Artifact 与可获得时间均来自已落库日报。" />
-      <div className="strategy-inline-form"><Field label="日报 revision"><select value={effectiveReportSetId} onChange={(event) => setReportSetId(event.target.value)}><option value="">请选择真实日报</option>{matchingReportSets.map((row) => <option key={row.id} value={row.id}>{row.as_of_date} · r{row.revision} · coverage {(row.coverage * 100).toFixed(0)}%</option>)}</select></Field><button className="primary-button" disabled={!effectiveReportSetId} onClick={preview}><GitBranch size={13} />预演四态信号</button></div>
+      <PanelTitle kicker="REAL REPORT PREVIEW" title="基于真实日报预演信号" description="报告、持仓、UZI Artifact 与可获得时间均来自已落库日报；V2 直接展示原生评级和作战计划，不生成基金复合信号。" />
+      <div className="strategy-inline-form"><Field label="日报 revision"><AppSelect value={effectiveReportSetId} onChange={(event) => setReportSetId(event.target.value)}><option value="">请选择真实日报</option>{matchingReportSets.map((row) => <option key={row.id} value={row.id}>{row.as_of_date} · r{row.revision} · coverage {(row.coverage * 100).toFixed(0)}%</option>)}</AppSelect></Field><button className="primary-button" disabled={!effectiveReportSetId} onClick={preview}><GitBranch size={13} />预演报告信号</button></div>
       <SignalTable signals={signals.filter((row) => row.assignment_id === assignmentId && (!effectiveReportSetId || row.source_report_set_id === effectiveReportSetId))} />
     </section>
   </div>
@@ -535,46 +698,304 @@ function VersionsPanel({ client, detail }: { client: CognitradeApiClient; detail
   const [diff, setDiff] = useState<VersionDiff | null>(null)
   const [error, setError] = useState('')
   const compare = async () => { try { setError(''); setDiff(await client.getStrategyVersionDiff(detail.id, fromId, toId)) } catch (value) { setError(errorMessage(value)) } }
-  return <div className="strategy-panel-stack"><section className="strategy-subpanel"><PanelTitle kicker="IMMUTABLE VERSIONS" title="已发布版本" description="发布快照不可编辑和删除；每个版本都有稳定 content hash 与 Artifact 来源。" /><div className="strategy-version-grid">{versions.map((version) => <article key={version.id}><span>v{version.version_number}</span><strong>{governanceLabel(version.governance_state)}</strong><code>{version.content_hash.slice(0, 16)}…</code><small>{formatDate(version.published_at)} · {version.published_by}</small></article>)}{!versions.length && <p className="strategy-inline-empty">尚未发布任何版本。</p>}</div></section>{versions.length >= 2 && <section className="strategy-subpanel"><PanelTitle kicker="VERSION DIFF" title="版本比较" description="比较完整结构化合同，不只比较页面上可见字段。" /><div className="strategy-inline-form"><Field label="基准版本"><select value={fromId} onChange={(event) => setFromId(event.target.value)}>{versions.map((row) => <option key={row.id} value={row.id}>v{row.version_number}</option>)}</select></Field><Field label="目标版本"><select value={toId} onChange={(event) => setToId(event.target.value)}>{versions.map((row) => <option key={row.id} value={row.id}>v{row.version_number}</option>)}</select></Field><button className="secondary-button" onClick={() => void compare()} disabled={!fromId || !toId || fromId === toId}><FileDiff size={13} />比较</button></div>{error && <p className="strategy-inline-error">{error}</p>}{diff && <div className="strategy-diff-list">{diff.changes.map((change, index) => <article key={`${change.path}-${index}`}><code>{change.path}</code><del>{JSON.stringify(change.before)}</del><ins>{JSON.stringify(change.after)}</ins></article>)}</div>}</section>}</div>
+  return <div className="strategy-panel-stack"><section className="strategy-subpanel"><PanelTitle kicker="IMMUTABLE VERSIONS" title="已发布版本" description="发布快照不可编辑和删除；每个版本都有稳定 content hash 与 Artifact 来源。" /><div className="strategy-version-grid">{versions.map((version) => <article key={version.id}><span>v{version.version_number}</span><strong>{governanceLabel(version.governance_state)}</strong><code>{version.content_hash.slice(0, 16)}…</code><small>{formatDate(version.published_at)} · {version.published_by}</small></article>)}{!versions.length && <p className="strategy-inline-empty">尚未发布任何版本。</p>}</div></section>{versions.length >= 2 && <section className="strategy-subpanel"><PanelTitle kicker="VERSION DIFF" title="版本比较" description="比较完整结构化合同，不只比较页面上可见字段。" /><div className="strategy-inline-form"><Field label="基准版本"><AppSelect value={fromId} onChange={(event) => setFromId(event.target.value)}>{versions.map((row) => <option key={row.id} value={row.id}>v{row.version_number}</option>)}</AppSelect></Field><Field label="目标版本"><AppSelect value={toId} onChange={(event) => setToId(event.target.value)}>{versions.map((row) => <option key={row.id} value={row.id}>v{row.version_number}</option>)}</AppSelect></Field><button className="secondary-button" onClick={() => void compare()} disabled={!fromId || !toId || fromId === toId}><FileDiff size={13} />比较</button></div>{error && <p className="strategy-inline-error">{error}</p>}{diff && <div className="strategy-diff-list">{diff.changes.map((change, index) => <article key={`${change.path}-${index}`}><code>{change.path}</code><del>{JSON.stringify(change.before)}</del><ins>{JSON.stringify(change.after)}</ins></article>)}</div>}</section>}</div>
 }
 
 function AssignmentsPanel({ client, detail, context, reload, perform }: { client: CognitradeApiClient; detail: StrategyRecord; context: StrategyWorkspaceContext | null; reload: () => Promise<void>; perform: (key: string, action: () => Promise<void>) => Promise<void> }) {
-  const [fundCode, setFundCode] = useState(context?.fundCode || new URLSearchParams(window.location.search).get('fund_code') || '')
+  const nativeMode = isNativeStrategyVersion(detail, detail.latest_version?.id)
+  const [fundCode, setFundCode] = useState(context?.fundCode || '')
   const [fundName, setFundName] = useState(context?.fundName || '')
-  const [mode, setMode] = useState<BacktestMode>(context?.mode || (new URLSearchParams(window.location.search).get('mode') as BacktestMode) || 'holdings_portfolio')
+  const [selectedMode, setMode] = useState<BacktestMode>(context?.mode || 'holdings_portfolio')
+  const mode = nativeMode ? 'holdings_portfolio' : selectedMode
   const create = (event: FormEvent) => { event.preventDefault(); void perform('assignment', async () => { await client.createStrategyAssignment({ strategy_id: detail.id, fund_code: fundCode, fund_name: fundName, mode }); setFundCode(''); setFundName(''); await reload() }) }
   if (!detail.latest_version || detail.is_system_template) return <EmptyPanel icon={BadgeCheck} title="发布后才能绑定基金" text={detail.is_system_template ? '请先复制系统模板并发布个人版本。' : 'Assignment 固定到已发布版本，草稿不能直接运行日报。'} />
-  return <div className="strategy-panel-stack"><section className="strategy-subpanel"><PanelTitle kicker="ASSIGNMENT" title="创建基金绑定" description="绑定只允许覆盖调度时间，不允许覆盖权重、阈值、MA 或费率。" /><form className="strategy-inline-form" onSubmit={create}><Field label="基金代码"><input value={fundCode} onChange={(event) => setFundCode(event.target.value)} required /></Field><Field label="基金名称"><input value={fundName} onChange={(event) => setFundName(event.target.value)} /></Field><Field label="回测模式"><select value={mode} onChange={(event) => setMode(event.target.value as BacktestMode)}><option value="fund_only">基金本体</option><option value="holdings_portfolio">持仓组合</option></select></Field><button className="primary-button"><Plus size={13} />创建绑定</button></form></section><section className="strategy-subpanel"><PanelTitle kicker="ACTIVE TARGETS" title="已绑定基金" description="暂停不会删除历史日报和信号；已有信号的绑定删除时只会禁用。" /><div className="strategy-record-list">{detail.assignments?.map((row) => <article key={row.id}><span className={`record-state ${row.paused || !row.enabled ? 'is-paused' : 'is-completed'}`}>{row.paused ? 'paused' : row.enabled ? 'active' : 'disabled'}</span><div><strong>{row.fund_name || row.fund_code}</strong><small>{row.fund_code} · {modeLabel(row.mode)} · {row.active_version_id}</small><p>下次生效 {row.effective_from}{row.pending_version_id ? ` · 待切换 ${row.pending_version_id}` : ''}</p></div><div className="record-actions"><button onClick={() => void perform(`toggle-${row.id}`, async () => { await client.setStrategyAssignmentPaused(row.id, !row.paused); await reload() })}>{row.paused ? <Play size={12} /> : <Pause size={12} />}{row.paused ? '恢复' : '暂停'}</button><button onClick={() => { if (window.confirm('确认删除或禁用该绑定？')) void perform(`delete-${row.id}`, async () => { await client.deleteStrategyAssignment(row.id); await reload() }) }}><Trash2 size={12} />删除</button></div></article>)}{!detail.assignments?.length && <p className="strategy-inline-empty">尚未绑定基金。</p>}</div></section></div>
+  return <div className="strategy-panel-stack"><section className="strategy-subpanel"><PanelTitle kicker="ASSIGNMENT" title="创建基金绑定" description="新策略默认回放披露持仓组合；原生报告条件策略不生成基金本体交易信号。绑定不覆盖版本执行规则。" /><form className="strategy-inline-form" onSubmit={create}><Field label="基金代码"><input value={fundCode} onChange={(event) => setFundCode(event.target.value)} required /></Field><Field label="基金名称"><input value={fundName} onChange={(event) => setFundName(event.target.value)} /></Field><Field label="回测模式"><AppSelect value={mode} onChange={(event) => setMode(event.target.value as BacktestMode)}>{!nativeMode && <option value="fund_only">基金本体（旧策略）</option>}<option value="holdings_portfolio">披露持仓组合（高级）</option></AppSelect></Field><button className="primary-button"><Plus size={13} />创建绑定</button></form></section><section className="strategy-subpanel"><PanelTitle kicker="ACTIVE TARGETS" title="已绑定基金" description="暂停不会删除历史日报和信号；已有信号的绑定删除时只会禁用。" /><div className="strategy-record-list">{detail.assignments?.map((row) => { const inactive = row.paused || !row.enabled; return <article key={row.id}><span className={`record-state ${inactive ? 'is-paused' : 'is-completed'}`}>{row.paused ? 'paused' : row.enabled ? 'active' : 'disabled'}</span><div><strong>{row.fund_name || row.fund_code}</strong><small>{row.fund_code} · {modeLabel(row.mode)} · {row.active_version_id}</small><p>下次生效 {row.effective_from}{row.pending_version_id ? ` · 待切换 ${row.pending_version_id}` : ''}</p></div><div className="record-actions"><button onClick={() => void perform(`toggle-${row.id}`, async () => { if (inactive) await client.updateStrategyAssignment(row.id, { enabled: true, paused: false }); else await client.setStrategyAssignmentPaused(row.id, true); await reload() })}>{inactive ? <Play size={12} /> : <Pause size={12} />}{inactive ? '恢复' : '暂停'}</button><button onClick={() => { if (window.confirm('确认删除或禁用该绑定？')) void perform(`delete-${row.id}`, async () => { await client.deleteStrategyAssignment(row.id); await reload() }) }}><Trash2 size={12} />删除</button></div></article> })}{!detail.assignments?.length && <p className="strategy-inline-empty">尚未绑定基金。</p>}</div></section></div>
 }
 
-function BacktestsPanel({ client, detail, context, backtests, reload, perform }: { client: CognitradeApiClient; detail: StrategyRecord; context: StrategyWorkspaceContext | null; backtests: StrategyBacktest[]; reload: () => Promise<void>; perform: (key: string, action: () => Promise<void>) => Promise<void> }) {
-  const query = new URLSearchParams(window.location.search)
-  const [versionId, setVersionId] = useState(context?.strategyVersionId || query.get('strategy_version_id') || detail.latest_version?.id || '')
-  const [fundCode, setFundCode] = useState(context?.fundCode || query.get('fund_code') || detail.assignments?.[0]?.fund_code || '')
-  const [mode, setMode] = useState<BacktestMode>(context?.mode || (query.get('mode') as BacktestMode) || detail.assignments?.[0]?.mode || 'holdings_portfolio')
-  const [startDate, setStartDate] = useState(today(-365))
+type BacktestsPanelProps = {
+  client: CognitradeApiClient
+  detail: StrategyRecord
+  context: StrategyWorkspaceContext | null
+  reportJobs: ReportJob[]
+  backtests: StrategyBacktest[]
+  busy: string
+  reload: () => Promise<void>
+  perform: (key: string, action: () => Promise<void>) => Promise<void>
+}
+
+function BacktestsPanel({ client, detail, context, reportJobs, backtests, busy, reload, perform }: BacktestsPanelProps) {
+  const preferredAssignment = detail.assignments?.find((row) => row.mode === 'fund_only') || detail.assignments?.[0]
+  const [versionId, setVersionId] = useState(context?.strategyVersionId || detail.latest_version?.id || '')
+  const nativeMode = isNativeStrategyVersion(detail, versionId)
+  const [fundCode, setFundCode] = useState(context?.fundCode || preferredAssignment?.fund_code || '')
+  const [selectedMode, setMode] = useState<BacktestMode>(context?.mode || preferredAssignment?.mode || 'holdings_portfolio')
+  const mode = nativeMode ? 'holdings_portfolio' : selectedMode
+  const [startDate, setStartDate] = useState(today(-30))
   const [endDate, setEndDate] = useState(today())
   const [initialCash, setInitialCash] = useState(1_000_000)
-  const [reportPolicy, setReportPolicy] = useState<'existing_only' | 'require_complete'>('existing_only')
-  const [benchmarkChoice, setBenchmarkChoice] = useState<'default' | 'hs300' | 'none'>('default')
+  const [reportPolicy, setReportPolicy] = useState<BacktestReportPolicy>('existing_only')
+  const [benchmarkChoice, setBenchmarkChoice] = useState<BacktestBenchmarkChoice>('default')
   const [preflight, setPreflight] = useState<BacktestPreflight | null>(null)
   const [estimate, setEstimate] = useState<Record<string, unknown> | null>(null)
-  const request = { strategy_version_id: versionId, fund_code: fundCode, mode, start_date: startDate, end_date: endDate }
-  const runPreflight = () => perform('preflight', async () => { setPreflight(await client.preflightStrategyBacktest(request)); setEstimate(null) })
-  const estimateMissing = () => perform('estimate-missing', async () => { const assignment = detail.assignments?.find((row) => row.fund_code === fundCode && row.mode === mode); if (!assignment) throw new Error('没有匹配的基金绑定。'); setEstimate(await client.estimateReportBackfill({ assignment_id: assignment.id, start_date: startDate, end_date: endDate })) })
-  const backfillMissing = () => perform('backfill-missing', async () => { const assignment = detail.assignments?.find((row) => row.fund_code === fundCode && row.mode === mode); if (!assignment) throw new Error('没有匹配的基金绑定。'); await client.createReportJob({ assignment_id: assignment.id, start_date: startDate, end_date: endDate }, true); await reload() })
-  const create = () => perform('backtest', async () => { await client.createStrategyBacktest({ ...request, initial_cash: initialCash, benchmark: { fund_buy_and_hold: mode === 'fund_only', initial_disclosed_weights_static: mode === 'holdings_portfolio', hs300: benchmarkChoice === 'hs300' || (benchmarkChoice === 'default' && mode === 'holdings_portfolio'), category_index: benchmarkChoice === 'default' && mode === 'fund_only' }, report_policy: reportPolicy }); setPreflight(null); await reload() })
+  const [submittedBackfill, setSubmittedBackfill] = useState<ReportJob | null>(null)
+  const [selectedBacktest, setSelectedBacktest] = useState<StrategyBacktest | null>(null)
+  const [resultLoadingId, setResultLoadingId] = useState('')
+  const [resultError, setResultError] = useState('')
+  const [showAllRuns, setShowAllRuns] = useState(false)
+  const request = {
+    strategy_version_id: versionId,
+    fund_code: fundCode,
+    mode,
+    start_date: startDate,
+    end_date: endDate,
+  }
+  const assignmentOptions = detail.assignments?.filter((row) => row.mode === mode) || []
+  const selectedVersion = detail.versions?.find((row) => row.id === versionId) || null
+  const latestVersion = detail.latest_version || detail.versions?.[0] || null
+  const assignment = detail.assignments?.find((row) => row.fund_code === fundCode && row.mode === mode)
+  const persistedBackfill = reportJobs.find((job) => (
+    job.job_type === 'historical_backfill'
+    && String(job.request.assignment_id || '') === String(assignment?.id || '')
+    && String(job.request.strategy_version_id || '') === versionId
+    && String(job.request.start_date || '') === startDate
+    && String(job.request.end_date || '') === endDate
+  )) || null
+  const backfillJob = persistedBackfill || submittedBackfill
+  const backfillPending = Boolean(backfillJob && BACKFILL_PENDING_STATUSES.has(backfillJob.status))
+  const scopedBacktests = backtests
+    .filter((run) => (!fundCode || run.fund_code === fundCode) && run.mode === mode)
+    .sort((left, right) => right.created_at.localeCompare(left.created_at))
+  const compactedBacktests = compactBacktestRuns(scopedBacktests)
+  const compactVisibleBacktests = compactedBacktests.slice(0, DEFAULT_BACKTEST_HISTORY_LIMIT).map((group) => group.run)
+  const visibleBacktests = showAllRuns ? scopedBacktests : compactVisibleBacktests
+  const duplicateCountById = new Map(compactedBacktests.map((group) => [group.run.id, group.count]))
+  const hiddenRunCount = Math.max(0, scopedBacktests.length - compactVisibleBacktests.length)
+  const versionSignalsMissing = Boolean(
+    preflight
+    && preflight.available_report_count > 0
+    && preflight.missing_report_dates.length === 0
+    && preflight.signal_count === 0,
+  )
+  const resetPreflight = () => {
+    setPreflight(null)
+    setEstimate(null)
+    setSubmittedBackfill(null)
+  }
+  const selectVersion = (nextVersionId: string) => {
+    setVersionId(nextVersionId)
+    resetPreflight()
+  }
+  const selectFund = (nextFundCode: string) => {
+    setFundCode(nextFundCode)
+    resetPreflight()
+    setShowAllRuns(false)
+  }
+  const selectMode = (nextMode: BacktestMode) => {
+    const assignments = detail.assignments || []
+    const matching = assignments.find((row) => row.mode === nextMode && row.fund_code === fundCode)
+      || assignments.find((row) => row.mode === nextMode)
+    setMode(nextMode)
+    setFundCode(matching?.fund_code || '')
+    resetPreflight()
+    setShowAllRuns(false)
+  }
+  const selectDate = (kind: 'start' | 'end', value: string) => {
+    if (kind === 'start') setStartDate(value)
+    else setEndDate(value)
+    resetPreflight()
+  }
+  const runPreflight = () => perform('preflight', async () => {
+    setPreflight(await client.preflightStrategyBacktest(request))
+    setEstimate(null)
+  })
+  const estimateMissing = () => perform('estimate-missing', async () => {
+    if (!assignment) throw new Error('没有匹配的基金绑定。')
+    setEstimate(await client.estimateReportBackfill({
+      assignment_id: assignment.id,
+      strategy_version_id: versionId,
+      start_date: startDate,
+      end_date: endDate,
+    }))
+  })
+  const backfillMissing = () => perform('backfill-missing', async () => {
+    if (!assignment) throw new Error('没有匹配的基金绑定。')
+    const job = await client.createReportJob({ assignment_id: assignment.id, strategy_version_id: versionId, start_date: startDate, end_date: endDate }, true)
+    setSubmittedBackfill(job)
+    setEstimate(null)
+    await reload()
+  })
+  const launchBacktest = () => perform('backtest', async () => {
+    const checked = await client.preflightStrategyBacktest(request)
+    setPreflight(checked)
+    setEstimate(null)
+    const reportsRequiredButMissing = reportPolicy === 'require_complete' && checked.missing_report_dates.length > 0
+    if (checked.can_run === false || !checked.signal_count || reportsRequiredButMissing) return
+    await client.createStrategyBacktest({
+      ...request,
+      initial_cash: initialCash,
+      benchmark: {
+        fund_buy_and_hold: mode === 'fund_only',
+        initial_disclosed_weights_static: mode === 'holdings_portfolio',
+        hs300: benchmarkChoice === 'hs300' || (benchmarkChoice === 'default' && mode === 'holdings_portfolio'),
+        category_index: benchmarkChoice === 'default' && mode === 'fund_only',
+      },
+      report_policy: reportPolicy,
+    })
+    setPreflight(null)
+    await reload()
+  })
+  const openResult = async (run: StrategyBacktest) => {
+    if (selectedBacktest?.id === run.id) {
+      setSelectedBacktest(null)
+      return
+    }
+    setResultLoadingId(run.id)
+    setResultError('')
+    try {
+      setSelectedBacktest(run.result ? run : await client.getStrategyBacktest(run.id))
+    } catch (value) {
+      setResultError(errorMessage(value))
+    } finally {
+      setResultLoadingId('')
+    }
+  }
   if (!detail.versions?.length) return <EmptyPanel icon={FlaskConical} title="没有可回测的发布版本" text="回测只接受不可变 strategy_version_id，不提供临时权重、阈值、MA 或费率参数。" />
-  return <div className="strategy-panel-stack"><section className="strategy-subpanel"><PanelTitle kicker="STRICT BACKTEST CONTRACT" title="回测预检" description="先检查日报与信号覆盖；输入只允许版本、基金、模式、日期、资金、基准和报告策略。" /><div className="strategy-form-grid is-four"><Field label="策略版本"><select value={versionId} onChange={(event) => { setVersionId(event.target.value); setPreflight(null) }}>{detail.versions.map((row) => <option key={row.id} value={row.id}>v{row.version_number} · {row.content_hash.slice(0, 8)}</option>)}</select></Field><Field label="目标基金"><select value={fundCode} onChange={(event) => { setFundCode(event.target.value); setPreflight(null) }}><option value="">请选择绑定基金</option>{detail.assignments?.map((row) => <option key={row.id} value={row.fund_code}>{row.fund_name || row.fund_code}</option>)}</select></Field><Field label="模式"><select value={mode} onChange={(event) => { setMode(event.target.value as BacktestMode); setPreflight(null) }}><option value="fund_only">基金本体</option><option value="holdings_portfolio">持仓组合</option></select></Field><NumberField label="初始资金" value={initialCash} min={10000} max={1_000_000_000} onChange={setInitialCash} /><Field label="开始日期"><input type="date" value={startDate} onChange={(event) => { setStartDate(event.target.value); setPreflight(null) }} /></Field><Field label="结束日期"><input type="date" value={endDate} onChange={(event) => { setEndDate(event.target.value); setPreflight(null) }} /></Field><Field label="报告获取策略"><select value={reportPolicy} onChange={(event) => setReportPolicy(event.target.value as 'existing_only' | 'require_complete')}><option value="existing_only">使用现有日报（允许 BLOCKED/沿用）</option><option value="require_complete">要求日报完整</option></select></Field><Field label="附加基准"><select value={benchmarkChoice} onChange={(event) => setBenchmarkChoice(event.target.value as 'default' | 'hs300' | 'none')}><option value="default">模式默认（类别指数 / 沪深300）</option><option value="hs300">沪深300</option><option value="none">仅基金/期初持仓基准</option></select></Field></div><div className="strategy-action-row"><button className="secondary-button" onClick={runPreflight} disabled={!versionId || !fundCode}><ShieldCheck size={13} />执行预检</button><button className="primary-button" onClick={create} disabled={!preflight || !preflight.signal_count || (reportPolicy === 'require_complete' && Boolean(preflight.missing_report_dates.length))}><Play size={13} />启动回测</button></div>{preflight && <div className={`backtest-preflight ${preflight.ready ? 'is-ready' : 'is-warning'}`}><strong>{preflight.signal_count} 个基金信号 · {preflight.available_report_count}/{preflight.trading_day_count} 个日报交易日</strong><p>版本 hash：{preflight.strategy_content_hash}</p>{preflight.missing_report_dates.length > 0 && <><p>缺失 {preflight.missing_report_dates.length} 天：{preflight.missing_report_dates.slice(0, 12).join('、')}{preflight.missing_report_dates.length > 12 ? '…' : ''}</p><div className="strategy-action-row"><button className="secondary-button" onClick={estimateMissing}>估算补跑成本</button><button className="secondary-button" disabled={!estimate} onClick={backfillMissing}>确认补跑</button></div>{estimate && <pre className="strategy-json-summary">{JSON.stringify(estimate, null, 2)}</pre>}</>}</div>}</section><section className="strategy-subpanel"><PanelTitle kicker="TRACEABLE RESULTS" title="策略回测记录" description="每笔成交必须关联 TradeSignal，结果使用内容寻址对象存储。" /><div className="strategy-record-list">{backtests.map((run) => <article key={run.id}><span className={`record-state is-${run.status}`}>{run.status}</span><div><strong>{run.fund_name || run.fund_code} · {modeLabel(run.mode)}</strong><small>{run.start_date} — {run.end_date} · {run.strategy_content_hash.slice(0, 12)}</small><p>{metricSummary(run.metrics)}{run.error_summary ? ` · ${run.error_summary}` : ''}</p></div><div className="record-actions">{['failed', 'cancelled'].includes(run.status) && <button onClick={() => void perform(`retry-bt-${run.id}`, async () => { await client.retryStrategyBacktest(run.id); await reload() })}><RefreshCw size={12} />重试</button>}{['queued', 'running'].includes(run.status) && <button onClick={() => void perform(`cancel-bt-${run.id}`, async () => { await client.cancelStrategyBacktest(run.id); await reload() })}><Pause size={12} />取消</button>}</div></article>)}{!backtests.length && <p className="strategy-inline-empty">暂无策略版本回测。</p>}</div></section></div>
+  return <div className="strategy-panel-stack">
+    <section className="strategy-subpanel">
+      <PanelTitle kicker="STRICT BACKTEST CONTRACT" title="基金回测预检" description={nativeMode ? '检查冻结报告计划与行情；建仓许可按三个交易日生效，持仓退出保护不因缺少新日报而失效。' : '默认回测基金本体净值；披露持仓组合仅作为高级研究模拟。先检查日报与信号覆盖。'} />
+      <div className="strategy-form-grid is-four">
+        <Field label="策略版本"><AppSelect value={versionId} onChange={(event) => selectVersion(event.target.value)}>{detail.versions.map((row) => <option key={row.id} value={row.id}>v{row.version_number}{row.id === latestVersion?.id ? ' · 最新' : ''} · {row.content_hash.slice(0, 8)}</option>)}</AppSelect></Field>
+        <Field label="目标基金"><AppSelect value={fundCode} onChange={(event) => selectFund(event.target.value)}><option value="">请选择绑定基金</option>{assignmentOptions.map((row) => <option key={row.id} value={row.fund_code}>{row.fund_name || row.fund_code}</option>)}</AppSelect></Field>
+        <NumberField label="初始资金" value={initialCash} min={10000} max={1_000_000_000} onChange={setInitialCash} />
+        <Field label="开始日期"><input type="date" value={startDate} onChange={(event) => selectDate('start', event.target.value)} /></Field>
+        <Field label="结束日期"><input type="date" value={endDate} onChange={(event) => selectDate('end', event.target.value)} /></Field>
+      </div>
+      <details className="backtest-advanced-config">
+        <summary>高级配置 · {modeLabel(mode)} / 日报完整性 / 比较基准</summary>
+        <div className="strategy-form-grid">
+          <Field label="回测模式"><AppSelect value={mode} onChange={(event) => selectMode(event.target.value as BacktestMode)}>{!nativeMode && <option value="fund_only">基金本体（旧策略）</option>}<option value="holdings_portfolio">披露持仓组合（高级）</option></AppSelect></Field>
+          <Field label="报告获取策略"><AppSelect value={reportPolicy} onChange={(event) => setReportPolicy(event.target.value as BacktestReportPolicy)}><option value="existing_only">{nativeMode ? '执行现有报告计划（无需每日新报告）' : '使用现有日报（允许 BLOCKED/沿用）'}</option><option value="require_complete">要求日报完整</option></AppSelect></Field>
+          <Field label="附加基准"><AppSelect value={benchmarkChoice} onChange={(event) => setBenchmarkChoice(event.target.value as BacktestBenchmarkChoice)}><option value="default">模式默认（类别指数 / 沪深300）</option><option value="hs300">沪深300</option><option value="none">仅基金/期初持仓基准</option></AppSelect></Field>
+        </div>
+      </details>
+      <div className={`backtest-version-selection ${selectedVersion?.id === latestVersion?.id ? 'is-current' : 'is-stale'}`}>
+        <div><strong>本次回测固定使用 {selectedVersion ? `v${selectedVersion.version_number}` : '未选择版本'}</strong><small>{selectedVersion?.id || '请选择一个不可变版本'}{selectedVersion ? ` · ${selectedVersion.content_hash.slice(0, 12)}` : ''}</small></div>
+        {latestVersion && selectedVersion?.id !== latestVersion.id && <button className="secondary-button" onClick={() => selectVersion(latestVersion.id)}><RefreshCw size={13} />切换到最新版 v{latestVersion.version_number}</button>}
+      </div>
+      <div className="strategy-action-row">
+        <button className="secondary-button" onClick={runPreflight} disabled={Boolean(busy) || !versionId || !fundCode}>{nativeMode ? '检查报告条件' : '检查报告完整度'}</button>
+        <button className="primary-button" onClick={launchBacktest} disabled={Boolean(busy) || !versionId || !fundCode}><Play size={13} />检查并启动回测</button>
+      </div>
+      {preflight && (
+        <BacktestPreflightCard
+          preflight={preflight}
+          selectedVersion={selectedVersion}
+          reportPolicy={reportPolicy}
+          signalsMissing={versionSignalsMissing}
+          backfillPending={backfillPending || Boolean(busy)}
+          backfillJob={backfillJob}
+          estimate={estimate}
+          onEstimate={estimateMissing}
+          onBackfill={backfillMissing}
+        />
+      )}
+      {backfillJob && <BackfillProgress job={backfillJob} onPreflight={runPreflight} />}
+    </section>
+    <section className="strategy-subpanel">
+      <PanelTitle kicker="TRACEABLE RESULTS" title="基金回测记录" description={`基于策略最近 200 次原始运行，仅显示当前基金与模式；默认合并相同输入并保留最近 ${DEFAULT_BACKTEST_HISTORY_LIMIT} 组。当前筛选命中 ${scopedBacktests.length} 次。`} />
+      {hiddenRunCount > 0 && <div className="strategy-action-row"><button className="secondary-button" onClick={() => setShowAllRuns((value) => !value)}>{showAllRuns ? '收起原始运行' : `展开已加载的原始运行（另 ${hiddenRunCount} 次）`}</button></div>}
+      <div className="strategy-record-list">
+        {visibleBacktests.map((run) => <article key={run.id} className={selectedBacktest?.id === run.id ? 'is-selected' : ''}>
+          <span className={`record-state is-${run.status}`}>{run.status}</span>
+          <div><strong>{run.fund_name || run.fund_code} · {modeLabel(run.mode)}</strong><small>{run.start_date} — {run.end_date} · {run.strategy_content_hash.slice(0, 12)}{Number(duplicateCountById.get(run.id) || 1) > 1 ? ` · ${duplicateCountById.get(run.id)} 次相同输入` : ''}</small><p>{metricSummary(run.metrics)}{run.error_summary ? ` · ${run.error_summary}` : ''}</p></div>
+          <div className="record-actions">
+            {run.status === 'completed' && <button aria-expanded={selectedBacktest?.id === run.id} aria-controls="backtest-result-panel" disabled={Boolean(busy) || resultLoadingId === run.id} onClick={() => void openResult(run)}>{resultLoadingId === run.id ? <LoaderCircle className="is-spinning" size={12} /> : <BarChart3 size={12} />}{selectedBacktest?.id === run.id ? '收起图表' : '查看图表'}</button>}
+            {['failed', 'cancelled'].includes(run.status) && <button disabled={Boolean(busy)} onClick={() => void perform(`retry-bt-${run.id}`, async () => { await client.retryStrategyBacktest(run.id); await reload() })}><RefreshCw size={12} />重试</button>}
+            {ACTIVE_JOB_STATUSES.has(run.status) && <button disabled={Boolean(busy)} onClick={() => void perform(`cancel-bt-${run.id}`, async () => { await client.cancelStrategyBacktest(run.id); await reload() })}><Pause size={12} />取消</button>}
+          </div>
+        </article>)}
+        {!visibleBacktests.length && <p className="strategy-inline-empty">当前基金与模式暂无回测。</p>}
+      </div>
+      {resultError && <p className="strategy-inline-error">{resultError}</p>}
+      {selectedBacktest?.result && <BacktestResultPanel run={selectedBacktest} onClose={() => setSelectedBacktest(null)} />}
+    </section>
+  </div>
+}
+
+type StrategyVersionView = NonNullable<StrategyRecord['versions']>[number]
+
+function BacktestPreflightCard({
+  preflight,
+  selectedVersion,
+  reportPolicy,
+  signalsMissing,
+  backfillPending,
+  backfillJob,
+  estimate,
+  onEstimate,
+  onBackfill,
+}: {
+  preflight: BacktestPreflight
+  selectedVersion: StrategyVersionView | null
+  reportPolicy: BacktestReportPolicy
+  signalsMissing: boolean
+  backfillPending: boolean
+  backfillJob: ReportJob | null
+  estimate: Record<string, unknown> | null
+  onEstimate: () => Promise<void>
+  onBackfill: () => Promise<void>
+}) {
+  const missingDates = preflight.missing_report_dates
+  const nativePlans = preflight.signal_model === 'report_conditions_v1'
+  const requireDailyReports = !nativePlans || reportPolicy === 'require_complete'
+  const ready = preflight.ready && (!requireDailyReports || missingDates.length === 0)
+  return (
+    <div className={`backtest-preflight ${ready ? 'is-ready' : 'is-warning'}`}>
+      {nativePlans && <><strong>{preflight.can_run ? '报告条件可回放' : '报告条件暂不可回放'}</strong><p>无需每天生成新报告；入场许可有效三个交易日，已建仓止损与目标持续保护至平仓。{reportPolicy === 'require_complete' ? '当前另行启用了“要求日报完整”政策。' : ''}</p></>}
+      {nativePlans && preflight.executable_plan_count != null && <p>可执行计划 {preflight.executable_plan_count} · 不可执行 {preflight.blocked_plan_count ?? 0} · 有效计划覆盖 {formatPercent(preflight.executable_plan_coverage ?? 0)}</p>}
+      <strong>{preflight.signal_count} 个报告信号 · {preflight.available_report_count}/{preflight.trading_day_count} 个日报交易日</strong>
+      {preflight.market_data_checked && <p>行情输入：{preflight.market_data_missing?.length ? '未完整' : '已验证'} · 信号覆盖 {formatPercent(preflight.signal_coverage ?? 0)}</p>}
+      {Boolean(preflight.market_data_missing?.length) && <div className="strategy-inline-error">请先在数据中心补齐回测行情：{preflight.market_data_missing?.map((row) => <p key={`${row.symbol}-${row.code}`}>{row.symbol} · {row.message}</p>)}</div>}
+      <p>当前预检版本：{selectedVersion ? `v${selectedVersion.version_number} · ` : ''}{preflight.strategy_content_hash}</p>
+      {signalsMissing && (
+        <>
+          <p>日报已经齐备，但所选版本尚未生成信号；系统将复用现有日报，不会重新运行持仓 UZI 分析。</p>
+          <div className="strategy-action-row">
+            <button className="primary-button" disabled={backfillPending} onClick={onBackfill}>
+              {backfillJob?.status === 'paused'
+                ? '信号生成已暂停'
+                : backfillPending
+                  ? '新版本信号生成中'
+                  : `生成 ${selectedVersion ? `v${selectedVersion.version_number}` : '新版本'} 信号`}
+            </button>
+          </div>
+        </>
+      )}
+      {missingDates.length > 0 && requireDailyReports && (
+        <>
+          <p>缺失 {missingDates.length} 天：{missingDates.slice(0, 12).join('、')}{missingDates.length > 12 ? '…' : ''}</p>
+          <div className="strategy-action-row">
+            <button className="secondary-button" onClick={onEstimate} disabled={backfillPending}>估算补跑成本</button>
+            <button className="secondary-button" disabled={!estimate || backfillPending} onClick={onBackfill}>
+              {backfillJob?.status === 'paused' ? '补跑已暂停' : backfillPending ? '补跑进行中' : '确认补跑'}
+            </button>
+          </div>
+          {estimate && <pre className="strategy-json-summary">{JSON.stringify(estimate, null, 2)}</pre>}
+        </>
+      )}
+    </div>
+  )
 }
 
 function GovernancePanel({ client, detail, backtests, verifications, events, bindings, methodologyDashboard, reload, perform }: { client: CognitradeApiClient; detail: StrategyRecord; backtests: StrategyBacktest[]; verifications: StrategyVerification[]; events: StrategyEvent[]; bindings: PaperStrategyBinding[]; methodologyDashboard: ReturnType<typeof useCognitrade>['methodologyDashboard']; reload: () => Promise<void>; perform: (key: string, action: () => Promise<void>) => Promise<void> }) {
   const completed = backtests.filter((row) => row.status === 'completed')
   const [versionId, setVersionId] = useState(detail.latest_version?.id || '')
+  const nativeMode = isNativeStrategyVersion(detail, versionId)
   const [backtestId, setBacktestId] = useState(completed.find((row) => row.strategy_version_id === versionId)?.id || '')
   const [accountId, setAccountId] = useState('paper-default')
   const [fundCode, setFundCode] = useState(detail.assignments?.[0]?.fund_code || '')
-  const [mode, setMode] = useState<BacktestMode>(detail.assignments?.[0]?.mode || 'holdings_portfolio')
+  const [selectedMode, setMode] = useState<BacktestMode>(detail.assignments?.[0]?.mode || 'holdings_portfolio')
+  const mode = nativeMode ? 'holdings_portfolio' : selectedMode
   const [verificationThresholds, setVerificationThresholds] = useState<Record<string, number | boolean>>({ minimum_sample_days: 20, minimum_signal_count: 1, maximum_drawdown_pct: 40, minimum_annualized_return_pct: -100, minimum_sharpe: -10, minimum_excess_return_pct: -100, maximum_turnover_pct: 10000, maximum_fee_impact_pct: 10, require_deterministic_replay: true })
   const profile = dashboardValue(methodologyDashboard, 'profile')
   const guardrails = Array.isArray(profile.guardrails) ? profile.guardrails.map((item) => asString(item)).filter(Boolean) : []
@@ -582,14 +1003,19 @@ function GovernancePanel({ client, detail, backtests, verifications, events, bin
   const setVerificationThreshold = (key: string, value: number | boolean) => setVerificationThresholds((current) => ({ ...current, [key]: value }))
   const verify = () => perform('verify', async () => { await client.createStrategyVerification({ strategy_version_id: versionId, backtest_run_id: backtestId, thresholds: verificationThresholds }); await reload() })
   const promote = () => perform('promote', async () => { const version = detail.versions?.find((row) => row.id === versionId); if (!version || !['verified', 'promoted'].includes(version.governance_state)) throw new Error('只有 Verified 或已 Promoted 的版本可以绑定模拟交易。'); await client.promoteStrategyVersion(detail.id, versionId, { account_id: accountId, fund_code: fundCode, mode }); await reload() })
-  return <div className="strategy-panel-stack"><section className="strategy-subpanel"><PanelTitle kicker="METHOD CONTRACT" title={asString(profile.name, '方法论与治理边界')} description={asString(profile.description, 'DomainPack 契约、质量门和 Policy Memory 在这里作为策略治理依据。')} /><div className="governance-grid"><article><strong>DomainPack</strong><span>{asString(profile.version, '未声明版本')}</span><p>证据优先 · 禁止隐式补值 · point-in-time</p></article><article><strong>治理约束</strong><span>{guardrails.length}</span><p>{guardrails.slice(0, 2).join('；') || '后端未返回 guardrails'}</p></article><article><strong>Policy Memory</strong><span>{memories.length}</span><p>只展示 verified / promoted 记录</p></article></div></section><section className="strategy-subpanel"><PanelTitle kicker="VERIFICATION" title="机器检查与人工确认" description="自动检查无前视、lineage、确定性复跑、coverage、样本、费用和绩效门槛；通过后仍需人工确认。" /><div className="strategy-inline-form"><Field label="策略版本"><select value={versionId} onChange={(event) => { setVersionId(event.target.value); setBacktestId('') }}>{detail.versions?.map((row) => <option key={row.id} value={row.id}>v{row.version_number} · {governanceLabel(row.governance_state)}</option>)}</select></Field><Field label="完成的回测"><select value={backtestId} onChange={(event) => setBacktestId(event.target.value)}><option value="">选择同版本回测</option>{completed.filter((row) => row.strategy_version_id === versionId).map((row) => <option key={row.id} value={row.id}>{row.id} · {row.fund_code}</option>)}</select></Field><button className="secondary-button" disabled={!backtestId} onClick={verify}><ShieldCheck size={13} />运行机器检查</button></div><div className="strategy-form-grid is-four"><NumberField label="最少样本交易日" value={Number(verificationThresholds.minimum_sample_days)} min={1} max={100000} onChange={(value) => setVerificationThreshold('minimum_sample_days', value)} /><NumberField label="最少信号数" value={Number(verificationThresholds.minimum_signal_count)} min={1} max={100000} onChange={(value) => setVerificationThreshold('minimum_signal_count', value)} /><NumberField label="最大回撤上限 %" value={Number(verificationThresholds.maximum_drawdown_pct)} min={0} max={100} step="any" onChange={(value) => setVerificationThreshold('maximum_drawdown_pct', value)} /><NumberField label="最低年化收益 %" value={Number(verificationThresholds.minimum_annualized_return_pct)} min={-1000} max={1000} step="any" onChange={(value) => setVerificationThreshold('minimum_annualized_return_pct', value)} /><NumberField label="最低 Sharpe" value={Number(verificationThresholds.minimum_sharpe)} min={-20} max={20} step="any" onChange={(value) => setVerificationThreshold('minimum_sharpe', value)} /><NumberField label="最低超额收益 %" value={Number(verificationThresholds.minimum_excess_return_pct)} min={-1000} max={1000} step="any" onChange={(value) => setVerificationThreshold('minimum_excess_return_pct', value)} /><NumberField label="最大换手率 %" value={Number(verificationThresholds.maximum_turnover_pct)} min={0} max={100000} step="any" onChange={(value) => setVerificationThreshold('maximum_turnover_pct', value)} /><NumberField label="最大费用影响 %" value={Number(verificationThresholds.maximum_fee_impact_pct)} min={0} max={100} step="any" onChange={(value) => setVerificationThreshold('maximum_fee_impact_pct', value)} /><CheckField label="要求确定性复跑一致" checked={Boolean(verificationThresholds.require_deterministic_replay)} onChange={(value) => setVerificationThreshold('require_deterministic_replay', value)} /></div><div className="verification-list">{verifications.map((row) => <article key={row.id}><header><span className={`record-state is-${row.status}`}>{row.status}</span><strong>{row.machine_passed ? '机器检查通过' : '机器检查失败'}</strong><small>{formatDate(row.created_at)}</small></header><div>{Object.entries(row.checks).map(([key, check]) => <span key={key} className={check.passed ? 'is-pass' : 'is-fail'}>{check.passed ? <Check size={11} /> : <CircleAlert size={11} />}{key}</span>)}</div>{row.machine_passed && !row.confirmed_at && <button className="primary-button" onClick={() => void perform(`confirm-${row.id}`, async () => { await client.confirmStrategyVerification(row.id); await reload() })}><BadgeCheck size={13} />人工确认 Verified</button>}</article>)}{!verifications.length && <p className="strategy-inline-empty">暂无验证记录。</p>}</div></section><section className="strategy-subpanel"><PanelTitle kicker="PAPER PROMOTION" title="晋级模拟交易" description="Published 版本不能由策略链路下单；同一账户、基金和模式只能有一个 Promoted 主策略。" /><div className="strategy-inline-form"><Field label="账户"><input value={accountId} onChange={(event) => setAccountId(event.target.value)} /></Field><Field label="基金"><input value={fundCode} onChange={(event) => setFundCode(event.target.value)} /></Field><Field label="模式"><select value={mode} onChange={(event) => setMode(event.target.value as BacktestMode)}><option value="fund_only">基金本体</option><option value="holdings_portfolio">持仓组合</option></select></Field><button className="primary-button" onClick={promote} disabled={!fundCode}><BadgeCheck size={13} />人工晋级 Promoted</button></div><div className="strategy-binding-list">{bindings.map((row) => <span key={row.id}><BadgeCheck size={12} />{row.account_id} · {row.fund_code} · {modeLabel(row.mode)} · {row.strategy_version_id}</span>)}{!bindings.length && <p className="strategy-inline-empty">暂无模拟盘主策略。</p>}</div></section><section className="strategy-subpanel"><PanelTitle kicker="AUDIT TRAIL" title="策略审计事件" description="创建、保存、发布、绑定、验证与晋级均记录 actor 和时间。" /><div className="strategy-event-timeline">{events.map((row) => <article key={row.id}><span /><div><strong>{eventLabel(row.event_type)}</strong><small>{row.actor_id} · {formatDate(row.created_at)}</small><code>{JSON.stringify(row.payload)}</code></div></article>)}{!events.length && <p className="strategy-inline-empty">系统模板没有个人审计事件。</p>}</div></section></div>
+  return <div className="strategy-panel-stack"><section className="strategy-subpanel"><PanelTitle kicker="METHOD CONTRACT" title={asString(profile.name, '方法论与治理边界')} description={asString(profile.description, 'DomainPack 契约、质量门和 Policy Memory 在这里作为策略治理依据。')} /><div className="governance-grid"><article><strong>DomainPack</strong><span>{asString(profile.version, '未声明版本')}</span><p>证据优先 · 禁止隐式补值 · point-in-time</p></article><article><strong>治理约束</strong><span>{guardrails.length}</span><p>{guardrails.slice(0, 2).join('；') || '后端未返回 guardrails'}</p></article><article><strong>Policy Memory</strong><span>{memories.length}</span><p>只展示 verified / promoted 记录</p></article></div></section><section className="strategy-subpanel"><PanelTitle kicker="VERIFICATION" title="机器检查与人工确认" description="自动检查无前视、lineage、确定性复跑、coverage、样本、费用和绩效门槛；通过后仍需人工确认。" /><div className="strategy-inline-form"><Field label="策略版本"><AppSelect value={versionId} onChange={(event) => { setVersionId(event.target.value); setBacktestId('') }}>{detail.versions?.map((row) => <option key={row.id} value={row.id}>v{row.version_number} · {governanceLabel(row.governance_state)}</option>)}</AppSelect></Field><Field label="完成的回测"><AppSelect value={backtestId} onChange={(event) => setBacktestId(event.target.value)}><option value="">选择同版本回测</option>{completed.filter((row) => row.strategy_version_id === versionId).map((row) => <option key={row.id} value={row.id}>{row.id} · {row.fund_code}</option>)}</AppSelect></Field><button className="secondary-button" disabled={!backtestId} onClick={verify}><ShieldCheck size={13} />运行机器检查</button></div><div className="strategy-form-grid is-four"><NumberField label="最少样本交易日" value={Number(verificationThresholds.minimum_sample_days)} min={1} max={100000} onChange={(value) => setVerificationThreshold('minimum_sample_days', value)} /><NumberField label="最少信号数" value={Number(verificationThresholds.minimum_signal_count)} min={1} max={100000} onChange={(value) => setVerificationThreshold('minimum_signal_count', value)} /><NumberField label="最大回撤上限 %" value={Number(verificationThresholds.maximum_drawdown_pct)} min={0} max={100} step="any" onChange={(value) => setVerificationThreshold('maximum_drawdown_pct', value)} /><NumberField label="最低年化收益 %" value={Number(verificationThresholds.minimum_annualized_return_pct)} min={-1000} max={1000} step="any" onChange={(value) => setVerificationThreshold('minimum_annualized_return_pct', value)} /><NumberField label="最低 Sharpe" value={Number(verificationThresholds.minimum_sharpe)} min={-20} max={20} step="any" onChange={(value) => setVerificationThreshold('minimum_sharpe', value)} /><NumberField label="最低超额收益 %" value={Number(verificationThresholds.minimum_excess_return_pct)} min={-1000} max={1000} step="any" onChange={(value) => setVerificationThreshold('minimum_excess_return_pct', value)} /><NumberField label="最大换手率 %" value={Number(verificationThresholds.maximum_turnover_pct)} min={0} max={100000} step="any" onChange={(value) => setVerificationThreshold('maximum_turnover_pct', value)} /><NumberField label="最大费用影响 %" value={Number(verificationThresholds.maximum_fee_impact_pct)} min={0} max={100} step="any" onChange={(value) => setVerificationThreshold('maximum_fee_impact_pct', value)} /><CheckField label="要求确定性复跑一致" checked={Boolean(verificationThresholds.require_deterministic_replay)} onChange={(value) => setVerificationThreshold('require_deterministic_replay', value)} /></div><div className="verification-list">{verifications.map((row) => <article key={row.id}><header><span className={`record-state is-${row.status}`}>{row.status}</span><strong>{row.machine_passed ? '机器检查通过' : '机器检查失败'}</strong><small>{formatDate(row.created_at)}</small></header><div>{Object.entries(row.checks).map(([key, check]) => <span key={key} className={check.passed ? 'is-pass' : 'is-fail'}>{check.passed ? <Check size={11} /> : <CircleAlert size={11} />}{key}</span>)}</div>{row.machine_passed && !row.confirmed_at && <button className="primary-button" onClick={() => void perform(`confirm-${row.id}`, async () => { await client.confirmStrategyVerification(row.id); await reload() })}><BadgeCheck size={13} />人工确认 Verified</button>}</article>)}{!verifications.length && <p className="strategy-inline-empty">暂无验证记录。</p>}</div></section><section className="strategy-subpanel"><PanelTitle kicker="PAPER PROMOTION" title="晋级模拟交易" description="Published 版本不能由策略链路下单；同一账户、基金和模式只能有一个 Promoted 主策略。" /><div className="strategy-inline-form"><Field label="账户"><input value={accountId} onChange={(event) => setAccountId(event.target.value)} /></Field><Field label="基金"><input value={fundCode} onChange={(event) => setFundCode(event.target.value)} /></Field><Field label="模式"><AppSelect value={mode} onChange={(event) => setMode(event.target.value as BacktestMode)}>{!nativeMode && <option value="fund_only">基金本体</option>}<option value="holdings_portfolio">持仓组合</option></AppSelect></Field><button className="primary-button" onClick={promote} disabled={!fundCode}><BadgeCheck size={13} />人工晋级 Promoted</button></div><div className="strategy-binding-list">{bindings.map((row) => <span key={row.id}><BadgeCheck size={12} />{row.account_id} · {row.fund_code} · {modeLabel(row.mode)} · {row.strategy_version_id}</span>)}{!bindings.length && <p className="strategy-inline-empty">暂无模拟盘主策略。</p>}</div></section><section className="strategy-subpanel"><PanelTitle kicker="AUDIT TRAIL" title="策略审计事件" description="创建、保存、发布、绑定、验证与晋级均记录 actor 和时间。" /><div className="strategy-event-timeline">{events.map((row) => <article key={row.id}><span /><div><strong>{eventLabel(row.event_type)}</strong><small>{row.actor_id} · {formatDate(row.created_at)}</small><code>{JSON.stringify(row.payload)}</code></div></article>)}{!events.length && <p className="strategy-inline-empty">系统模板没有个人审计事件。</p>}</div></section></div>
 }
 
 function PublishReview({ detail, document, busy, onCancel, onPublish }: { detail: StrategyRecord; document: StrategyDocument; busy: boolean; onCancel: () => void; onPublish: () => void }) {
-  return <div className="strategy-modal-backdrop" role="presentation"><section className="strategy-modal" role="dialog" aria-modal="true" aria-labelledby="publish-review-title"><header><div><span className="section-kicker">CONTROLLED PUBLISH</span><h2 id="publish-review-title">确认发布不可变版本</h2><p>发布后该快照不可编辑或删除；已有 Assignment 在下一交易日切换。</p></div><button className="secondary-button" onClick={onCancel}>取消</button></header><div className="publish-review-grid"><article><strong>策略</strong><span>{detail.name}</span><small>draft revision {detail.draft_revision}</small></article><article><strong>复合权重</strong><span>{Object.values(document.fund_composite).map((value) => `${value * 100}%`).join(' / ')}</span><small>缺失不重分配</small></article><article><strong>质量门</strong><span>coverage {(document.quality_gates.minimum_coverage * 100).toFixed(0)}%–{(document.quality_gates.normal_coverage * 100).toFixed(0)}%</span><small>PIT 强制 · 持仓 UZI 强制</small></article><article><strong>信号</strong><span>买入 {document.signal_thresholds.buy} · 观察 {document.signal_thresholds.watch}</span><small>沿用 {document.signal_thresholds.missing_report_carry_days} 个交易日</small></article><article><strong>技术执行</strong><span>MA {document.execution.fast_period}/{document.execution.slow_period}</span><small>单票上限 {document.execution.max_single_stock_pct}%</small></article><article><strong>数据 Pin</strong><span>UZI {document.pins.uzi_methodology_version}</span><small>{document.pins.model_id} · {document.pins.factor_extractor_version}</small></article></div><details><summary>查看完整发布合同</summary><pre>{JSON.stringify(document, null, 2)}</pre></details><footer><button className="primary-button" onClick={onPublish} disabled={busy}>{busy ? <LoaderCircle className="is-spinning" size={14} /> : <BadgeCheck size={14} />}确认发布</button></footer></section></div>
+  if (isReportConditionsDocument(document)) return <div className="strategy-modal-backdrop" role="presentation"><section className="strategy-modal" role="dialog" aria-modal="true" aria-labelledby="publish-review-title">
+    <header><h2 id="publish-review-title">确认发布不可变版本</h2><button className="secondary-button" onClick={onCancel}>取消</button></header>
+    <div className="publish-review-grid"><article><strong>策略</strong><span>{detail.name}</span><small>V2 · 原生报告条件回放</small></article><article><strong>原生来源</strong><code>{document.report_signal.source}</code><small>{document.pins.uzi_source_commit}</small></article><article><strong>交易约定</strong><span>披露权重首批 50% · 有效 3 个交易日</span><small>收盘触发、次日开盘 · 单票上限 {document.execution.max_single_stock_pct}%</small></article><article><strong>报告输入</strong><span>{document.report_inputs.research_profile} · 前 {document.report_inputs.top_n} 只持仓</span><small>冻结数据 · 完整 Agent · 仅持仓组合</small></article></div>
+    <details><summary>查看完整发布合同</summary><pre>{JSON.stringify(document, null, 2)}</pre></details><footer><button className="primary-button" onClick={onPublish} disabled={busy}><BadgeCheck size={14} />确认发布</button></footer>
+  </section></div>
+  return <div className="strategy-modal-backdrop" role="presentation"><section className="strategy-modal" role="dialog" aria-modal="true" aria-labelledby="publish-review-title"><header><div><span className="section-kicker">CONTROLLED PUBLISH</span><h2 id="publish-review-title">确认发布不可变版本</h2><p>发布后该快照不可编辑或删除；已有 Assignment 在下一交易日切换。</p></div><button className="secondary-button" onClick={onCancel}>取消</button></header><div className="publish-review-grid"><article><strong>策略</strong><span>{detail.name}</span><small>draft revision {detail.draft_revision}</small></article><article><strong>复合权重</strong><span>{Object.values(document.fund_composite).map((value) => `${value * 100}%`).join(' / ')}</span><small>缺失不重分配</small></article><article><strong>质量门</strong><span>coverage {(document.quality_gates.minimum_coverage * 100).toFixed(0)}%–{(document.quality_gates.normal_coverage * 100).toFixed(0)}%</span><small>PIT 强制 · 持仓 UZI 强制</small></article><article><strong>信号</strong><span>买入 {document.signal_thresholds.buy} · 观察 {document.signal_thresholds.watch}</span><small>沿用 {document.signal_thresholds.missing_report_carry_days} 个交易日</small></article><article><strong>技术执行</strong><span>MA {document.execution.fast_period}/{document.execution.slow_period}</span><small>单票上限 {document.execution.max_single_stock_pct}%</small></article><article><strong>基金建仓</strong><span>上限 {Number(document.asset_execution.otc_fund.max_position_pct ?? 100)}% · 单批 {Number(document.asset_execution.otc_fund.entry_tranche_pct ?? 100)}%</span><small>最多 {Number(document.asset_execution.otc_fund.max_entry_tranches ?? 1)} 次 · 间隔 {Number(document.asset_execution.otc_fund.minimum_entry_interval_days ?? 0)} 个估值日</small></article><article><strong>数据 Pin</strong><span>UZI {document.pins.uzi_methodology_version}</span><small>{document.pins.model_id} · {document.pins.factor_extractor_version}</small></article></div><details><summary>查看完整发布合同</summary><pre>{JSON.stringify(document, null, 2)}</pre></details><footer><button className="primary-button" onClick={onPublish} disabled={busy}>{busy ? <LoaderCircle className="is-spinning" size={14} /> : <BadgeCheck size={14} />}确认发布</button></footer></section></div>
 }
 
-function AssetFeeEditor({ document, disabled, mutate }: { document: StrategyDocument; disabled: boolean; mutate: (fn: (next: StrategyDocument) => void) => void }) {
+function AssetFeeEditor<T extends StrategyDocument>({ document, disabled, mutate }: { document: T; disabled: boolean; mutate: (fn: (next: T) => void) => void }) {
   const fields: Array<{ group: keyof StrategyDocument['asset_execution']; key: string; label: string }> = [
     { group: 'stock', key: 'commission_rate', label: '股票佣金率' }, { group: 'stock', key: 'minimum_commission', label: '股票最低佣金' }, { group: 'stock', key: 'stamp_duty_rate', label: '股票印花税率' },
     { group: 'exchange_fund', key: 'commission_rate', label: '场内基金佣金率' }, { group: 'exchange_fund', key: 'minimum_commission', label: '场内最低佣金' },
@@ -605,19 +1031,80 @@ function AdvancedDocumentEditor({ document, onReplace }: { document: StrategyDoc
 }
 
 function SignalTable({ signals }: { signals: TradeSignal[] }) {
-  return <div className="strategy-signal-table"><table><thead><tr><th>层级/标的</th><th>状态</th><th>分数区间</th><th>coverage</th><th>confidence</th><th>来源</th></tr></thead><tbody>{signals.map((row) => <tr key={row.id || `${row.kind}-${row.subject_code}`}><td><strong>{row.kind === 'fund' ? '基金' : '个股'} · {row.subject_code}</strong><small>{row.as_of_date}</small></td><td><span className={`signal-state is-${row.state.toLowerCase()}`}>{row.state}</span></td><td>{formatScore(row.score_lower_bound)}–{formatScore(row.score_upper_bound)}</td><td>{formatPercent(row.coverage)}</td><td>{formatPercent(row.confidence)}</td><td><code>{row.source_report_set_id}</code></td></tr>)}{!signals.length && <tr><td colSpan={6}>选择真实日报后预演；这里不会生成演示信号。</td></tr>}</tbody></table></div>
+  return <div className="strategy-signal-table"><table>
+    <thead><tr><th>层级/标的</th><th>状态 / 原生评级</th><th>分数 / 报告价位</th><th>coverage</th><th>confidence</th><th>来源</th></tr></thead>
+    <tbody>{signals.map((row) => <tr key={row.id || `${row.kind}-${row.subject_code}`}>
+      <td><strong>{row.kind === 'fund' ? '基金' : '个股'} · {row.subject_code}</strong><small>{row.as_of_date}</small></td>
+      <td><span className={`signal-state is-${row.state.toLowerCase()}`}>{row.state}</span>{row.execution_plan && <small>{row.execution_plan.native_verdict_label || row.execution_plan.native_verdict || '原生评级缺失'}</small>}</td>
+      <td>{row.execution_plan ? <>
+        <strong>入场 {formatScore(row.execution_plan.prices.entry)} · 止损 {formatScore(row.execution_plan.prices.stop)} · 目标 {formatScore(row.execution_plan.prices.target)}</strong>
+        <small>{row.execution_plan.executable ? row.execution_plan.entry_permitted ? '原生允许条件入场' : '原生无新入场信号' : '报告条件不可执行'}</small>
+        <small>{row.execution_plan.errors.join('；')}</small>
+      </> : <>{formatScore(row.score_lower_bound)}–{formatScore(row.score_upper_bound)}</>}</td>
+      <td>{formatPercent(row.coverage)}</td><td>{formatPercent(row.confidence)}</td>
+      <td><code>{row.source_report_set_id}</code>{row.execution_plan && <>
+        <small>r{row.execution_plan.source_report_revision} · {row.execution_plan.source_field}</small>
+        <code>{row.execution_plan.source_artifact_id}</code><small>{row.execution_plan.source_content_hash}</small>
+      </>}</td>
+    </tr>)}{!signals.length && <tr><td colSpan={6}>选择真实日报后预演；这里不会生成演示信号。</td></tr>}</tbody>
+  </table></div>
 }
 
-function RuleSection({ index, title, description, children }: { index: string; title: string; description: string; children: React.ReactNode }) { return <section className="strategy-rule-section"><header><span>{index}</span><div><h3>{title}</h3><p>{description}</p></div></header>{children}</section> }
-function PanelTitle({ kicker, title, description }: { kicker: string; title: string; description: string }) { return <header className="strategy-panel-title"><div><span className="section-kicker">{kicker}</span><h3>{title}</h3><p>{description}</p></div></header> }
-function Field({ label, wide, children }: { label: string; wide?: boolean; children: React.ReactNode }) { return <label className={`strategy-field ${wide ? 'is-wide' : ''}`}><span>{label}</span>{children}</label> }
-function NumberField({ label, value, min, max, step = 1, disabled = false, onChange }: { label: string; value: number; min: number; max: number; step?: number | 'any'; disabled?: boolean; onChange: (value: number) => void }) { return <Field label={label}><input type="number" value={value} min={min} max={max} step={step} disabled={disabled} onChange={(event) => onChange(Number(event.target.value))} /></Field> }
-function PercentField({ label, value, disabled, onChange }: { label: string; value: number; disabled: boolean; onChange: (value: number) => void }) { return <Field label={label}><div className="strategy-percent-input"><input type="number" min="0" max="100" step="1" value={Number((value * 100).toFixed(4))} disabled={disabled} onChange={(event) => onChange(Number(event.target.value) / 100)} /><span>%</span></div></Field> }
-function CheckField({ label, checked, disabled = false, onChange = () => undefined }: { label: string; checked: boolean; disabled?: boolean; onChange?: (value: boolean) => void }) { return <label className="strategy-check-field"><input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} /><span><i><Check size={10} /></i>{label}</span></label> }
-function FactorGroup({ title, weights, disabled, onChange }: { title: string; weights: Record<string, number>; disabled: boolean; onChange: (key: string, value: number) => void }) { const total = Object.values(weights).reduce((sum, value) => sum + value, 0); return <section className="strategy-factor-group"><header><strong>{title}</strong><span className={Math.abs(total - 1) < .0001 ? 'is-valid' : 'is-invalid'}>{(total * 100).toFixed(0)}%</span></header>{Object.entries(weights).map(([key, value]) => <label key={key}><code>{factorLabel(key)}</code><div className="strategy-percent-input"><input type="number" min="0" max="100" value={Number((value * 100).toFixed(4))} disabled={disabled} onChange={(event) => onChange(key, Number(event.target.value) / 100)} /><span>%</span></div></label>)}</section> }
-function EmptyPanel({ icon: Icon, title, text }: { icon: LucideIcon; title: string; text: string }) { return <div className="strategy-empty-panel"><Icon size={24} /><strong>{title}</strong><p>{text}</p></div> }
+function RuleSection({ index, title, description, children }: { index: string; title: string; description: string; children: React.ReactNode }) {
+  return (
+    <section className="strategy-rule-section">
+      <header><span>{index}</span><div><h3>{title}</h3><p>{description}</p></div></header>
+      {children}
+    </section>
+  )
+}
 
-function readUnsavedForm(strategyId: string, revision: number): { name: string; document: StrategyDocument } | null { try { const value = JSON.parse(localStorage.getItem(UNSAVED_FORM_KEY) || '{}') as { strategy_id?: string; server_revision?: number; unsaved_form?: { name: string; document: StrategyDocument } }; return value.strategy_id === strategyId && value.server_revision === revision && value.unsaved_form ? value.unsaved_form : null } catch { return null } }
+function PanelTitle({ kicker, title, description }: { kicker: string; title: string; description: string }) {
+  return <header className="strategy-panel-title"><div><span className="section-kicker">{kicker}</span><h3>{title}</h3><p>{description}</p></div></header>
+}
+
+function Field({ label, wide, children }: { label: string; wide?: boolean; children: React.ReactNode }) {
+  return <label className={`strategy-field ${wide ? 'is-wide' : ''}`}><span>{label}</span>{children}</label>
+}
+
+function NumberField({ label, value, min, max, step = 1, disabled = false, onChange }: { label: string; value: number; min: number; max: number; step?: number | 'any'; disabled?: boolean; onChange: (value: number) => void }) {
+  return <Field label={label}><input type="number" value={value} min={min} max={max} step={step} disabled={disabled} onChange={(event) => onChange(Number(event.target.value))} /></Field>
+}
+
+function PercentField({ label, value, disabled, onChange }: { label: string; value: number; disabled: boolean; onChange: (value: number) => void }) {
+  return <Field label={label}><div className="strategy-percent-input"><input type="number" min="0" max="100" step="1" value={Number((value * 100).toFixed(4))} disabled={disabled} onChange={(event) => onChange(Number(event.target.value) / 100)} /><span>%</span></div></Field>
+}
+
+function CheckField({ label, checked, disabled = false, onChange = () => undefined }: { label: string; checked: boolean; disabled?: boolean; onChange?: (value: boolean) => void }) {
+  return <label className="strategy-check-field"><input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} /><span><i><Check size={10} /></i>{label}</span></label>
+}
+
+function FactorGroup({ title, weights, disabled, onChange }: { title: string; weights: Record<string, number>; disabled: boolean; onChange: (key: string, value: number) => void }) {
+  const total = Object.values(weights).reduce((sum, value) => sum + value, 0)
+  return <section className="strategy-factor-group"><header><strong>{title}</strong><span className={Math.abs(total - 1) < .0001 ? 'is-valid' : 'is-invalid'}>{(total * 100).toFixed(0)}%</span></header>{Object.entries(weights).map(([key, value]) => <label key={key}><code>{factorLabel(key)}</code><div className="strategy-percent-input"><input type="number" min="0" max="100" value={Number((value * 100).toFixed(4))} disabled={disabled} onChange={(event) => onChange(key, Number(event.target.value) / 100)} /><span>%</span></div></label>)}</section>
+}
+
+function EmptyPanel({ icon: Icon, title, text }: { icon: LucideIcon; title: string; text: string }) {
+  return <div className="strategy-empty-panel"><Icon size={24} /><strong>{title}</strong><p>{text}</p></div>
+}
+
+type CachedStrategyDraft = {
+  strategy_id?: string
+  server_revision?: number
+  unsaved_form?: { name: string; document: StrategyDocument }
+}
+
+function readUnsavedForm(strategyId: string, revision: number): CachedStrategyDraft['unsaved_form'] | null {
+  try {
+    const cached = JSON.parse(localStorage.getItem(UNSAVED_FORM_KEY) || '{}') as CachedStrategyDraft
+    return cached.strategy_id === strategyId && cached.server_revision === revision && cached.unsaved_form
+      ? cached.unsaved_form
+      : null
+  } catch {
+    return null
+  }
+}
+
 function readWorkspaceContext(): StrategyWorkspaceContext {
   const query = new URLSearchParams(window.location.search)
   const tabValue = query.get('tab') || ''
@@ -630,23 +1117,148 @@ function readWorkspaceContext(): StrategyWorkspaceContext {
     fundName: query.get('fund_name') || undefined,
     sourceRunId: query.get('source_run_id') || undefined,
     sourceArtifactId: query.get('source_artifact_id') || undefined,
+    fundBundleId: query.get('fund_bundle_id') || undefined,
     reportSetId: query.get('report_set_id') || undefined,
     strategyVersionId: query.get('strategy_version_id') || undefined,
     assignmentId: query.get('assignment_id') || undefined,
-    mode: modeValue === 'fund_only' ? 'fund_only' : 'holdings_portfolio',
+    mode: modeValue === 'fund_only' || modeValue === 'holdings_portfolio' ? modeValue : undefined,
     holdingSymbol: query.get('holding_symbol') || undefined,
   }
 }
-function validateDocument(document: StrategyDocument, name: string): string { if (!name.trim()) return '策略名称不能为空。'; if (Math.abs(Object.values(document.fund_composite).reduce((sum, value) => sum + value, 0) - 1) > .0001) return '复合模型三组权重之和必须等于 100%。'; for (const [group, weights] of Object.entries(document.factor_weights)) if (Math.abs(Object.values(weights).reduce((sum, value) => sum + value, 0) - 1) > .0001) return `${group} 因子权重之和必须等于 100%。`; if (document.signal_thresholds.watch >= document.signal_thresholds.buy) return '观察阈值必须低于买入阈值。'; if (document.quality_gates.minimum_coverage >= document.quality_gates.normal_coverage) return '最低 coverage 必须低于正常 coverage。'; if (document.execution.fast_period >= document.execution.slow_period) return '快均线周期必须小于慢均线周期。'; return '' }
-function filterLabel(value: StrategyFilter): string { return ({ all: '全部', template: '模板', draft: '草稿', published: '已发布', archived: '已归档' })[value] }
-function lifecycleLabel(value: string): string { return ({ draft: '草稿', published: '已发布', archived: '已归档' } as Record<string, string>)[value] || value }
-function governanceLabel(value: string): string { return ({ published: 'Published', verified: 'Verified', promoted: 'Promoted' } as Record<string, string>)[value] || value }
-function modeLabel(value: BacktestMode): string { return value === 'fund_only' ? '基金本体' : '持仓组合' }
-function factorLabel(value: string): string { return ({ year_1_return: '近一年收益', since_inception_annualized: '成立以来年化', benchmark_excess_year_1: '近一年超额', max_drawdown: '最大回撤', volatility: '波动率', fee: '费率', return_consistency: '收益一致性', uzi_overall_score: 'UZI 总评分', count_coverage: '数量覆盖', weight_coverage: '权重覆盖', disclosure_freshness: '披露新鲜度', concentration_risk: '集中风险', lookthrough_completeness: '穿透完整度', unsupported_weight: '不支持权重' } as Record<string, string>)[value] || value }
-function eventLabel(value: string): string { return ({ created: '创建策略', draft_saved: '保存草稿', published: '发布版本', assignment_created: '创建绑定', assignment_updated: '更新绑定', verification_created: '创建验证', verified: '人工确认 Verified', promoted: '晋级 Promoted', archived: '归档策略', restored: '恢复策略' } as Record<string, string>)[value] || value }
-function formatDate(value: string): string { const parsed = new Date(value); return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString('zh-CN', { hour12: false }) }
-function formatPercent(value: unknown): string { const number = Number(value); return Number.isFinite(number) ? `${(number * 100).toFixed(1)}%` : '—' }
-function formatScore(value: unknown): string { const number = Number(value); return Number.isFinite(number) ? number.toFixed(1) : '—' }
-function metricSummary(metrics: Record<string, number>): string { if (!Object.keys(metrics || {}).length) return '等待结果'; return `收益 ${Number(metrics.total_return_pct || 0).toFixed(2)}% · 回撤 ${Number(metrics.max_drawdown_pct || 0).toFixed(2)}% · Sharpe ${Number(metrics.sharpe || 0).toFixed(2)}` }
-function today(offsetDays = 0): string { const value = new Date(); value.setDate(value.getDate() + offsetDays); return value.toISOString().slice(0, 10) }
-function errorMessage(value: unknown): string { if (value instanceof CognitradeApiError) return `${value.message}${value.requestId ? `（request ${value.requestId}）` : ''}`; return value instanceof Error ? value.message : String(value || '未知错误') }
+
+function validateDocument(document: StrategyDocument, name: string): string {
+  if (!name.trim()) return '策略名称不能为空。'
+  if (isReportConditionsDocument(document)) {
+    if (document.report_inputs.enabled_backtest_modes.join(',') !== 'holdings_portfolio') return '原生报告条件回放仅支持持仓组合。'
+    if (document.report_signal.model !== 'report_conditions_v1') return 'V2 必须使用原生报告条件合同。'
+    if (!(document.execution.max_single_stock_pct > 0 && document.execution.max_single_stock_pct <= 100)) return '单票仓位上限必须在 0–100% 之间。'
+    return ''
+  }
+  if (!hasUnitWeight(document.fund_composite)) return '复合模型三组权重之和必须等于 100%。'
+  for (const [group, weights] of Object.entries(document.factor_weights)) {
+    if (!hasUnitWeight(weights)) return `${group} 因子权重之和必须等于 100%。`
+  }
+  if (document.signal_thresholds.watch >= document.signal_thresholds.buy) return '观察阈值必须低于买入阈值。'
+  if (document.quality_gates.minimum_coverage >= document.quality_gates.normal_coverage) return '最低 coverage 必须低于正常 coverage。'
+  if (document.execution.fast_period >= document.execution.slow_period) return '快均线周期必须小于慢均线周期。'
+
+  const otc = document.asset_execution.otc_fund
+  const maxPosition = Number(otc.max_position_pct ?? 100)
+  const entryTranche = Number(otc.entry_tranche_pct ?? 100)
+  const maxTranches = Number(otc.max_entry_tranches ?? 1)
+  const minimumInterval = Number(otc.minimum_entry_interval_days ?? 0)
+  if (maxPosition <= 0 || maxPosition > 100) return '基金最大仓位必须在 0–100% 之间。'
+  if (entryTranche <= 0 || entryTranche > 100) return '单次建仓比例必须在 0–100% 之间。'
+  if (!Number.isInteger(maxTranches) || maxTranches < 1) return '最大建仓次数必须是正整数。'
+  if (!Number.isInteger(minimumInterval) || minimumInterval < 0) return '建仓间隔估值日必须是非负整数。'
+  return ''
+}
+
+function isNativeStrategyVersion(detail: StrategyRecord, versionId?: string): boolean {
+  const version = detail.versions?.find((row) => row.id === versionId) || detail.latest_version
+  if (version?.schema_version) return version.schema_version === '2'
+  if (version?.document) return isReportConditionsDocument(version.document)
+  return isReportConditionsDocument(detail.draft?.document)
+}
+
+function hasUnitWeight(weights: Record<string, number>): boolean {
+  return !(Math.abs(Object.values(weights).reduce((sum, value) => sum + value, 0) - 1) > .0001)
+}
+
+const FILTER_LABELS: Record<StrategyFilter, string> = {
+  all: '全部',
+  template: '模板',
+  draft: '草稿',
+  published: '已发布',
+  archived: '已归档',
+}
+
+const LIFECYCLE_LABELS: Record<string, string> = {
+  draft: '草稿',
+  published: '已发布',
+  archived: '已归档',
+}
+
+const GOVERNANCE_LABELS: Record<string, string> = {
+  published: 'Published',
+  verified: 'Verified',
+  promoted: 'Promoted',
+}
+
+const FACTOR_LABELS: Record<string, string> = {
+  year_1_return: '近一年收益',
+  since_inception_annualized: '成立以来年化',
+  benchmark_excess_year_1: '近一年超额',
+  max_drawdown: '最大回撤',
+  volatility: '波动率',
+  fee: '费率',
+  return_consistency: '收益一致性',
+  uzi_overall_score: 'UZI 总评分',
+  count_coverage: '数量覆盖',
+  weight_coverage: '权重覆盖',
+  disclosure_freshness: '披露新鲜度',
+  concentration_risk: '集中风险',
+  lookthrough_completeness: '穿透完整度',
+  unsupported_weight: '不支持权重',
+}
+
+const EVENT_LABELS: Record<string, string> = {
+  created: '创建策略',
+  draft_saved: '保存草稿',
+  published: '发布版本',
+  assignment_created: '创建绑定',
+  assignment_updated: '更新绑定',
+  verification_created: '创建验证',
+  verified: '人工确认 Verified',
+  promoted: '晋级 Promoted',
+  archived: '归档策略',
+  restored: '恢复策略',
+}
+
+function filterLabel(value: StrategyFilter): string {
+  return FILTER_LABELS[value]
+}
+
+function lifecycleLabel(value: string): string {
+  return LIFECYCLE_LABELS[value] || value
+}
+
+function governanceLabel(value: string): string {
+  return GOVERNANCE_LABELS[value] || value
+}
+
+function factorLabel(value: string): string {
+  return FACTOR_LABELS[value] || value
+}
+
+function eventLabel(value: string): string {
+  return EVENT_LABELS[value] || value
+}
+
+function formatDate(value: string): string {
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.valueOf()) ? value : parsed.toLocaleString('zh-CN', { hour12: false })
+}
+
+function formatPercent(value: unknown): string {
+  const number = Number(value)
+  return Number.isFinite(number) ? `${(number * 100).toFixed(1)}%` : '—'
+}
+
+function formatScore(value: unknown): string {
+  const number = Number(value)
+  return Number.isFinite(number) ? number.toFixed(1) : '—'
+}
+
+function today(offsetDays = 0): string {
+  const value = new Date()
+  value.setDate(value.getDate() + offsetDays)
+  return value.toISOString().slice(0, 10)
+}
+
+function errorMessage(value: unknown): string {
+  if (value instanceof CognitradeApiError) {
+    return `${value.message}${value.requestId ? `（request ${value.requestId}）` : ''}`
+  }
+  return value instanceof Error ? value.message : String(value || '未知错误')
+}

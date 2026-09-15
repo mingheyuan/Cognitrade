@@ -3,12 +3,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from threading import Lock
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
+
 
 from domain_packs.finance_ashare.subagents.uzi_agent_roleplay import (
     AgentRoleplayBatch,
     AgentRoleplayVote,
     PERSONAS_DIR,
+    _validate_batch_members,
     apply_deep_agent_roleplay,
     load_persona,
 )
@@ -84,6 +88,32 @@ class _RoleplayProvider:
             raise AssertionError(f"unexpected schema: {schema}")
 
 
+class _FlakyRoleplayProvider(_RoleplayProvider):
+    def __init__(self, workspace_root: Path) -> None:
+        super().__init__()
+        self.settings = SimpleNamespace(
+            workspace_root=workspace_root,
+            provider_name="test",
+            default_model="test-model",
+            uzi_llm_max_concurrency=2,
+        )
+        self.calls: dict[str, int] = {}
+
+    def parse(self, *, system_prompt, user_prompt, schema, temperature=0.2):
+        group_label = user_prompt.splitlines()[0].split("：", 1)[1]
+        with self._lock:
+            self.calls[group_label] = self.calls.get(group_label, 0) + 1
+            attempt = self.calls[group_label]
+        if group_label.startswith("F") and attempt == 1:
+            raise RuntimeError("temporary roleplay group failure")
+        return super().parse(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            schema=schema,
+            temperature=temperature,
+        )
+
+
 class UziDeepRoleplayTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -99,6 +129,92 @@ class UziDeepRoleplayTests(unittest.TestCase):
         self.assertIn("Mr. Market", persona.voice)
         stub = load_persona({"investor_id": "templeton", "school": "A"})
         self.assertFalse(stub.is_flagship)
+
+    def test_explicit_chinese_evidence_shortfall_is_a_concrete_headline(self) -> None:
+        vote = AgentRoleplayVote(
+            investor_id="zhang_mz",
+            signal="insufficient_evidence",
+            score=0,
+            headline="资金接力强度证据不足",
+            reasoning="冻结快照没有换手率、封板强度和席位联动数据，因此不能形成可审计的短线判断。",
+            override_rule_engine=True,
+            override_reason="规则骨架缺少 A 股资金证据，Agent 明确保留缺口。",
+        )
+
+        self.assertEqual(vote.signal, "insufficient_evidence")
+
+    def test_roleplay_allows_summary_headline_when_reasoning_is_grounded(self) -> None:
+        vote = AgentRoleplayVote(
+            investor_id="zhang_mz",
+            signal="bearish",
+            score=20,
+            headline="当前阶段暂不参与交易",
+            reasoning="冻结快照显示当日跌幅 3.5%，同时缺少换手率和封板强度，因此不满足资金接力条件。",
+            override_rule_engine=True,
+            override_reason="根据冻结行情修正规则骨架。",
+        )
+
+        self.assertEqual(vote.headline, "当前阶段暂不参与交易")
+
+    def test_explicit_skip_can_ground_abstention_in_verdict(self) -> None:
+        vote = AgentRoleplayVote(
+            investor_id="zhang_mz",
+            signal="skip",
+            score=0,
+            headline="当前条件不进入交易评估",
+            reasoning="依照该评委的交易纪律，本轮保持规则骨架给出的结论并停止方向判断。",
+            comment="规则结果保持原样。",
+            verdict="不追",
+            override_rule_engine=False,
+            override_reason=None,
+        )
+
+        self.assertEqual(vote.signal, "skip")
+
+    def test_non_abstaining_concrete_fact_does_not_require_host_keywords(self) -> None:
+        vote = AgentRoleplayVote(
+                investor_id="zhang_mz",
+                signal="bullish",
+                score=80,
+                headline="公司订单主要依赖晶圆厂扩产",
+                reasoning="公司主要销售刻蚀设备，客户资本开支影响订单兑现，产品验证与售后服务决定客户粘性。",
+                comment="保持原有观点。",
+                verdict="看多",
+                override_rule_engine=False,
+                override_reason=None,
+            )
+        self.assertEqual(vote.score, 80)
+        self.assertEqual(vote.signal, "bullish")
+
+    def test_group_code_alias_keeps_strict_membership_gate(self) -> None:
+        batch = AgentRoleplayBatch(
+            agent_reviewed=True,
+            group_label="G+H+I",
+            votes=[
+                AgentRoleplayVote(
+                    investor_id="shaw",
+                    signal="skip",
+                    score=0,
+                    headline="当前条件不进入交易评估",
+                    reasoning="依照该评委的交易纪律，本轮保持规则骨架给出的结论并停止方向判断。",
+                    verdict="skip",
+                    override_rule_engine=False,
+                    override_reason=None,
+                )
+            ],
+        )
+
+        _validate_batch_members(
+            batch,
+            ["shaw"],
+            expected_group_label="G+H+I · 量化、科技领袖与AI瓶颈",
+        )
+        with self.assertRaises(ValueError):
+            _validate_batch_members(
+                batch,
+                ["simons"],
+                expected_group_label="G+H+I · 量化、科技领袖与AI瓶颈",
+            )
 
     def test_medium_never_invokes_agent_roleplay(self) -> None:
         provider = _RoleplayProvider()
@@ -116,7 +232,7 @@ class UziDeepRoleplayTests(unittest.TestCase):
         self.assertEqual(result["quality_status"], "data_gap")
         self.assertEqual(result["roleplay"]["status"], "required_but_unavailable")
         self.assertFalse(result["roleplay"]["agent_reviewed"])
-        self.assertIn("deep_agent_roleplay_required", result["data_gap"])
+        self.assertIn("agent_roleplay_required", result["data_gap"])
         self.assertEqual(result["per_investor_override"], {})
 
     def test_deep_roleplays_all_66_seats_in_five_prefix_stable_groups(self) -> None:
@@ -133,6 +249,68 @@ class UziDeepRoleplayTests(unittest.TestCase):
         self.assertEqual(len(result["per_investor_override"]), 66)
         self.assertTrue(all(vote["agent_roleplay_applied"] for vote in result["votes"]))
         self.assertTrue(all("original_rule_score" in vote for vote in result["votes"]))
+
+    def test_full_agent_workflow_roleplays_medium_panel_too(self) -> None:
+        provider = _RoleplayProvider()
+        result = apply_deep_agent_roleplay(
+            _panel("medium"),
+            features=self.features,
+            llm_provider=provider,
+            required=True,
+        )
+
+        self.assertEqual(result["roleplay"]["status"], "completed")
+        self.assertEqual(len(result["per_investor_override"]), 66)
+        self.assertEqual(len(provider.system_prompts), 5)
+
+    def test_valid_roleplay_groups_resume_from_stage_cache(self) -> None:
+        with TemporaryDirectory() as temporary:
+            first_provider = _RoleplayProvider()
+            first_provider.settings = SimpleNamespace(
+                workspace_root=Path(temporary),
+                provider_name="test",
+                default_model="test-model",
+                uzi_llm_max_concurrency=2,
+            )
+            first = apply_deep_agent_roleplay(
+                _panel("deep"),
+                features=self.features,
+                llm_provider=first_provider,
+            )
+            second_provider = _RoleplayProvider()
+            second_provider.settings = first_provider.settings
+            second = apply_deep_agent_roleplay(
+                _panel("deep"),
+                features=self.features,
+                llm_provider=second_provider,
+            )
+
+        self.assertEqual(first["roleplay"]["status"], "completed")
+        self.assertEqual(second["roleplay"]["status"], "completed")
+        self.assertEqual(len(first_provider.system_prompts), 5)
+        self.assertEqual(second_provider.system_prompts, [])
+
+    def test_only_failed_roleplay_group_is_retried(self) -> None:
+        with TemporaryDirectory() as temporary:
+            provider = _FlakyRoleplayProvider(Path(temporary))
+            first = apply_deep_agent_roleplay(
+                _panel("deep"),
+                features=self.features,
+                llm_provider=provider,
+            )
+            second = apply_deep_agent_roleplay(
+                _panel("deep"),
+                features=self.features,
+                llm_provider=provider,
+            )
+
+        self.assertEqual(first["roleplay"]["status"], "incomplete")
+        self.assertEqual(second["roleplay"]["status"], "completed")
+        self.assertEqual(sum(provider.calls.values()), 6)
+        self.assertEqual(
+            next(count for label, count in provider.calls.items() if label.startswith("F")),
+            2,
+        )
 
     def test_incomplete_group_does_not_partially_claim_deep_completion(self) -> None:
         provider = _RoleplayProvider(incomplete=True)

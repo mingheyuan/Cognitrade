@@ -1,4 +1,4 @@
-export type JsonRecord = Record<string, unknown>
+type JsonRecord = Record<string, unknown>
 
 export type MarketQuote = {
   symbol: string
@@ -10,28 +10,6 @@ export type MarketQuote = {
   as_of?: string | null
   source: JsonRecord
   quality_status: string
-}
-
-export type MarketDataResponse = {
-  symbol: string
-  name: string
-  retrieved_at: string
-  quality_status: string
-  quality: Record<string, string>
-  sources: Record<string, JsonRecord>
-  sections: {
-    market: {
-      overview: JsonRecord
-      history_summary: JsonRecord
-    }
-    kline: JsonRecord
-    fundamental: JsonRecord
-    capital_flow: JsonRecord
-    sentiment: JsonRecord
-    notices: JsonRecord
-    events: JsonRecord
-    lhb: JsonRecord
-  }
 }
 
 export type PaperAccount = {
@@ -57,7 +35,7 @@ export type PaperAccount = {
   }
 }
 
-export type PaperPosition = {
+type PaperPosition = {
   symbol: string
   name: string
   quantity: number
@@ -156,24 +134,5 @@ export type QuantEngineStatus = {
   cash_ledger?: string
   load_error?: string | null
   capabilities?: Record<string, boolean>
-  strategies?: BacktestStrategy[]
   data_source?: string
-}
-
-export type BacktestStrategyParameter = {
-  id: string
-  label: string
-  type: 'integer' | 'number'
-  default: number
-  minimum: number
-  maximum: number
-  step: number
-  help?: string
-}
-
-export type BacktestStrategy = {
-  id: string
-  name: string
-  description: string
-  parameters?: BacktestStrategyParameter[]
 }

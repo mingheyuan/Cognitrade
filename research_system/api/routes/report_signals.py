@@ -14,10 +14,7 @@ from research_system.api.dependencies import (
     require_principal,
     require_role,
 )
-from research_system.api.errors import ApiError
-from research_system.strategies.errors import StrategyDomainError
-from research_system.strategies.service import owner_scope
-
+from research_system.api.route_support import call_strategy_service as _call
 
 router = APIRouter(prefix="/finance", tags=["strategy reports and signals"])
 
@@ -26,10 +23,12 @@ class ReportJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     assignment_id: str = Field(min_length=1, max_length=64)
+    strategy_version_id: str | None = Field(default=None, min_length=1, max_length=64)
     as_of_date: date | None = None
     start_date: date | None = None
     end_date: date | None = None
     source_run_id: str | None = Field(default=None, max_length=64)
+    fund_bundle_id: str | None = Field(default=None, min_length=1, max_length=64)
 
     @model_validator(mode="after")
     def valid_dates(self) -> "ReportJobRequest":
@@ -37,6 +36,8 @@ class ReportJobRequest(BaseModel):
             raise ValueError("as_of_date 不能与日期区间同时提供")
         if self.as_of_date is None and (self.start_date is None or self.end_date is None):
             raise ValueError("请提供 as_of_date，或同时提供 start_date/end_date")
+        if self.fund_bundle_id and self.start_date != self.end_date:
+            raise ValueError("指定 fund_bundle_id 仅支持单日任务")
         return self
 
     def date_range(self) -> tuple[date, date]:
@@ -52,6 +53,7 @@ class RetryReportJobRequest(BaseModel):
     symbols: list[str] = Field(default_factory=list, max_length=20)
     full_rerun: bool = False
     confirmed: bool = False
+    refresh_inputs: bool = False
 
 
 class SignalPreviewRequest(BaseModel):
@@ -86,9 +88,11 @@ async def estimate_report_backfill(
         service.estimate,
         principal,
         assignment_id=payload.assignment_id,
+        strategy_version_id=payload.strategy_version_id,
         start_date=start_date,
         end_date=end_date,
         source_run_id=payload.source_run_id,
+        fund_bundle_id=payload.fund_bundle_id,
     )
 
 
@@ -113,9 +117,11 @@ async def create_report_job(
         service.create_job,
         principal,
         assignment_id=payload.assignment_id,
+        strategy_version_id=payload.strategy_version_id,
         start_date=start_date,
         end_date=end_date,
         source_run_id=payload.source_run_id,
+        fund_bundle_id=payload.fund_bundle_id,
         manual=True,
     )
 
@@ -161,7 +167,17 @@ async def retry_report_job(
         symbols=payload.symbols,
         full_rerun=payload.full_rerun,
         confirmed=payload.confirmed,
+        refresh_inputs=payload.refresh_inputs,
     )
+
+
+@router.get("/report-jobs/{job_id}/repair-plan")
+async def get_report_repair_plan(
+    job_id: str,
+    principal: ApiPrincipal = Depends(require_principal),
+    service=Depends(get_report_orchestration),
+) -> dict[str, Any]:
+    return await _call(service.repair_plan, principal, job_id)
 
 
 @router.post("/report-jobs/{job_id}/pause")
@@ -261,23 +277,5 @@ async def get_trade_signal(
     service=Depends(get_signal_engine),
 ) -> dict[str, Any]:
     return await _call(service.get_signal, principal, signal_id)
-
-
-async def _call(operation, principal: ApiPrincipal, *args, **kwargs):
-    scope = owner_scope(
-        tenant_id=principal.tenant_id,
-        user_id=principal.user_id,
-        actor_id=principal.actor_id,
-    )
-    try:
-        return await run_in_threadpool(operation, scope, *args, **kwargs)
-    except StrategyDomainError as exc:
-        raise ApiError(
-            status_code=exc.status_code,
-            code=exc.code,
-            message=exc.message,
-            details=exc.details,
-        ) from exc
-
 
 __all__ = ["router"]

@@ -5,6 +5,7 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
+import { asArray, asOptionalNumber, asRecord } from '../utils/value'
 import { BusinessDataView } from './BusinessDataView'
 import { financeArtifactTitle, isFinanceArtifactType } from './registry'
 import type { FinanceArtifactType } from './generated/finance-artifact-contracts'
@@ -16,21 +17,6 @@ const SPECIALIST_METHOD_TYPES = new Set<FinanceArtifactType>([
 
 type MethodDeliveryDossierProps = {
   artifacts: Array<Record<string, unknown>>
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : []
-}
-
-function numberValue(value: unknown): number | null {
-  const parsed = Number(value)
-  return value == null || value === '' || !Number.isFinite(parsed) ? null : parsed
 }
 
 function text(value: unknown, fallback = '未提供'): string {
@@ -73,7 +59,7 @@ function MethodArtifactCard({ artifact }: { artifact: ArtifactRecordView & { art
       <div className="method-delivery-card__body">
         <div className="method-delivery-card__audit">
           <span><small>Artifact 编号</small><strong title={artifact.artifact_id}>{artifact.artifact_id || '—'}</strong></span>
-          <span><small>置信度</small><strong>{numberValue(artifact.confidence) == null ? '未提供' : `${(numberValue(artifact.confidence)! * 100).toFixed(1)}%`}</strong></span>
+          <span><small>置信度</small><strong>{asOptionalNumber(artifact.confidence) == null ? '未提供' : `${(asOptionalNumber(artifact.confidence)! * 100).toFixed(1)}%`}</strong></span>
           <span><small>业务项数量</small><strong>{count}</strong></span>
           <span><small>数据质量</small><strong>{qualityLabel(quality)}</strong></span>
         </div>

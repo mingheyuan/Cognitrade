@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import akshare as ak
 
@@ -11,7 +11,10 @@ from research_system.adapters.vendors.akshare_utils import (
     normalize_ashare_symbol,
     normalize_value,
 )
-from research_system.adapters.vendors.provider_execution import classify_provider_exception, failure_facts
+from research_system.adapters.vendors.provider_execution import (
+    classify_provider_exception,
+    failure_facts,
+)
 
 
 class AkShareMarketAdapter:
@@ -20,8 +23,11 @@ class AkShareMarketAdapter:
     _spot_cache_at: datetime | None = None
     # Keep the spot table warm for the duration of a typical multi-stock run.
     _spot_cache_ttl = timedelta(minutes=5)
+    _identity_cache: dict[str, dict[str, Any]] = {}
 
-    def get_market_snapshot(self, *, symbol: str, start_date: str, end_date: str, adjust: str = "") -> dict[str, Any]:
+    def get_market_snapshot(
+        self, *, symbol: str, start_date: str, end_date: str, adjust: str = ""
+    ) -> dict[str, Any]:
         normalized_symbol = normalize_ashare_symbol(symbol)
         hist_df = call_with_retry(
             lambda: ak.stock_zh_a_daily(
@@ -48,12 +54,27 @@ class AkShareMarketAdapter:
             "bar_count": len(bars),
         }
 
-    def get_market_overview(self, *, symbol: str, latest_bar: dict[str, Any] | None = None) -> dict[str, Any]:
+    def get_market_overview(
+        self,
+        *,
+        symbol: str,
+        latest_bar: dict[str, Any] | None = None,
+        as_of_date: date | None = None,
+    ) -> dict[str, Any]:
         normalized_symbol = normalize_ashare_symbol(symbol)
-        spot = self._spot_from_latest_bar(normalized_symbol=normalized_symbol, latest_bar=latest_bar)
+        spot = self._spot_from_latest_bar(
+            normalized_symbol=normalized_symbol, latest_bar=latest_bar
+        )
         if not spot:
             spot = self._get_basic_spot(normalized_symbol)
-        valuation, valuation_history = self._get_valuation_data(symbol)
+        identity = self._get_identity(symbol)
+        if identity.get("name"):
+            spot["名称"] = identity["name"]
+        if as_of_date is None and identity.get("industry"):
+            spot["行业"] = identity["industry"]
+        valuation, valuation_history = self._get_valuation_data(
+            symbol, as_of_date=as_of_date
+        )
         normalized = self._normalize_market_overview(
             symbol=symbol,
             normalized_symbol=normalized_symbol,
@@ -62,10 +83,15 @@ class AkShareMarketAdapter:
         )
         normalized["valuation_history"] = valuation_history
         normalized["spot_found"] = bool(spot)
-        normalized["valuation_found"] = bool(valuation) and str(valuation.get("availability") or "available") == "available"
+        normalized["valuation_found"] = (
+            bool(valuation)
+            and str(valuation.get("availability") or "available") == "available"
+        )
         return normalized
 
-    def _spot_from_latest_bar(self, *, normalized_symbol: str, latest_bar: dict[str, Any] | None) -> dict[str, Any]:
+    def _spot_from_latest_bar(
+        self, *, normalized_symbol: str, latest_bar: dict[str, Any] | None
+    ) -> dict[str, Any]:
         if not latest_bar:
             return {}
         latest_price = self._first_numeric(latest_bar.get("close"))
@@ -97,7 +123,11 @@ class AkShareMarketAdapter:
         symbol_series = spot_df[symbol_column].astype(str).str.lower()
         row = spot_df[symbol_series == normalized_symbol]
         if row.empty:
-            raw_symbol = normalized_symbol[2:] if len(normalized_symbol) > 2 else normalized_symbol
+            raw_symbol = (
+                normalized_symbol[2:]
+                if len(normalized_symbol) > 2
+                else normalized_symbol
+            )
             row = spot_df[symbol_series == raw_symbol]
         if row.empty:
             return {}
@@ -118,7 +148,9 @@ class AkShareMarketAdapter:
         cls._spot_cache_at = now
         return spot_df
 
-    def _get_valuation_data(self, symbol: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    def _get_valuation_data(
+        self, symbol: str, *, as_of_date: date | None = None
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         try:
             valuation_df = call_with_retry(
                 lambda: ak.stock_value_em(symbol=symbol),
@@ -129,16 +161,28 @@ class AkShareMarketAdapter:
             return failure_facts(classify_provider_exception(exc)), []
         if valuation_df.empty:
             return {}, []
-        latest = valuation_df.iloc[-1].to_dict()
-        latest_payload = {str(k): normalize_value(v) for k, v in latest.items()}
+        normalized_rows: list[dict[str, Any]] = []
+        for row in valuation_df.to_dict("records"):
+            normalized = {str(k): normalize_value(v) for k, v in row.items()}
+            try:
+                row_date = datetime.fromisoformat(
+                    str(normalized.get("数据日期"))
+                ).date()
+            except (TypeError, ValueError):
+                continue
+            if as_of_date is None or row_date <= as_of_date:
+                normalized_rows.append(normalized)
+        if not normalized_rows:
+            return {}, []
+        normalized_rows.sort(key=lambda row: str(row.get("数据日期") or ""))
+        latest_payload = dict(normalized_rows[-1])
         try:
             latest_date = datetime.fromisoformat(str(latest_payload.get("数据日期")))
         except (TypeError, ValueError):
             latest_date = datetime.now(UTC).replace(tzinfo=None)
         cutoff = latest_date - timedelta(days=5 * 366)
         history = []
-        for row in valuation_df.to_dict("records"):
-            normalized = {str(k): normalize_value(v) for k, v in row.items()}
+        for normalized in normalized_rows:
             try:
                 row_date = datetime.fromisoformat(str(normalized.get("数据日期")))
             except (TypeError, ValueError):
@@ -178,6 +222,8 @@ class AkShareMarketAdapter:
         return {
             "symbol": symbol,
             "normalized_symbol": normalized_symbol,
+            "security_name": spot.get("名称") or spot.get("股票简称"),
+            "industry": spot.get("行业") or spot.get("所属行业"),
             "latest_price": latest_price,
             "pct_change": pct_change,
             "amount": amount,
@@ -196,6 +242,69 @@ class AkShareMarketAdapter:
             "valuation": valuation,
         }
 
+    @classmethod
+    def _get_identity(cls, symbol: str) -> dict[str, Any]:
+        normalized_symbol = "".join(
+            character for character in str(symbol or "") if character.isdigit()
+        )[-6:]
+        if normalized_symbol in cls._identity_cache:
+            return dict(cls._identity_cache[normalized_symbol])
+        try:
+            frame = call_with_retry(
+                lambda: ak.stock_individual_info_em(symbol=normalized_symbol),
+                retries=1,
+                delay_seconds=0.2,
+            )
+        except Exception:
+            frame = None
+        if frame is None or getattr(frame, "empty", True):
+            try:
+                names = call_with_retry(
+                    ak.stock_info_a_code_name,
+                    retries=1,
+                    delay_seconds=0.2,
+                )
+            except Exception:
+                return {}
+            code_column = next(
+                (
+                    column
+                    for column in ("code", "代码", "证券代码")
+                    if column in names.columns
+                ),
+                None,
+            )
+            name_column = next(
+                (
+                    column
+                    for column in ("name", "名称", "证券简称")
+                    if column in names.columns
+                ),
+                None,
+            )
+            if code_column is None or name_column is None:
+                return {}
+            matched = names[names[code_column].astype(str).str.zfill(6) == normalized_symbol]
+            if matched.empty:
+                return {}
+            result = {"name": normalize_value(matched.iloc[0][name_column])}
+            cls._identity_cache[normalized_symbol] = result
+            return dict(result)
+        if frame is None or getattr(frame, "empty", True):
+            return {}
+        item_column = "item" if "item" in frame.columns else frame.columns[0]
+        value_column = "value" if "value" in frame.columns else frame.columns[-1]
+        values = {
+            str(row[item_column]): normalize_value(row[value_column])
+            for _, row in frame.iterrows()
+        }
+        result = {
+            "name": values.get("股票简称") or values.get("简称") or values.get("名称"),
+            "industry": values.get("行业") or values.get("所属行业"),
+        }
+        cls._identity_cache[normalized_symbol] = result
+        return dict(result)
+
     def _pct_change_from_latest_bar(self, latest_bar: dict[str, Any]) -> float | None:
         close_price = self._first_numeric(latest_bar.get("close"))
         previous_close = self._previous_close_from_latest_bar(latest_bar)
@@ -203,12 +312,18 @@ class AkShareMarketAdapter:
             return None
         return ((close_price - previous_close) / previous_close) * 100.0
 
-    def _previous_close_from_latest_bar(self, latest_bar: dict[str, Any]) -> float | None:
-        previous_close = self._first_numeric(latest_bar.get("pre_close"), latest_bar.get("昨收"))
+    def _previous_close_from_latest_bar(
+        self, latest_bar: dict[str, Any]
+    ) -> float | None:
+        previous_close = self._first_numeric(
+            latest_bar.get("pre_close"), latest_bar.get("昨收")
+        )
         if previous_close is not None:
             return previous_close
         close_price = self._first_numeric(latest_bar.get("close"))
-        pct_change = self._first_numeric(latest_bar.get("pct_change"), latest_bar.get("涨跌幅"))
+        pct_change = self._first_numeric(
+            latest_bar.get("pct_change"), latest_bar.get("涨跌幅")
+        )
         if close_price is not None and pct_change not in (None, -100):
             return close_price / (1.0 + pct_change / 100.0)
         return self._first_numeric(latest_bar.get("open"))

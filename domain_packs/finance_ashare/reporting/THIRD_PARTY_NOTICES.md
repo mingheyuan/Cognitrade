@@ -4,7 +4,7 @@ The Finance Pack vendors/adapts the report presentation, 66-seat investor
 metadata, 242 quantified rules, decision profiles, reality checks, data
 integrity/recovery contract, MX→DDGS qualitative fallback semantics, and
 profile-scoped Playwright strategy result contract from UZI-Skill 3.9.4 at
-commit `b004d7a988ca53a4805bf36784af091fa1209f22`.
+commit `b3665e85b8666477038e11157d8e8feb0e006b76`.
 
 The adapted code has no runtime dependency on a UZI checkout, CLI, cache, or
 report server. Browser/login sources remain subject to Cognitrade's explicit

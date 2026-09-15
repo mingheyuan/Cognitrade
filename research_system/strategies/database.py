@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from pathlib import Path
-from threading import RLock
 from typing import Iterator
 
 from sqlalchemy import Engine, create_engine, event, inspect
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+# Import the market-data models for their shared Base metadata registration.
+# Keeping one metadata graph makes create_schema and Alembic behave identically.
+from research_system.market_data import models as _market_data_models  # noqa: F401
 from research_system.strategies.models import Base
-
 
 REQUIRED_STRATEGY_TABLES = frozenset(
     table.name for table in Base.metadata.sorted_tables
@@ -44,11 +45,6 @@ class StrategyDatabase:
             }
             if self.database_url in {"sqlite://", "sqlite:///:memory:"}:
                 engine_options["poolclass"] = StaticPool
-        self._session_lock = (
-            RLock()
-            if self.database_url in {"sqlite://", "sqlite:///:memory:"}
-            else None
-        )
         self.engine: Engine = create_engine(self.database_url, **engine_options)
         if self.database_url.startswith("sqlite"):
             event.listen(self.engine, "connect", self._configure_sqlite)
@@ -75,15 +71,19 @@ class StrategyDatabase:
     def create_schema(self) -> None:
         Base.metadata.create_all(self.engine)
 
-    def drop_schema(self) -> None:
-        Base.metadata.drop_all(self.engine)
-
     def bootstrap_or_validate(self, *, allow_bootstrap: bool) -> None:
         existing = set(inspect(self.engine).get_table_names())
-        if REQUIRED_STRATEGY_TABLES.issubset(existing):
-            return
         if allow_bootstrap and self.is_sqlite:
+            # SQLite development/test databases can already contain the legacy
+            # strategy tables while missing tables introduced by a later
+            # metadata revision (for example the market-data center). Running
+            # create_all is idempotent and fills those additive gaps.
             self.create_schema()
+            existing = set(inspect(self.engine).get_table_names())
+        if REQUIRED_STRATEGY_TABLES.issubset(existing):
+            columns = {row["name"] for row in inspect(self.engine).get_columns("trade_signals")}
+            if "execution_plan_json" not in columns:
+                raise StrategyDatabaseError("策略数据库缺少 trade_signals.execution_plan_json，请先执行 Alembic upgrade head")
             return
         missing = ", ".join(sorted(REQUIRED_STRATEGY_TABLES - existing))
         raise StrategyDatabaseError(
@@ -93,32 +93,31 @@ class StrategyDatabase:
     def health(self) -> dict[str, object]:
         tables = set(inspect(self.engine).get_table_names())
         missing = sorted(REQUIRED_STRATEGY_TABLES - tables)
+        missing_columns = []
+        if "trade_signals" in tables:
+            columns = {row["name"] for row in inspect(self.engine).get_columns("trade_signals")}
+            if "execution_plan_json" not in columns:
+                missing_columns.append("trade_signals.execution_plan_json")
         return {
             "dialect": self.engine.dialect.name,
-            "ready": not missing,
+            "ready": not missing and not missing_columns,
             "table_count": len(tables),
             "required_table_count": len(REQUIRED_STRATEGY_TABLES),
             "missing_tables": missing,
+            "missing_columns": missing_columns,
         }
 
     @contextmanager
     def session(self) -> Iterator[Session]:
-        # StaticPool is required so every thread sees the same in-memory SQLite
-        # database, but it also hands every Session the same physical connection.
-        # Concurrent transactions on that connection can commit or release each
-        # other's savepoints. Serialize only this test/embedded configuration;
-        # file SQLite and PostgreSQL retain normal connection-level concurrency.
-        guard = self._session_lock if self._session_lock is not None else nullcontext()
-        with guard:
-            session = self._sessions()
-            try:
-                yield session
-                session.commit()
-            except Exception:
-                session.rollback()
-                raise
-            finally:
-                session.close()
+        session = self._sessions()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
     def close(self) -> None:
         self.engine.dispose()

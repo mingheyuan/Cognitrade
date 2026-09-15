@@ -17,6 +17,23 @@ from research_system.adapters.vendors import uzi_request_timeout
 
 
 class UziSnapshotRuntimeParityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # These tests replace native fetchers, not exercise live recovery.
+        # Assert even swallowed transport attempts so incomplete fixtures
+        # cannot silently depend on baostock/HTTP availability in CI.
+        for target in (
+            "requests.sessions.Session.request", "socket.socket.connect",
+            "socket.socket.connect_ex", "socket.create_connection",
+        ):
+            guard = self.enterContext(patch(
+                target, side_effect=AssertionError("runtime parity tests must remain offline"),
+            ))
+            self.addCleanup(self._assert_no_live_calls, guard, target)
+
+    def _assert_no_live_calls(self, guard, target) -> None:
+        # Do not print captured HTTP arguments, which may contain local tokens.
+        self.assertEqual(guard.call_count, 0, f"unexpected live transport through {target}")
+
     def test_uzi_resume_reuses_numbered_dimensions_but_refreshes_basic_and_bonus(self) -> None:
         calls: dict[str, int] = {}
 
@@ -84,9 +101,28 @@ class UziSnapshotRuntimeParityTests(unittest.TestCase):
                         "GET",
                         "https://uzi-child.test",
                     ).result()
+            with uzi_request_timeout.uzi_request_timeout_scope(timeout_seconds=5):
+                guarded_request(object(), "GET", "https://uzi-short.test")
+            with patch.object(
+                uzi_request_timeout,
+                "monotonic",
+                side_effect=(100.0, 131.0),
+            ):
+                with uzi_request_timeout.uzi_request_timeout_scope(
+                    timeout_seconds=5,
+                    total_timeout_seconds=30,
+                ):
+                    with self.assertRaisesRegex(
+                        requests.Timeout,
+                        "scope deadline exceeded",
+                    ):
+                        guarded_request(object(), "GET", "https://uzi-expired.test")
             guarded_request(object(), "GET", "https://peer.test/after")
 
-        self.assertEqual(observed, [{}, {"timeout": 23}, {"timeout": 23}, {}])
+        self.assertEqual(
+            observed,
+            [{}, {"timeout": 23.0}, {"timeout": 23.0}, {"timeout": 5.0}, {}],
+        )
 
     def test_basic_canonical_ticker_drives_fetchers_but_not_artifact_entity(self) -> None:
         calls: list[tuple[str, str]] = []
@@ -96,7 +132,7 @@ class UziSnapshotRuntimeParityTests(unittest.TestCase):
             return {
                 "ticker": "600519.SH",
                 "market": "A",
-                "data": {"industry": "白酒"} if fetcher_id == "0_basic" else {},
+                "data": {"industry": "白酒", "price": 1400.0} if fetcher_id == "0_basic" else {},
                 "source": f"fixture:{fetcher_id}",
                 "fallback": False,
             }
@@ -264,7 +300,11 @@ class UziSnapshotRuntimeParityTests(unittest.TestCase):
                         raise RuntimeError(f"fixture crash: {fetcher_id}")
                     data = {"observed": fetcher_id}
                     if fetcher_id == "0_basic":
-                        data["industry"] = "半导体"
+                        data.update(industry="半导体", price=10.0)
+                    if fetcher_id == "2_kline":
+                        data["ohlcv"] = [{"close": 10.0} for _ in range(260)]
+                    if fetcher_id == "10_valuation":
+                        data.update(pe_ttm=20.0, pb=2.0)
                     if fetcher_id == "8_materials":
                         data["materials_detail"] = [
                             {"name": "硅", "futures_code": "SI0"}
@@ -277,6 +317,10 @@ class UziSnapshotRuntimeParityTests(unittest.TestCase):
                     }
 
                 with patch.object(
+                    snapshot_collector,
+                    "_UZI_MINI_RACER_FETCHERS",
+                    frozenset({"7_industry", "10_valuation"}),
+                ), patch.object(
                     Uzi392FetcherRuntime,
                     "collect",
                     autospec=True,

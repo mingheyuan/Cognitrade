@@ -112,6 +112,11 @@ class OTCExecutionAdapter:
     subscription_confirmation_days: int
     redemption_confirmation_days: int
     require_open_status: bool
+    missing_open_status_policy: str = "assume_open_degraded"
+    max_position_pct: float = 100.0
+    entry_tranche_pct: float = 100.0
+    max_entry_tranches: int = 1
+    minimum_entry_interval_days: int = 0
     model_id: str = "otc_fund_fallback_v1"
     degraded_estimate: bool = True
 
@@ -124,6 +129,21 @@ class OTCExecutionAdapter:
             subscription_confirmation_days=rules.subscription_confirmation_days,
             redemption_confirmation_days=rules.redemption_confirmation_days,
             require_open_status=rules.require_open_status,
+            missing_open_status_policy=rules.missing_open_status_policy,
+            max_position_pct=rules.max_position_pct,
+            entry_tranche_pct=rules.entry_tranche_pct,
+            max_entry_tranches=rules.max_entry_tranches,
+            minimum_entry_interval_days=rules.minimum_entry_interval_days,
+            model_id=(
+                "otc_fund_staged_entry_v1"
+                if (
+                    rules.max_position_pct != 100.0
+                    or rules.entry_tranche_pct != 100.0
+                    or rules.max_entry_tranches != 1
+                    or rules.minimum_entry_interval_days != 0
+                )
+                else "otc_fund_fallback_v1"
+            ),
         )
 
     def subscription_fee(self, amount: float) -> FeeBreakdown:

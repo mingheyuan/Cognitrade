@@ -187,7 +187,9 @@ class PaperTradingService:
 
         # The browser never supplies an executable price. Every fill starts from
         # a fresh server-side quote so a stale/tampered client cannot mint cash.
-        quote = self.market_data.get_quote(symbol, refresh=True)
+        # Order placement is an explicit mutating action, so it may acquire a
+        # live quote. Public Finance GETs use the separate DB-only get_quote.
+        quote = self.market_data.get_live_quote(symbol, refresh=True)
         self._validate_tradable_quote(quote, side=normalized_side)
         quote_price = self._decimal(quote["latest_price"])
         match = self.matcher.match(
@@ -615,7 +617,7 @@ class PaperTradingService:
             try:
                 quote = quote_cache.get(symbol)
                 if quote is None:
-                    quote = self.market_data.get_quote(symbol, refresh=refresh)
+                    quote = self.market_data.get_live_quote(symbol, refresh=refresh)
                     quote_cache[symbol] = quote
                 self._validate_tradable_quote(quote, side=str(order["side"]))
                 limit_micros = order["limit_price_micros"]

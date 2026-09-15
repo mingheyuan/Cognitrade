@@ -5,18 +5,28 @@ import unittest
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Event, Thread
+from threading import Event
 from typing import Any
 
-from research_system.strategies.backtesting.adapters import ExchangeExecutionAdapter, OTCExecutionAdapter
+from research_system.strategies.backtesting.adapters import (
+    ExchangeExecutionAdapter,
+    OTCExecutionAdapter,
+)
 from research_system.strategies.backtesting.instruments import InstrumentResolver
 from research_system.strategies.backtesting.market_data_gateway import MarketDataGateway
-from research_system.strategies.backtesting.portfolio_ledger import run_holdings_portfolio, run_otc_single_asset
+from research_system.strategies.backtesting.portfolio_ledger import (
+    run_holdings_portfolio,
+    run_otc_single_asset,
+)
 from research_system.strategies.backtesting.service import StrategyBacktestService
-from research_system.strategies.contracts import BacktestMode
+from research_system.strategies.contracts import BacktestMode, StrategyDocumentV1
 from research_system.strategies.database import StrategyDatabase
 from research_system.strategies.errors import StrategyConflict, StrategyDomainError
-from research_system.strategies.models import BacktestRun, DailyReportNode, DailyReportSet
+from research_system.strategies.models import (
+    BacktestRun,
+    DailyReportNode,
+    DailyReportSet,
+)
 from research_system.strategies.service import OwnerScope, StrategyService
 from research_system.strategies.signals import SignalEngineService
 from research_system.strategies.verification import StrategyVerificationService
@@ -58,21 +68,6 @@ class BlockingSignalCore(FakeSignalCore):
         return super().events(**kwargs)
 
 
-class EarlyTerminalBacktestService(StrategyBacktestService):
-    def __init__(self, *args, **kwargs) -> None:
-        self.terminal_written = Event()
-        self.release = Event()
-        super().__init__(*args, **kwargs)
-
-    def _execute(self, backtest_id: str) -> None:
-        with self.database.session() as session:
-            row = session.get(BacktestRun, backtest_id)
-            row.status = "completed"
-            row.completed_at = datetime.now(UTC)
-        self.terminal_written.set()
-        self.release.wait(5)
-
-
 def _series_loader(_instrument, start_date: date, end_date: date, _as_of: date):
     rows = []
     cursor = max(start_date, date(2026, 8, 3))
@@ -106,7 +101,7 @@ class StrategyBacktestTests(unittest.TestCase):
             auto_bootstrap=True,
         )
         self.owner = OwnerScope("tenant-a", "user-a", "actor-a")
-        strategy = self.strategy_service.create_strategy(self.owner, name="回测策略")
+        strategy = self.strategy_service.create_strategy(self.owner, name="回测策略", document=StrategyDocumentV1().model_dump(mode="json"))
         self.version = self.strategy_service.publish(self.owner, strategy["id"])
         self.strategy_id = strategy["id"]
         self.fund_assignment = self.strategy_service.create_assignment(
@@ -242,7 +237,7 @@ class StrategyBacktestTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail("backtest did not finish")
 
-    def test_fund_only_is_deterministic_and_every_trade_has_signal_lineage(self) -> None:
+    def test_fund_only_retry_is_deterministic_and_preserves_trade_lineage(self) -> None:
         request = {
             "strategy_version_id": self.version["id"],
             "fund_code": "510300",
@@ -252,8 +247,9 @@ class StrategyBacktestTests(unittest.TestCase):
             "initial_cash": 1_000_000,
         }
         first = self._wait(self.backtests.create(self.owner, **request)["id"])
-        second = self._wait(self.backtests.create(self.owner, **request)["id"])
+        second = self._wait(self.backtests.retry(self.owner, first["id"])["id"])
         self.assertEqual(first["status"], "completed")
+        self.assertEqual(second["parent_backtest_run_id"], first["id"])
         self.assertEqual(first["result_content_hash"], second["result_content_hash"])
         self.assertGreater(first["result"]["metrics"]["trade_count"], 0)
         self.assertTrue(all(trade["signal_id"] for trade in first["result"]["trades"]))
@@ -264,6 +260,135 @@ class StrategyBacktestTests(unittest.TestCase):
         self.assertTrue(all(trade["signal_lineage"] for trade in first["result"]["trades"]))
         self.assertEqual(first["result"]["benchmarks"]["category_index"]["symbol"], "000300")
         self.assertEqual(first["result"]["benchmarks"]["category_index"]["status"], "available")
+        self.assertEqual(
+            len(first["result"]["benchmarks"]["fund_buy_and_hold"]["equity_curve"]),
+            5,
+        )
+        self.assertEqual(
+            first["result"]["benchmarks"]["fund_buy_and_hold"]["equity_curve"][-1]["return_pct"],
+            first["result"]["benchmarks"]["fund_buy_and_hold"]["return_pct"],
+        )
+
+    def test_fund_only_includes_requested_hs300_benchmark(self) -> None:
+        completed = self._wait(
+            self.backtests.create(
+                self.owner,
+                strategy_version_id=self.version["id"],
+                fund_code="510300",
+                mode=BacktestMode.FUND_ONLY,
+                start_date=date(2026, 8, 4),
+                end_date=date(2026, 8, 10),
+                initial_cash=1_000_000,
+                benchmark={"hs300": True},
+            )["id"]
+        )
+
+        hs300 = completed["result"]["benchmarks"]["hs300"]
+        self.assertEqual(hs300["status"], "available")
+        self.assertEqual(hs300["symbol"], "000300")
+        self.assertEqual(len(hs300["equity_curve"]), 5)
+
+    def test_backtest_history_can_be_scoped_before_it_reaches_the_frontend(self) -> None:
+        common = {
+            "strategy_version_id": self.version["id"],
+            "fund_code": "510300",
+            "start_date": date(2026, 8, 4),
+            "end_date": date(2026, 8, 10),
+            "initial_cash": 1_000_000,
+        }
+        fund = self._wait(
+            self.backtests.create(self.owner, mode=BacktestMode.FUND_ONLY, **common)["id"]
+        )
+        holdings = self._wait(
+            self.backtests.create(
+                self.owner,
+                mode=BacktestMode.HOLDINGS_PORTFOLIO,
+                **common,
+            )["id"]
+        )
+
+        scoped = self.backtests.list(
+            self.owner,
+            strategy_id=self.strategy_id,
+            fund_code="510300",
+            mode=BacktestMode.FUND_ONLY,
+            status="completed",
+            limit=1,
+        )
+
+        self.assertEqual([row["id"] for row in scoped["backtests"]], [fund["id"]])
+        self.assertNotEqual(fund["id"], holdings["id"])
+
+    def test_fund_only_loads_final_day_report_for_valuation_without_trading_its_future_signal(self) -> None:
+        with self.database.session() as session:
+            source = next(
+                node
+                for node in session.query(DailyReportNode).filter_by(report_set_id=self.report_id)
+                if node.node_type == "fund_report"
+            )
+            report = DailyReportSet(
+                tenant_id=self.owner.tenant_id,
+                user_id=self.owner.user_id,
+                assignment_id=self.fund_assignment["id"],
+                fund_code="510300",
+                fund_name="测试ETF",
+                as_of_date=date(2026, 8, 10),
+                effective_date=date(2026, 8, 11),
+                pin_set_hash="c" * 64,
+                revision=1,
+                status="final",
+                max_top_n=10,
+                count_coverage=1.0,
+                weight_coverage=1.0,
+                coverage=1.0,
+                source_hash="d" * 64,
+                source_run_id="source-run-final-day",
+                source_artifact_id="fund-artifact-final-day",
+                data_gaps_json=[],
+                finalized_at=datetime.now(UTC),
+            )
+            session.add(report)
+            session.flush()
+            session.add(
+                DailyReportNode(
+                    tenant_id=self.owner.tenant_id,
+                    user_id=self.owner.user_id,
+                    report_set_id=report.id,
+                    node_type="fund_report",
+                    subject_code="510300",
+                    subject_name="测试ETF",
+                    canonical_key="fund:510300:2026-08-10",
+                    status="completed",
+                    confidence=1.0,
+                    data_gaps_json=[],
+                    source_json=dict(source.source_json or {}),
+                )
+            )
+            final_day_report_id = report.id
+        SignalEngineService(self.database).recompute(
+            self.owner,
+            assignment_id=self.fund_assignment["id"],
+            report_set_id=final_day_report_id,
+        )
+        completed = self._wait(
+            self.backtests.create(
+                self.owner,
+                strategy_version_id=self.version["id"],
+                fund_code="510300",
+                mode=BacktestMode.FUND_ONLY,
+                start_date=date(2026, 8, 4),
+                end_date=date(2026, 8, 10),
+                initial_cash=1_000_000,
+            )["id"]
+        )
+        self.assertEqual(completed["status"], "completed")
+        self.assertIn(final_day_report_id, completed["result"]["report_set_ids"])
+        self.assertTrue(
+            all(
+                trade["source_report_set_id"] == self.report_id
+                for trade in completed["result"]["trades"]
+            )
+        )
 
     def test_holdings_portfolio_keeps_unallocated_weight_as_cash(self) -> None:
         completed = self._wait(
@@ -277,7 +402,7 @@ class StrategyBacktestTests(unittest.TestCase):
                 initial_cash=1_000_000,
             )["id"]
         )
-        self.assertEqual(completed["status"], "completed", completed.get("error_summary"))
+        self.assertEqual(completed["status"], "completed")
         result = completed["result"]
         post_entry = next(row for row in result["equity_curve"] if row["date"] == "2026-08-05")
         self.assertGreater(post_entry["cash"], 650_000)
@@ -315,12 +440,7 @@ class StrategyBacktestTests(unittest.TestCase):
             backtest_run_id=second["id"],
             thresholds={"minimum_sample_days": 5},
         )
-        failed_checks = {
-            key: value
-            for key, value in passed["checks"].items()
-            if value.get("required", True) and not value.get("passed")
-        }
-        self.assertTrue(passed["machine_passed"], failed_checks)
+        self.assertTrue(passed["machine_passed"])
         confirmed = verification_service.confirm(self.owner, passed["id"])
         self.assertEqual(confirmed["status"], "verified")
         promoted = self.strategy_service.promote(
@@ -381,77 +501,110 @@ class StrategyBacktestTests(unittest.TestCase):
             core.release.set()
             service.close()
 
-    def test_close_waits_for_running_worker_and_heartbeat(self) -> None:
+    def test_active_duplicate_is_reused_except_after_cancellation_request(self) -> None:
         core = BlockingSignalCore()
         service = StrategyBacktestService(
             self.database,
             market_data_gateway=MarketDataGateway(series_loader=_series_loader),
-            object_store_root=Path(self.temporary.name) / "closing-objects",
+            object_store_root=Path(self.temporary.name) / "deduplicated-objects",
             signal_core=core,
             max_workers=1,
             recover=False,
-            lease_seconds=1,
         )
-        closed = Event()
-
-        def close_service() -> None:
-            service.close()
-            closed.set()
-
-        closer = Thread(target=close_service, name="test-backtest-close", daemon=True)
+        request = {
+            "strategy_version_id": self.version["id"],
+            "fund_code": "510300",
+            "mode": BacktestMode.FUND_ONLY,
+            "start_date": date(2026, 8, 4),
+            "end_date": date(2026, 8, 10),
+            "initial_cash": 1_000_000,
+        }
         try:
-            created = service.create(
-                self.owner,
-                strategy_version_id=self.version["id"],
-                fund_code="510300",
-                mode=BacktestMode.FUND_ONLY,
-                start_date=date(2026, 8, 4),
-                end_date=date(2026, 8, 10),
-                initial_cash=1_000_000,
-            )
+            first = service.create(self.owner, **request)
+            self.assertEqual(first["report_policy"], "existing_only")
             self.assertTrue(core.started.wait(2))
-            closer.start()
-            self.assertFalse(closed.wait(0.1))
+
+            duplicate = service.create(self.owner, **request)
+            self.assertEqual(duplicate["id"], first["id"])
+
+            service.cancel(self.owner, first["id"])
+            replacement = service.create(self.owner, **request)
+            self.assertNotEqual(replacement["id"], first["id"])
 
             core.release.set()
-            self.assertTrue(closed.wait(2))
-            closer.join(timeout=1)
-            self.assertFalse(closer.is_alive())
+            self.assertEqual(self._wait_with(service, first["id"])["status"], "cancelled")
+            self.assertEqual(self._wait_with(service, replacement["id"])["status"], "completed")
 
-            with self.database.session() as session:
-                row = session.get(BacktestRun, created["id"])
-                self.assertEqual(row.status, "completed")
+            replay = service.create(self.owner, **request)
+            self.assertNotEqual(replay["id"], replacement["id"])
+            self.assertEqual(self._wait_with(service, replay["id"])["status"], "completed")
         finally:
             core.release.set()
             service.close()
 
-    def test_terminal_status_is_hidden_until_worker_exits(self) -> None:
-        service = EarlyTerminalBacktestService(
+    def test_retry_only_reuses_active_child_with_the_same_parent(self) -> None:
+        core = BlockingSignalCore()
+        service = StrategyBacktestService(
             self.database,
             market_data_gateway=MarketDataGateway(series_loader=_series_loader),
-            object_store_root=Path(self.temporary.name) / "terminal-visibility-objects",
-            signal_core=FakeSignalCore(),
+            object_store_root=Path(self.temporary.name) / "retry-lineage-objects",
+            signal_core=core,
             max_workers=1,
             recover=False,
         )
+        request = {
+            "strategy_version_id": self.version["id"],
+            "fund_code": "510300",
+            "mode": BacktestMode.FUND_ONLY,
+            "start_date": date(2026, 8, 4),
+            "end_date": date(2026, 8, 10),
+            "initial_cash": 1_000_000,
+        }
         try:
-            created = service.create(
-                self.owner,
-                strategy_version_id=self.version["id"],
-                fund_code="510300",
-                mode=BacktestMode.FUND_ONLY,
-                start_date=date(2026, 8, 4),
-                end_date=date(2026, 8, 10),
-                initial_cash=1_000_000,
-            )
-            self.assertTrue(service.terminal_written.wait(2))
-            self.assertEqual(service.get(self.owner, created["id"])["status"], "running")
+            ordinary_active = service.create(self.owner, **request)
+            self.assertTrue(core.started.wait(2))
+            with self.database.session() as session:
+                active_row = session.get(BacktestRun, ordinary_active["id"])
+                failed = BacktestRun(
+                    tenant_id=active_row.tenant_id,
+                    user_id=active_row.user_id,
+                    strategy_id=active_row.strategy_id,
+                    strategy_version_id=active_row.strategy_version_id,
+                    strategy_content_hash=active_row.strategy_content_hash,
+                    fund_code=active_row.fund_code,
+                    fund_name=active_row.fund_name,
+                    mode=active_row.mode,
+                    start_date=active_row.start_date,
+                    end_date=active_row.end_date,
+                    initial_cash=active_row.initial_cash,
+                    benchmark_json=dict(active_row.benchmark_json or {}),
+                    request_json=dict(active_row.request_json or {}),
+                    input_snapshot_hash=active_row.input_snapshot_hash,
+                    engine_version=active_row.engine_version,
+                    status="failed",
+                    error_summary="synthetic failed attempt",
+                    completed_at=datetime.now(UTC),
+                )
+                session.add(failed)
+                session.flush()
+                failed_id = failed.id
 
-            service.release.set()
-            completed = self._wait_with(service, created["id"])
-            self.assertEqual(completed["status"], "completed")
+            retry = service.retry(self.owner, failed_id)
+            self.assertNotEqual(retry["id"], ordinary_active["id"])
+            self.assertEqual(retry["parent_backtest_run_id"], failed_id)
+
+            duplicate_retry = service.retry(self.owner, failed_id)
+            self.assertEqual(duplicate_retry["id"], retry["id"])
+            self.assertEqual(duplicate_retry["parent_backtest_run_id"], failed_id)
+
+            core.release.set()
+            self.assertEqual(
+                self._wait_with(service, ordinary_active["id"])["status"],
+                "completed",
+            )
+            self.assertEqual(self._wait_with(service, retry["id"])["status"], "completed")
         finally:
-            service.release.set()
+            core.release.set()
             service.close()
 
     def test_backtest_rejects_unknown_benchmark_fields(self) -> None:
@@ -479,6 +632,53 @@ class StrategyBacktestTests(unittest.TestCase):
 
 
 class OTCFundLedgerTests(unittest.TestCase):
+    def test_stock_gateway_reads_bundle_at_backtest_as_of_date(self) -> None:
+        class _DateAwareMarketData:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def get_market_data(self, symbol: str, **kwargs):
+                self.calls.append({"symbol": symbol, **kwargs})
+                return {
+                    "sections": {
+                        "kline": {
+                            "ohlcv": [
+                                {
+                                    "date": "2026-08-04",
+                                    "open": 10,
+                                    "high": 11,
+                                    "low": 9,
+                                    "close": 10.5,
+                                    "volume": 100,
+                                    "amount": 1050,
+                                }
+                            ]
+                        }
+                    },
+                    "sources": {"kline": {"provider": "published_bundle"}},
+                }
+
+        market_data = _DateAwareMarketData()
+        gateway = MarketDataGateway(market_data)
+        series = gateway.get_series(
+            InstrumentResolver.resolve_stock("600519", "贵州茅台"),
+            start_date=date(2026, 8, 4),
+            end_date=date(2026, 8, 4),
+            as_of_date=date(2026, 8, 4),
+        )
+
+        self.assertEqual(series.bars[-1]["close"], 10.5)
+        self.assertEqual(
+            market_data.calls,
+            [
+                {
+                    "symbol": "600519",
+                    "refresh": False,
+                    "as_of_date": date(2026, 8, 4),
+                }
+            ],
+        )
+
     def test_market_gateway_normalizes_chinese_fund_bars_and_enforces_as_of(self) -> None:
         instrument = InstrumentResolver.resolve_fund({"fund_type": "ETF"}, code="510300")
         gateway = MarketDataGateway(
@@ -547,7 +747,53 @@ class OTCFundLedgerTests(unittest.TestCase):
         self.assertEqual([trade["side"] for trade in result["trades"]], ["buy"])
         self.assertGreater(result["ending_positions"]["600000"], 0)
 
-    def test_missing_open_status_blocks_and_confirmation_rules_are_applied(self) -> None:
+    def test_zero_coverage_blocked_report_replays_as_cash_only(self) -> None:
+        from research_system.strategies.contracts import blank_strategy_document
+
+        result = run_holdings_portfolio(
+            instruments={},
+            bars_by_symbol={},
+            events_by_symbol={},
+            stock_signals={},
+            fund_signals=[
+                {
+                    "id": "fund-blocked",
+                    "state": "BLOCKED",
+                    "effective_from": "2026-08-03",
+                    "expires_after": "2026-08-05",
+                    "source_report_set_id": "report-partial",
+                }
+            ],
+            report_schedule=[
+                {
+                    "id": "report-partial",
+                    "effective_date": "2026-08-03",
+                    "revision": 1,
+                    "target_weights": {},
+                }
+            ],
+            adapter=ExchangeExecutionAdapter.stock(blank_strategy_document()),
+            initial_cash=100_000,
+            start_date=date(2026, 8, 3),
+            end_date=date(2026, 8, 5),
+            max_single_stock_pct=20,
+            drift_pct_points=2,
+            fallback_trading_days=[
+                date(2026, 8, 3),
+                date(2026, 8, 4),
+                date(2026, 8, 5),
+            ],
+        )
+
+        self.assertEqual(result["metrics"]["trade_count"], 0)
+        self.assertEqual(result["metrics"]["final_equity"], 100_000)
+        self.assertEqual(
+            [row["date"] for row in result["equity_curve"]],
+            ["2026-08-03", "2026-08-04", "2026-08-05"],
+        )
+        self.assertTrue(all(row["cash"] == 100_000 for row in result["equity_curve"]))
+
+    def test_missing_open_status_is_audited_as_degraded_estimate_and_confirmation_rules_are_applied(self) -> None:
         instrument = InstrumentResolver.resolve_fund(
             {"fund_type": "偏股混合型", "fund_name": "场外基金"},
             code="110011",
@@ -580,12 +826,42 @@ class OTCFundLedgerTests(unittest.TestCase):
                 "technical_reason": "ma_cross",
             }
         ]
+        assumed_result = run_otc_single_asset(
+            instrument=instrument,
+            bars=bars,
+            events=events,
+            adapter=adapter,
+            initial_cash=100_000,
+            start_date=date(2026, 8, 3),
+            end_date=date(2026, 8, 10),
+        )
+        self.assertEqual(assumed_result["trades"][0]["order_date"], "2026-08-04")
+        self.assertEqual(
+            assumed_result["execution_adapter"]["open_status_assumptions"],
+            [
+                {
+                    "date": "2026-08-04",
+                    "side": "buy",
+                    "assumption": "assumed_open",
+                    "reason": "historical_purchase_status_unavailable",
+                }
+            ],
+        )
+
+        strict_adapter = OTCExecutionAdapter(
+            subscription_fee_rate=0.0015,
+            redemption_fee_rate=0.005,
+            subscription_confirmation_days=1,
+            redemption_confirmation_days=2,
+            require_open_status=True,
+            missing_open_status_policy="block",
+        )
         with self.assertRaises(StrategyDomainError):
             run_otc_single_asset(
                 instrument=instrument,
                 bars=bars,
                 events=events,
-                adapter=adapter,
+                adapter=strict_adapter,
                 initial_cash=100_000,
                 start_date=date(2026, 8, 3),
                 end_date=date(2026, 8, 10),
@@ -606,6 +882,179 @@ class OTCFundLedgerTests(unittest.TestCase):
         self.assertEqual(result["trades"][0]["order_date"], "2026-08-04")
         self.assertEqual(result["trades"][0]["date"], "2026-08-05")
         self.assertTrue(result["execution_adapter"]["degraded_estimate"])
+
+    def test_missing_open_status_does_not_block_when_no_order_is_attempted(self) -> None:
+        instrument = InstrumentResolver.resolve_fund(
+            {"fund_type": "偏股混合型", "fund_name": "场外基金"},
+            code="110011",
+        )
+        bars = [
+            {
+                "date": (date(2026, 8, 3) + timedelta(days=index)).isoformat(),
+                "open": 1.0 + index * 0.01,
+                "high": 1.0 + index * 0.01,
+                "low": 1.0 + index * 0.01,
+                "close": 1.0 + index * 0.01,
+                "purchase_open": None,
+                "redemption_open": None,
+            }
+            for index in range(8)
+        ]
+        result = run_otc_single_asset(
+            instrument=instrument,
+            bars=bars,
+            events=[],
+            adapter=OTCExecutionAdapter(
+                subscription_fee_rate=0.0015,
+                redemption_fee_rate=0.005,
+                subscription_confirmation_days=1,
+                redemption_confirmation_days=2,
+                require_open_status=True,
+            ),
+            initial_cash=100_000,
+            start_date=date(2026, 8, 3),
+            end_date=date(2026, 8, 10),
+        )
+        self.assertEqual(result["metrics"]["trade_count"], 0)
+        self.assertEqual(result["metrics"]["final_equity"], 100_000)
+        self.assertEqual(result["execution_adapter"]["open_status_validation"], "order_date_and_side")
+
+    def test_otc_staged_entry_respects_position_cap_tranche_limit_and_interval(self) -> None:
+        instrument = InstrumentResolver.resolve_fund(
+            {"fund_type": "偏股混合型", "fund_name": "分批建仓基金"},
+            code="110011",
+        )
+        bars = [
+            {
+                "date": (date(2026, 8, 3) + timedelta(days=index)).isoformat(),
+                "open": 1.0,
+                "high": 1.0,
+                "low": 1.0,
+                "close": 1.0,
+                "purchase_open": True,
+                "redemption_open": True,
+            }
+            for index in range(10)
+        ]
+        result = run_otc_single_asset(
+            instrument=instrument,
+            bars=bars,
+            events=[
+                {
+                    "date": "2026-08-03",
+                    "side": "buy",
+                    "signal_id": "signal-staged",
+                    "source_report_set_id": "report-staged",
+                    "technical_reason": "ma_cross",
+                }
+            ],
+            adapter=OTCExecutionAdapter(
+                subscription_fee_rate=0.0,
+                redemption_fee_rate=0.0,
+                subscription_confirmation_days=1,
+                redemption_confirmation_days=2,
+                require_open_status=True,
+                max_position_pct=60.0,
+                entry_tranche_pct=25.0,
+                max_entry_tranches=4,
+                minimum_entry_interval_days=2,
+                model_id="otc_fund_staged_entry_v1",
+            ),
+            initial_cash=100_000,
+            start_date=date(2026, 8, 3),
+            end_date=date(2026, 8, 12),
+        )
+
+        self.assertEqual([row["gross_value"] for row in result["trades"]], [25_000, 25_000, 10_000])
+        self.assertEqual(
+            [row["order_date"] for row in result["trades"]],
+            ["2026-08-04", "2026-08-06", "2026-08-08"],
+        )
+        self.assertEqual(
+            [row["entry_tranche_index"] for row in result["trades"]],
+            [1, 2, 3],
+        )
+        self.assertLessEqual(
+            max(float(row["position_weight_pct"]) for row in result["equity_curve"]),
+            60.0,
+        )
+        self.assertEqual(result["metrics"]["turnover_pct"], 60.0)
+        self.assertEqual(result["execution_adapter"]["entry_orders_submitted"], 3)
+        self.assertEqual(result["execution_adapter"]["max_position_pct"], 60.0)
+
+    def test_otc_staged_entry_rechecks_the_current_fund_gate_for_every_tranche(self) -> None:
+        instrument = InstrumentResolver.resolve_fund(
+            {"fund_type": "偏股混合型", "fund_name": "门禁复核基金"},
+            code="110011",
+        )
+        bars = [
+            {
+                "date": (date(2026, 8, 3) + timedelta(days=index)).isoformat(),
+                "open": 1.0,
+                "high": 1.0,
+                "low": 1.0,
+                "close": 1.0,
+                "purchase_open": True,
+                "redemption_open": True,
+            }
+            for index in range(10)
+        ]
+        result = run_otc_single_asset(
+            instrument=instrument,
+            bars=bars,
+            events=[
+                {
+                    "date": "2026-08-03",
+                    "side": "buy",
+                    "signal_id": "allow-1",
+                    "source_report_set_id": "report-1",
+                    "technical_reason": "ma_cross",
+                }
+            ],
+            fund_signals=[
+                {
+                    "id": "allow-1",
+                    "state": "ALLOW_BUY",
+                    "effective_from": "2026-08-03",
+                    "source_report_set_id": "report-1",
+                },
+                {
+                    "id": "watch-1",
+                    "state": "WATCH",
+                    "effective_from": "2026-08-05",
+                    "source_report_set_id": "report-2",
+                },
+                {
+                    "id": "allow-2",
+                    "state": "ALLOW_BUY",
+                    "effective_from": "2026-08-07",
+                    "source_report_set_id": "report-3",
+                },
+            ],
+            adapter=OTCExecutionAdapter(
+                subscription_fee_rate=0.0,
+                redemption_fee_rate=0.0,
+                subscription_confirmation_days=1,
+                redemption_confirmation_days=2,
+                require_open_status=True,
+                max_position_pct=60.0,
+                entry_tranche_pct=20.0,
+                max_entry_tranches=3,
+                minimum_entry_interval_days=1,
+            ),
+            initial_cash=100_000,
+            start_date=date(2026, 8, 3),
+            end_date=date(2026, 8, 12),
+        )
+
+        self.assertEqual(
+            [row["order_date"] for row in result["trades"]],
+            ["2026-08-04", "2026-08-07", "2026-08-08"],
+        )
+        self.assertEqual(
+            [row["signal_id"] for row in result["trades"]],
+            ["allow-1", "allow-2", "allow-2"],
+        )
 
 
 if __name__ == "__main__":

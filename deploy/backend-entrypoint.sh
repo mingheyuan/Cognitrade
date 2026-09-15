@@ -17,6 +17,10 @@ mkdir -p \
 cp -a -n /app/workspace_templates/. /app/workspace/
 
 if [ "$(id -u)" -eq 0 ]; then
+    # Dedicated Codex-managed login/session volume; never bake auth into image.
+    mkdir -p /home/cognitrade/.codex
+    chown 10001:10001 /home/cognitrade/.codex
+    chmod 0700 /home/cognitrade/.codex
     # Named volumes outlive images and may contain directories created by an
     # older root-running release. Repair ownership before dropping privileges
     # so final report memory/cache persistence cannot fail after completion.

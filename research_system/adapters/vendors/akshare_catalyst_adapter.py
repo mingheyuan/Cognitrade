@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
 from datetime import date, timedelta
-import re
 from typing import Any
 
 import akshare as ak
+import requests
 
-from research_system.adapters.vendors.akshare_utils import call_with_retry, normalize_value
+from research_system.adapters.vendors.akshare_utils import (
+    call_with_retry,
+    normalize_value,
+)
 
 
 class AkShareCatalystAdapter:
@@ -19,11 +23,63 @@ class AkShareCatalystAdapter:
             return []
         return [self._normalize_record(item) for item in news_df.head(limit).to_dict("records")]
 
-    def get_symbol_research_reports(self, *, symbol: str, limit: int = 3) -> list[dict[str, Any]]:
-        report_df = call_with_retry(lambda: ak.stock_research_report_em(symbol=symbol), retries=2, delay_seconds=0.5)
+    def get_symbol_research_reports(self, *, symbol: str, limit: int = 3,
+                                    as_of_date: date | None = None) -> list[dict[str, Any]]:
+        from research_system.market_data.instruments import SecurityIdentityResolver
+
+        code = SecurityIdentityResolver().resolve_stock(symbol).code
+        if as_of_date is not None:
+            return self._historical_research_reports(code, as_of_date, limit=limit)
+        report_df = call_with_retry(lambda: ak.stock_research_report_em(symbol=code), retries=2, delay_seconds=0.5)
         if report_df.empty:
             return []
         return [self._normalize_record(item) for item in report_df.head(limit).to_dict("records")]
+
+    @staticmethod
+    def _historical_research_reports(code: str, as_of: date, *, limit: int) -> list[dict[str, Any]]:
+        """Query the source period, not today's first N reports then filter.
+
+        Same public endpoint as AkShare and the document archive. Preserve
+        document identity; today's rolling EPS forecasts are not historical
+        report facts and are deliberately not imported into this listing.
+        """
+        start = as_of - timedelta(days=365)
+        response = requests.get("https://reportapi.eastmoney.com/report/list", params={
+            "industryCode": "*", "industry": "*", "rating": "*", "ratingChange": "*",
+            "beginTime": start.isoformat(), "endTime": as_of.isoformat(),
+            "pageSize": str(max(1, min(int(limit), 50))), "pageNo": "1", "qType": "0", "code": code,
+        }, timeout=(10, 20))
+        try:
+            response.raise_for_status()
+            payload = response.json()
+        finally:
+            response.close()
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+            raise ValueError("research_listing_response_invalid")
+        source_rows = payload["data"]
+        if not source_rows and payload.get("hits") != 0:
+            raise ValueError("research_listing_empty_without_zero_count")
+        result = []
+        for row in source_rows:
+            if not isinstance(row, dict):
+                raise ValueError("research_listing_row_invalid")
+            try:
+                published = date.fromisoformat(str(row.get("publishDate") or "")[:10])
+            except ValueError as exc:
+                raise ValueError("research_listing_date_missing") from exc
+            doc_id = str(row.get("infoCode") or "")
+            if str(row.get("stockCode") or "") != code or not start <= published <= as_of:
+                raise ValueError("research_listing_outside_requested_scope")
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", doc_id) or not row.get("title"):
+                raise ValueError("research_listing_document_identity_missing")
+            result.append({
+                "股票代码": code, "股票简称": row.get("stockName"), "报告名称": row["title"],
+                "机构": row.get("orgSName"), "东财评级": row.get("emRatingName"),
+                "日期": published.isoformat(), "published_at": published.isoformat(),
+                "source_document_id": doc_id,
+                "报告PDF链接": f"https://pdf.dfcfw.com/pdf/H3_{doc_id}_1.pdf",
+            })
+        return result[:max(1, min(int(limit), 50))]
 
     def get_theme_news(self, *, theme: str, constituents: list[dict[str, Any]], limit: int = 6) -> list[dict[str, Any]]:
         theme_token = str(theme).strip()
@@ -160,18 +216,28 @@ class AkShareCatalystAdapter:
         )
         return raw_signals[:limit]
 
-    def get_regulatory_signals(self, *, theme: str, constituents: list[dict[str, Any]], limit: int = 8) -> list[dict[str, Any]]:
+    def get_regulatory_signals(self, *, theme: str, constituents: list[dict[str, Any]], limit: int = 8, as_of_date: date | None = None, diagnostics: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
         keyword_candidates = self._disclosure_keywords(theme)
         raw_signals: list[dict[str, Any]] = []
         seen_links: set[str] = set()
-        end_date = date.today()
+        end_date = as_of_date or date.today()
         start_date = end_date - timedelta(days=30)
 
-        for keyword in keyword_candidates:
+        codes = list(dict.fromkeys(str(item.get("code") or "") for item in constituents if re.fullmatch(r"\d{6}", str(item.get("code") or ""))))
+        # A historical single-stock request must not scan the whole market
+        # using its orchestration instruction as a keyword.
+        scopes = ([(code, "") for code in codes[:10]] if as_of_date is not None and codes
+                  else [("", keyword) for keyword in keyword_candidates if keyword])
+        for requested_code, keyword in scopes:
+            diagnostic = {
+                "source_id": "cninfo", "symbol": requested_code or None,
+                "keyword": keyword,
+                "query_window": {"start": start_date.isoformat(), "end": end_date.isoformat()},
+            }
             try:
                 df = call_with_retry(
-                    lambda keyword=keyword: ak.stock_zh_a_disclosure_report_cninfo(
-                        symbol="",
+                    lambda keyword=keyword, requested_code=requested_code: ak.stock_zh_a_disclosure_report_cninfo(
+                        symbol=requested_code,
                         market="沪深京",
                         keyword=keyword,
                         category="日常经营",
@@ -181,10 +247,15 @@ class AkShareCatalystAdapter:
                     retries=2,
                     delay_seconds=0.5,
                 )
-            except Exception:
+            except Exception as exc:
+                if diagnostics is not None:
+                    diagnostics.append({**diagnostic, "status": "provider_unavailable", **_safe_disclosure_error(exc)})
                 continue
             if df.empty:
+                if diagnostics is not None:
+                    diagnostics.append({**diagnostic, "status": "no_data", "result_count": 0, "matched_count": 0})
                 continue
+            matched_before = len(raw_signals)
             for row in df.to_dict("records"):
                 normalized = self._normalize_record(row)
                 title = self._strip_markup(str(normalized.get("公告标题") or ""))
@@ -219,6 +290,8 @@ class AkShareCatalystAdapter:
                         "公告链接": link,
                     }
                 )
+            if diagnostics is not None:
+                diagnostics.append({**diagnostic, "status": "available", "result_count": len(df), "matched_count": len(raw_signals) - matched_before})
 
         raw_signals.sort(
             key=lambda item: (
@@ -582,3 +655,10 @@ class AkShareCatalystAdapter:
 
     def _strip_markup(self, value: str) -> str:
         return re.sub(r"</?em>", "", str(value or ""))
+
+
+def _safe_disclosure_error(exc: Exception) -> dict[str, str]:
+    """Keep useful failure details without query strings or credentials."""
+    message = re.sub(r"https?://[^\s]+", "[upstream URL]", " ".join(str(exc).split()))
+    message = re.sub(r"(?i)(api[_-]?key|token|authorization|cookie|password)[\"']*\s*[:=].*", r"\1=[redacted]", message)
+    return {"error_type": type(exc).__name__, "error_message": message[:320]}

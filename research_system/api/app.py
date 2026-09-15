@@ -11,58 +11,62 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials
-from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
-from research_system.api.chat_service import ChatService
 from research_system.api.agent_os_run_service import AgentOSRunService
+from research_system.api.chat_service import ChatService
 from research_system.api.config import ApiConfig
-from research_system.api.finance_market_data_service import FinanceMarketDataService
-from research_system.api.fund_holding_report_service import FundHoldingReportService
-from research_system.api.hikyuu_backtest_service import HikyuuBacktestService
-from research_system.api.paper_trading_service import PaperTradingService
 from research_system.api.dependencies import (
     ApiRuntimeState,
     _authenticate_principal,
     require_principal,
 )
 from research_system.api.errors import install_exception_handlers
+from research_system.api.finance_market_data_service import FinanceMarketDataService
+from research_system.api.fund_holding_report_service import FundHoldingReportService
+from research_system.api.paper_trading_service import PaperTradingService
 from research_system.api.routes import (
     admin,
     chat,
     dashboard,
     finance,
     fund_holding_reports,
+    market_data_center,
     report_signals,
     runs,
+    strategies,
     strategy_backtests,
     strategy_paper,
     strategy_verifications,
-    strategies,
     system,
 )
 from research_system.api.sse import RunEventSource
-from research_system.runtime.core.id_utils import generate_ulid
+from research_system.market_data.report_inputs import (
+    DatabaseReportInputGateway,
+    ReportInputService,
+)
+from research_system.market_data.service import MarketDataCenterService
 from research_system.runtime.agent_os import AgentOS
+from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.services.memory.maintenance import MemoryExpirationScheduler
-from research_system.strategies.database import StrategyDatabase, resolve_database_url
 from research_system.strategies.backtesting.market_data_gateway import MarketDataGateway
 from research_system.strategies.backtesting.service import StrategyBacktestService
-from research_system.strategies.orchestration import ReportOrchestrationService
+from research_system.strategies.database import StrategyDatabase, resolve_database_url
+from research_system.strategies.errors import StrategyDomainError
 from research_system.strategies.idempotency import (
     ApiMutationIdempotencyService,
     MutationReplay,
     MutationReservation,
 )
+from research_system.strategies.orchestration import ReportOrchestrationService
 from research_system.strategies.paper_execution import StrategyPaperExecutionService
-from research_system.strategies.errors import StrategyDomainError
 from research_system.strategies.service import StrategyService, owner_scope
 from research_system.strategies.signals import SignalEngineService
 from research_system.strategies.verification import StrategyVerificationService
-
 
 LOGGER = logging.getLogger(__name__)
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -84,7 +88,7 @@ async def _call_with_idempotency(request: Request, call_next):
     key = str(request.headers.get("Idempotency-Key") or "").strip()
     if (
         not key
-        or request.method.upper() not in {"POST", "PATCH", "DELETE"}
+        or request.method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}
         or not request.url.path.startswith("/api/v2/finance")
     ):
         return await call_next(request)
@@ -215,8 +219,8 @@ def create_app(
     chat_service_factory: Callable[[Settings], Any] | None = None,
     event_source_factory: Callable[[Settings, ApiConfig], Any] | None = None,
     finance_market_data_factory: Callable[[Settings], Any] | None = None,
+    market_data_center_factory: Callable[[Settings, Any], Any] | None = None,
     paper_trading_factory: Callable[[Settings, Any], Any] | None = None,
-    backtesting_factory: Callable[[Settings, Any], Any] | None = None,
     strategy_service_factory: Callable[[Settings], Any] | None = None,
     signal_engine_factory: Callable[[Any], Any] | None = None,
     report_orchestration_factory: Callable[[Settings, Any, Any, Any, Any], Any] | None = None,
@@ -235,6 +239,12 @@ def create_app(
             cache_root=current_settings.workspace_root / "cache"
         )
     )
+    build_market_data_center = market_data_center_factory or (
+        lambda current_settings, database: MarketDataCenterService(
+            database,
+            current_settings,
+        )
+    )
     build_paper_trading = paper_trading_factory or (
         lambda current_settings, market_data: PaperTradingService(
             database_path=current_settings.workspace_root / "paper_trading" / "paper_trading.sqlite3",
@@ -242,17 +252,12 @@ def create_app(
             enforce_market_hours=current_settings.paper_trading_enforce_market_hours,
         )
     )
-    build_backtesting = backtesting_factory or (
-        lambda current_settings, market_data: HikyuuBacktestService(
-            result_root=current_settings.workspace_root / "backtests",
-            market_data=market_data,
-        )
-    )
     build_strategy_service = strategy_service_factory or (
         lambda current_settings: StrategyService(
             StrategyDatabase(resolve_database_url(current_settings)),
             workspace_root=current_settings.workspace_root,
             auto_bootstrap=current_settings.cognitrade_database_auto_bootstrap,
+            runtime_settings=current_settings,
         )
     )
     build_signal_engine = signal_engine_factory or SignalEngineService
@@ -265,13 +270,16 @@ def create_app(
                 workspace_root=current_settings.workspace_root,
                 max_workers=1 if database.is_sqlite else 4,
                 signal_engine=signal_engine,
+                historical_backfill_batch_timeout_seconds=(
+                    current_settings.strategy_backfill_batch_timeout_seconds
+                ),
             )
         )
     )
     build_strategy_backtesting = strategy_backtesting_factory or (
         lambda current_settings, database, market_data: StrategyBacktestService(
             database,
-            market_data_gateway=MarketDataGateway(market_data),
+            market_data_gateway=MarketDataGateway(market_data, database=database),
             object_store_root=(
                 current_settings.strategy_object_store_root
                 or current_settings.workspace_root / "strategy_objects"
@@ -297,6 +305,7 @@ def create_app(
         strategy_verification = None
         strategy_paper_execution = None
         api_idempotency = None
+        market_data_service = None
         effective_settings = settings or Settings.from_env(resolved_repo_root)
         effective_settings.validate()
         resolved_api_config.validate()
@@ -331,10 +340,27 @@ def create_app(
                 bind_chat_completion(chat_service.record_run_completion)
             finance_market_data = build_finance_market_data(effective_settings)
             paper_trading = build_paper_trading(effective_settings, finance_market_data)
-            backtesting = build_backtesting(effective_settings, finance_market_data)
             strategy_service = build_strategy_service(effective_settings)
             strategy_database = getattr(strategy_service, "database", None)
             if strategy_database is not None:
+                market_data_service = build_market_data_center(
+                    effective_settings,
+                    strategy_database,
+                )
+                report_inputs = ReportInputService(
+                    DatabaseReportInputGateway(strategy_database, runtime_settings=effective_settings)
+                )
+                bind_report_inputs = getattr(run_service, "bind_report_inputs", None)
+                if callable(bind_report_inputs):
+                    bind_report_inputs(report_inputs)
+                bind_market_data = getattr(finance_market_data, "bind_market_data_center", None)
+                if callable(bind_market_data):
+                    bind_market_data(market_data_service)
+                # Restart only jobs that were explicitly persisted by a user or
+                # enabled subscription. This does not create new acquisition.
+                start_market_data = getattr(market_data_service, "start", None)
+                if callable(start_market_data):
+                    start_market_data()
                 signal_engine = build_signal_engine(strategy_database)
                 strategy_verification = build_strategy_verification(strategy_database)
                 strategy_paper_execution = build_strategy_paper_execution(
@@ -365,8 +391,8 @@ def create_app(
                 chat_service=chat_service,
                 event_source=build_event_source(effective_settings, resolved_api_config),
                 finance_market_data=finance_market_data,
+                market_data_center=market_data_service,
                 paper_trading=paper_trading,
-                backtesting=backtesting,
                 strategies=strategy_service,
                 report_orchestration=report_orchestration,
                 signal_engine=signal_engine,
@@ -383,6 +409,9 @@ def create_app(
         finally:
             application.state.api_runtime = None
             memory_scheduler.stop()
+            close_market_data = getattr(market_data_service, "close", None)
+            if callable(close_market_data):
+                close_market_data()
             close_strategy_backtesting = getattr(strategy_backtesting, "close", None)
             if callable(close_strategy_backtesting):
                 close_strategy_backtesting()
@@ -409,7 +438,7 @@ def create_app(
         LocalizedCORSMiddleware,
         allow_origins=list(resolved_api_config.cors_origins),
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=[
             "Authorization",
             "Content-Type",
@@ -457,6 +486,9 @@ def create_app(
         prefix="/api/v2",
         dependencies=[Depends(require_principal)],
     )
+    # Register static market-data-center routes before the legacy
+    # ``/finance/market-data/{symbol}`` path to avoid dynamic-path capture.
+    finance_v2.include_router(market_data_center.router)
     finance_v2.include_router(finance.router)
     finance_v2.include_router(strategies.router)
     finance_v2.include_router(report_signals.router)

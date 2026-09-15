@@ -26,1321 +26,6 @@ export const FINANCE_ARTIFACT_TYPES = [
 
 export type FinanceArtifactType = typeof FINANCE_ARTIFACT_TYPES[number]
 
-export type UserRequestContent = {
-  "query": string;
-  "symbols"?: Array<string>;
-  "fund_codes"?: Array<string>;
-  "fund_category"?: string | null;
-  "portfolio_holdings"?: Array<Record<string, unknown>>;
-  "benchmark_return"?: number | null;
-  "rebalance_targets"?: Record<string, unknown>;
-  "asset_class_targets"?: Record<string, unknown>;
-  "drift_threshold"?: number | null;
-  "fee_model"?: Record<string, unknown>;
-  "requested_methods"?: Array<string>;
-  "model_updates"?: Record<string, unknown>;
-  "method_assumptions"?: Record<string, unknown>;
-  "sector"?: string | null;
-  "source_records"?: Array<Record<string, unknown>>;
-  "snapshots"?: Array<Record<string, unknown>>;
-  "source_refs"?: Array<Record<string, unknown>>;
-  "holding_context"?: {
-    "parent_batch_id": string;
-    "source_fund_run_id": string;
-    "source_fund_artifact_id": string;
-    "fund_code": string;
-    "fund_name": string;
-    "fund_type"?: string | null;
-    "holding_rank": number;
-    "symbol": string;
-    "security_name"?: string;
-    "fund_weight_pct"?: number | null;
-    "target_security_weight_pct"?: number | null;
-    "holding_source": "direct_equity_disclosure" | "target_etf_lookthrough";
-    "disclosure_date"?: string | null;
-    "disclosure_age_days"?: number | null;
-    "stale_level"?: "current" | "warning" | "confirmation_required" | "unknown";
-    "disclaimer"?: string;
-  } | null;
-}
-
-export type NormalizedQueryContent = {
-  "query": string;
-  "symbols": Array<string>;
-  "fund_codes"?: Array<string>;
-  "fund_category"?: string | null;
-  "portfolio_holdings"?: Array<Record<string, unknown>>;
-  "portfolio_name"?: string | null;
-  "benchmark_return"?: number | null;
-  "rebalance_targets"?: Record<string, unknown> | null;
-  "drift_threshold"?: number | null;
-  "fee_model"?: Record<string, unknown> | null;
-  "asset_class_targets"?: Record<string, unknown> | null;
-  "requested_methods"?: Array<string>;
-  "model_updates"?: Record<string, unknown> | null;
-  "method_assumptions"?: Record<string, unknown> | null;
-  "holding_context"?: {
-    "parent_batch_id"?: string;
-    "source_fund_run_id"?: string;
-    "source_fund_artifact_id"?: string;
-    "fund_code"?: string;
-    "fund_name"?: string;
-    "fund_type"?: string | null;
-    "holding_rank"?: number;
-    "symbol"?: string;
-    "security_name"?: string;
-    "fund_weight_pct"?: number | null;
-    "target_security_weight_pct"?: number | null;
-    "holding_source"?: "direct_equity_disclosure" | "target_etf_lookthrough";
-    "disclosure_date"?: string | null;
-    "disclosure_age_days"?: number | null;
-    "stale_level"?: "current" | "warning" | "confirmation_required" | "unknown";
-    "disclaimer"?: string;
-  } | null;
-}
-
-export type StockSnapshotBundleContent = {
-  "query": string | null;
-  "symbols": Array<string>;
-  "sector"?: string | null;
-  "snapshots": Array<Record<string, unknown>>;
-  "candidate_universe": Array<Record<string, unknown>>;
-  "collection": {
-    "universe_source": string;
-    "candidate_count": number;
-    "requested_snapshot_types": Array<string>;
-    "collected_snapshot_types": Array<string>;
-    "enrichment_snapshot_types"?: Array<string>;
-    "enrichment_targets": Array<string>;
-    "degraded"?: boolean;
-  };
-  "review_target_run_id"?: string | null;
-  "review_target_artifact_ids"?: Array<string>;
-  "snapshot_keys"?: Array<string>;
-}
-
-export type SnapshotContent = {
-  "snapshot_type": string;
-  "scope": "symbol" | "sector" | "universe";
-  "symbol"?: string | null;
-  "sector"?: string | null;
-  "query"?: string | null;
-  "snapshot_date"?: string | null;
-  "data_period"?: string | null;
-  "retrieved_at"?: string | null;
-  "quality_status": "available" | "degraded" | "data_gap" | "assumption_only";
-  "missing_fields"?: Array<string>;
-  "degrade_reasons"?: Array<string>;
-  "facts": Record<string, unknown>;
-  "source"?: Record<string, unknown>;
-  "source_trace"?: Array<Record<string, unknown>>;
-  "source_refs"?: Array<Record<string, unknown>>;
-}
-
-export type EvidenceSetContent = {
-  "items": Array<unknown>;
-  "symbols"?: Array<string>;
-  "query": string | null;
-}
-
-export type ScreeningResultContent = {
-  "screened_candidates": Array<{
-    "symbol": string;
-    "name": string;
-    "latest_price": number | null;
-    "latest_pct_change": number | null;
-    "latest_amount": number | null;
-    "notice_count": number;
-    "has_financial_abstract": boolean;
-    "sector": string;
-    "score": number;
-    "score_breakdown": {
-      "liquidity": number;
-      "momentum": number;
-      "fundamental": number;
-      "notice": number;
-      "enrichment_coverage": number;
-      "evidence_penalty": number;
-    };
-    "missing_evidence": Array<string>;
-    "degraded_sources": Array<string>;
-    "deep_checked": boolean;
-    "enrichment_requested": boolean;
-    "evidence_snapshot_types": Array<string>;
-    "why_it_made_the_list": string;
-    "main_risk": string;
-    "methodology": {
-      "screen_style": string;
-      "criteria": Array<{
-        "id": string;
-        "label": string;
-        "status"?: string;
-        "source_field"?: string | null;
-      }>;
-      "evaluated_criterion_count": number;
-      "passed_criterion_count": number;
-      "pass_rate": number | null;
-      "data_gaps": Array<string>;
-    };
-    "rank": number;
-    "candidate_tier": "core" | "watchlist";
-  }>;
-  "watchlist_candidates": Array<{
-    "symbol": string;
-    "name": string;
-    "latest_price": number | null;
-    "latest_pct_change": number | null;
-    "latest_amount": number | null;
-    "notice_count": number;
-    "has_financial_abstract": boolean;
-    "sector": string;
-    "score": number;
-    "score_breakdown": {
-      "liquidity": number;
-      "momentum": number;
-      "fundamental": number;
-      "notice": number;
-      "enrichment_coverage": number;
-      "evidence_penalty": number;
-    };
-    "missing_evidence": Array<string>;
-    "degraded_sources": Array<string>;
-    "deep_checked": boolean;
-    "enrichment_requested": boolean;
-    "evidence_snapshot_types": Array<string>;
-    "why_it_made_the_list": string;
-    "main_risk": string;
-    "methodology": {
-      "screen_style": string;
-      "criteria": Array<{
-        "id": string;
-        "label": string;
-        "status"?: string;
-        "source_field"?: string | null;
-      }>;
-      "evaluated_criterion_count": number;
-      "passed_criterion_count": number;
-      "pass_rate": number | null;
-      "data_gaps": Array<string>;
-    };
-    "rank": number;
-    "candidate_tier": "core" | "watchlist";
-  }>;
-  "enrichment_targets": Array<string>;
-  "scorecard": {
-    "investment_cycle": string;
-    "investment_cycle_assumption": string;
-    "candidate_count": number;
-    "eligible_candidate_count": number;
-    "top_candidate_count": number;
-    "watchlist_candidate_count": number;
-    "deep_checked_count": number;
-    "watchlist_deep_checked_count": number;
-    "enrichment_target_count": number;
-    "candidate_universe_source": string | null;
-    "requested_snapshot_types": Array<string>;
-    "collected_snapshot_types": Array<string>;
-    "preferred_methodology": string;
-    "screening_strategy": {
-      "methodology_source": string;
-      "investment_cycle": string;
-      "screen_style": string;
-    };
-    "summary": string;
-  };
-  "screening_notes": Array<string>;
-  "methodology": {
-    "screen_style": string;
-    "requested_screen_style": string;
-    "criteria": Array<{
-      "id": string;
-      "label": string;
-      "status"?: string;
-      "source_field"?: string | null;
-    }>;
-  };
-}
-
-export type SectorAnalysisContent = {
-  "sector": string | null;
-  "theme": string | null;
-  "findings": Array<{
-    "snapshot_type": string;
-    "scope"?: string;
-    "symbol"?: string | null;
-    "sector"?: string | null;
-    "theme"?: string | null;
-    "query"?: string | null;
-    "snapshot_date"?: string | null;
-    "data_period"?: string | null;
-    "retrieved_at"?: string | null;
-    "created_at"?: string | null;
-    "quality_status"?: string;
-    "facts": Record<string, unknown>;
-    "source"?: {
-      "skill"?: string;
-      "vendor"?: string;
-      "from_cache"?: boolean;
-      "provider_id"?: string | null;
-      "source_id"?: string | null;
-      "chain_position"?: number | null;
-      "dim"?: string | null;
-    };
-    "primary_source"?: unknown;
-    "fallback_sources"?: Array<{
-      "skill"?: string;
-      "vendor"?: string;
-      "from_cache"?: boolean;
-      "provider_id"?: string | null;
-      "source_id"?: string | null;
-      "chain_position"?: number | null;
-      "dim"?: string | null;
-    }>;
-    "field_sources"?: Record<string, unknown>;
-    "fallback_applied"?: boolean;
-    "missing_fields"?: Array<string>;
-    "source_confidence"?: string;
-    "source_trace"?: Array<Record<string, unknown>>;
-    "source_refs"?: Array<{
-      "type"?: string;
-      "provider"?: string;
-      "id"?: string;
-    }>;
-    "degraded"?: boolean;
-    "degrade_reason"?: string | null;
-    "degrade_reasons"?: Array<string>;
-  }>;
-  "related_snapshots": Array<{
-    "snapshot_type": string;
-    "scope"?: string;
-    "symbol"?: string | null;
-    "sector"?: string | null;
-    "theme"?: string | null;
-    "query"?: string | null;
-    "snapshot_date"?: string | null;
-    "data_period"?: string | null;
-    "retrieved_at"?: string | null;
-    "created_at"?: string | null;
-    "quality_status"?: string;
-    "facts": Record<string, unknown>;
-    "source"?: {
-      "skill"?: string;
-      "vendor"?: string;
-      "from_cache"?: boolean;
-      "provider_id"?: string | null;
-      "source_id"?: string | null;
-      "chain_position"?: number | null;
-      "dim"?: string | null;
-    };
-    "primary_source"?: unknown;
-    "fallback_sources"?: Array<{
-      "skill"?: string;
-      "vendor"?: string;
-      "from_cache"?: boolean;
-      "provider_id"?: string | null;
-      "source_id"?: string | null;
-      "chain_position"?: number | null;
-      "dim"?: string | null;
-    }>;
-    "field_sources"?: Record<string, unknown>;
-    "fallback_applied"?: boolean;
-    "missing_fields"?: Array<string>;
-    "source_confidence"?: string;
-    "source_trace"?: Array<Record<string, unknown>>;
-    "source_refs"?: Array<{
-      "type"?: string;
-      "provider"?: string;
-      "id"?: string;
-    }>;
-    "degraded"?: boolean;
-    "degrade_reason"?: string | null;
-    "degrade_reasons"?: Array<string>;
-  }>;
-  "risks": Array<string>;
-  "source_count": number;
-  "analysis_notes": Array<string>;
-  "sector_heatmap": Array<{
-    "name": string;
-    "symbol"?: string;
-    "score": number;
-    "raw_value"?: number | null;
-    "score_basis": string;
-    "source_count": number;
-    "related_snapshot_count"?: number;
-    "theme": string | null;
-  }>;
-  "constituents": Array<Record<string, unknown>>;
-  "breadth": {
-    "sample_size"?: number;
-    "up_count"?: number;
-    "down_count"?: number;
-    "flat_count"?: number;
-    "up_ratio"?: number | null;
-    "down_ratio"?: number | null;
-    "median_pct_change"?: number | null;
-    "mean_pct_change"?: number | null;
-    "average_turnover_rate"?: number | null;
-    "top3_average_pct_change"?: number | null;
-    "bottom3_average_pct_change"?: number | null;
-    "best_constituents"?: Array<{
-      "code"?: string | null;
-      "name"?: string | null;
-      "pct_change"?: number | null;
-      "turnover_rate"?: number | null;
-    }>;
-    "worst_constituents"?: Array<{
-      "code"?: string | null;
-      "name"?: string | null;
-      "pct_change"?: number | null;
-      "turnover_rate"?: number | null;
-    }>;
-  };
-  "relative_strength": {
-    "latest_excess_pct_change"?: number | null;
-    "recent_relative_strength"?: Array<{
-      "date": string;
-      "sector_pct_change": number;
-      "benchmark_pct_change": number;
-      "excess_pct_change": number;
-    }>;
-  };
-  "signal_scorecard": {
-    "theme"?: string;
-    "market_tone"?: string;
-    "benchmark_view"?: string;
-    "turnover_state"?: string;
-    "breadth_state"?: string;
-    "policy_signal_strength"?: string;
-    "regulatory_signal_strength"?: string;
-    "sample_signal_strength"?: string;
-    "setup_label"?: string;
-    "headline_counts"?: {
-      "theme_news"?: number;
-      "policy_signals"?: number;
-      "regulatory_signals"?: number;
-      "catalyst_samples"?: number;
-    };
-    "breadth"?: {
-      "sample_size"?: number;
-      "up_count"?: number;
-      "down_count"?: number;
-      "flat_count"?: number;
-      "up_ratio"?: number | null;
-      "down_ratio"?: number | null;
-      "median_pct_change"?: number | null;
-      "mean_pct_change"?: number | null;
-      "average_turnover_rate"?: number | null;
-      "top3_average_pct_change"?: number | null;
-      "bottom3_average_pct_change"?: number | null;
-      "best_constituents"?: Array<{
-        "code"?: string | null;
-        "name"?: string | null;
-        "pct_change"?: number | null;
-        "turnover_rate"?: number | null;
-      }>;
-      "worst_constituents"?: Array<{
-        "code"?: string | null;
-        "name"?: string | null;
-        "pct_change"?: number | null;
-        "turnover_rate"?: number | null;
-      }>;
-    };
-    "summary"?: string;
-  };
-  "catalysts": {
-    "theme_news": Array<Record<string, unknown>>;
-    "policy_signals": Array<Record<string, unknown>>;
-    "regulatory_signals": Array<Record<string, unknown>>;
-    "samples": Array<Record<string, unknown>>;
-  };
-  "policy_snapshots": Array<{
-    "snapshot_type": string;
-    "scope"?: string;
-    "symbol"?: string | null;
-    "sector"?: string | null;
-    "theme"?: string | null;
-    "query"?: string | null;
-    "snapshot_date"?: string | null;
-    "data_period"?: string | null;
-    "retrieved_at"?: string | null;
-    "created_at"?: string | null;
-    "quality_status"?: string;
-    "facts": Record<string, unknown>;
-    "source"?: {
-      "skill"?: string;
-      "vendor"?: string;
-      "from_cache"?: boolean;
-      "provider_id"?: string | null;
-      "source_id"?: string | null;
-      "chain_position"?: number | null;
-      "dim"?: string | null;
-    };
-    "primary_source"?: unknown;
-    "fallback_sources"?: Array<{
-      "skill"?: string;
-      "vendor"?: string;
-      "from_cache"?: boolean;
-      "provider_id"?: string | null;
-      "source_id"?: string | null;
-      "chain_position"?: number | null;
-      "dim"?: string | null;
-    }>;
-    "field_sources"?: Record<string, unknown>;
-    "fallback_applied"?: boolean;
-    "missing_fields"?: Array<string>;
-    "source_confidence"?: string;
-    "source_trace"?: Array<Record<string, unknown>>;
-    "source_refs"?: Array<{
-      "type"?: string;
-      "provider"?: string;
-      "id"?: string;
-    }>;
-    "degraded"?: boolean;
-    "degrade_reason"?: string | null;
-    "degrade_reasons"?: Array<string>;
-  }>;
-}
-
-export type ThesisReviewContent = {
-  "verdict": string;
-  "overall_verdict": string;
-  "findings": Array<{
-    "claim"?: string;
-    "artifact_id"?: string;
-    "artifact_type"?: string;
-    "summary"?: string;
-    "verdict"?: string;
-    "evidence_index"?: number;
-    "snapshot_type"?: string;
-    "scope"?: string;
-    "symbol"?: string | null;
-    "sector"?: string | null;
-    "theme"?: string | null;
-    "query"?: string | null;
-    "snapshot_date"?: string | null;
-    "data_period"?: string | null;
-    "retrieved_at"?: string | null;
-    "created_at"?: string | null;
-    "quality_status"?: string;
-    "facts"?: Record<string, unknown>;
-    "source"?: {
-      "skill"?: string;
-      "vendor"?: string;
-      "from_cache"?: boolean;
-      "provider_id"?: string | null;
-      "source_id"?: string | null;
-      "chain_position"?: number | null;
-      "dim"?: string | null;
-    };
-    "primary_source"?: unknown;
-    "fallback_sources"?: Array<{
-      "skill"?: string;
-      "vendor"?: string;
-      "from_cache"?: boolean;
-      "provider_id"?: string | null;
-      "source_id"?: string | null;
-      "chain_position"?: number | null;
-      "dim"?: string | null;
-    }>;
-    "field_sources"?: Record<string, unknown>;
-    "fallback_applied"?: boolean;
-    "missing_fields"?: Array<string>;
-    "source_confidence"?: string;
-    "source_trace"?: Array<Record<string, unknown>>;
-    "source_refs"?: Array<{
-      "type"?: string;
-      "provider"?: string;
-      "id"?: string;
-    }>;
-    "degraded"?: boolean;
-    "degrade_reason"?: string | null;
-    "degrade_reasons"?: Array<string>;
-  }>;
-  "strengths": Array<{
-    "claim"?: string;
-    "artifact_id"?: string;
-    "artifact_type"?: string;
-    "summary"?: string;
-    "verdict"?: string;
-    "evidence_index"?: number;
-    "snapshot_type"?: string;
-    "scope"?: string;
-    "symbol"?: string | null;
-    "sector"?: string | null;
-    "theme"?: string | null;
-    "query"?: string | null;
-    "snapshot_date"?: string | null;
-    "data_period"?: string | null;
-    "retrieved_at"?: string | null;
-    "created_at"?: string | null;
-    "quality_status"?: string;
-    "facts"?: Record<string, unknown>;
-    "source"?: {
-      "skill"?: string;
-      "vendor"?: string;
-      "from_cache"?: boolean;
-      "provider_id"?: string | null;
-      "source_id"?: string | null;
-      "chain_position"?: number | null;
-      "dim"?: string | null;
-    };
-    "primary_source"?: unknown;
-    "fallback_sources"?: Array<{
-      "skill"?: string;
-      "vendor"?: string;
-      "from_cache"?: boolean;
-      "provider_id"?: string | null;
-      "source_id"?: string | null;
-      "chain_position"?: number | null;
-      "dim"?: string | null;
-    }>;
-    "field_sources"?: Record<string, unknown>;
-    "fallback_applied"?: boolean;
-    "missing_fields"?: Array<string>;
-    "source_confidence"?: string;
-    "source_trace"?: Array<Record<string, unknown>>;
-    "source_refs"?: Array<{
-      "type"?: string;
-      "provider"?: string;
-      "id"?: string;
-    }>;
-    "degraded"?: boolean;
-    "degrade_reason"?: string | null;
-    "degrade_reasons"?: Array<string>;
-  }>;
-  "weaknesses": Array<unknown>;
-  "follow_up": Array<string>;
-  "review_target_run_id": string | null;
-  "review_target_artifact_ids": Array<string>;
-  "review_target_found": boolean;
-  "target_thesis": Array<{
-    "claim"?: string;
-    "artifact_id"?: string;
-    "artifact_type"?: string;
-    "summary"?: string;
-    "verdict"?: string;
-    "evidence_index"?: number;
-    "snapshot_type"?: string;
-    "scope"?: string;
-    "symbol"?: string | null;
-    "sector"?: string | null;
-    "theme"?: string | null;
-    "query"?: string | null;
-    "snapshot_date"?: string | null;
-    "data_period"?: string | null;
-    "retrieved_at"?: string | null;
-    "created_at"?: string | null;
-    "quality_status"?: string;
-    "facts"?: Record<string, unknown>;
-    "source"?: {
-      "skill"?: string;
-      "vendor"?: string;
-      "from_cache"?: boolean;
-      "provider_id"?: string | null;
-      "source_id"?: string | null;
-      "chain_position"?: number | null;
-      "dim"?: string | null;
-    };
-    "primary_source"?: unknown;
-    "fallback_sources"?: Array<{
-      "skill"?: string;
-      "vendor"?: string;
-      "from_cache"?: boolean;
-      "provider_id"?: string | null;
-      "source_id"?: string | null;
-      "chain_position"?: number | null;
-      "dim"?: string | null;
-    }>;
-    "field_sources"?: Record<string, unknown>;
-    "fallback_applied"?: boolean;
-    "missing_fields"?: Array<string>;
-    "source_confidence"?: string;
-    "source_trace"?: Array<Record<string, unknown>>;
-    "source_refs"?: Array<{
-      "type"?: string;
-      "provider"?: string;
-      "id"?: string;
-    }>;
-    "degraded"?: boolean;
-    "degrade_reason"?: string | null;
-    "degrade_reasons"?: Array<string>;
-  }>;
-  "evidence_comparison": {
-    "target_artifact_count": number;
-    "fresh_evidence_count": number;
-    "fresh_snapshot_types": Array<string>;
-    "fresh_symbols": Array<string>;
-  };
-}
-
-export type SourceRecordSetContent = {
-  "query": string;
-  "records": Array<{
-    "record_id": string;
-    "text": string;
-    "author": string | null;
-    "published_at": string | null;
-    "tags": Array<string>;
-    "dimensions": Array<string>;
-  }>;
-}
-
-export type DistillationResultContent = {
-  "dimensions": Array<{
-    "dimension_name": string;
-    "category": string;
-    "claim": string;
-    "source_record_ids": Array<string>;
-    "confidence": number;
-    "attribution": string | null;
-  }>;
-  "summary": {
-    "source_record_count": number;
-    "dimension_count": number;
-    "major_risks": Array<string>;
-    "method": string;
-  };
-}
-
-export type DistillationReviewContent = {
-  "verdict": string;
-  "findings": Array<{
-    "finding_type": string;
-    "severity": string;
-    "dimension_name": string | null;
-    "reason": string;
-  }>;
-  "distillation": {
-    "dimensions": Array<{
-      "dimension_name": string;
-      "category": string;
-      "claim": string;
-      "source_record_ids": Array<string>;
-      "confidence": number;
-      "attribution": string | null;
-    }>;
-    "summary": {
-      "source_record_count": number;
-      "dimension_count": number;
-      "major_risks": Array<string>;
-      "method": string;
-    };
-  };
-}
-
-export type ResearchReportContent = {
-  "conclusion": string;
-  "assessment"?: Record<string, unknown> | null;
-  "comparison"?: Record<string, unknown> | null;
-  "evidence": Array<unknown>;
-  "risk": Array<unknown>;
-  "follow_up": Array<unknown>;
-  "methodologies"?: Array<Record<string, unknown>>;
-  "scorecard"?: Record<string, unknown> | null;
-  "screening_scorecard"?: Record<string, unknown> | null;
-  "uzi_profile"?: Record<string, unknown>;
-  "uzi_data_pipeline"?: Record<string, unknown> | null;
-  "presentation_artifact_type"?: string;
-  "holding_context"?: {
-    "parent_batch_id": string;
-    "source_fund_run_id": string;
-    "source_fund_artifact_id": string;
-    "fund_code": string;
-    "fund_name": string;
-    "fund_type"?: string | null;
-    "holding_rank": number;
-    "symbol": string;
-    "security_name"?: string;
-    "fund_weight_pct"?: number | null;
-    "target_security_weight_pct"?: number | null;
-    "holding_source": "direct_equity_disclosure" | "target_etf_lookthrough";
-    "disclosure_date"?: string | null;
-    "disclosure_age_days"?: number | null;
-    "stale_level"?: "current" | "warning" | "confirmation_required" | "unknown";
-    "disclaimer"?: string;
-  } | null;
-  "fund_analysis"?: Record<string, unknown>;
-  "quality_status"?: string | null;
-  "native_analysis_artifact_id"?: string;
-  "report_allowed"?: boolean;
-  "critical_count"?: number;
-  "warning_count"?: number;
-  "delivery_type"?: string;
-  "portfolio_name"?: string;
-  "portfolio_holdings"?: Array<Record<string, unknown>>;
-  "research_profile"?: string | null;
-  "school"?: string | null;
-  "candidates"?: Array<Record<string, unknown>>;
-  "screening"?: Record<string, unknown>;
-  "sector_analysis"?: Record<string, unknown>;
-  "sector_heatmap"?: Array<Record<string, unknown>>;
-  "thesis_review"?: Record<string, unknown>;
-  "review_summary"?: Record<string, unknown>;
-}
-
-export type MainAgentSynthesisContent = {
-  "conclusion": string;
-  "assistant_message": string;
-  "follow_up"?: Array<string>;
-  "source_artifact_id": string;
-  "source_artifact_ids"?: Array<string>;
-  "model_generated"?: boolean;
-}
-
-export type QuickScanContent = {
-  "command": "quick-scan";
-  "methodology_version": string;
-  "source_commit": string;
-  "symbol": string | null;
-  "required_dimensions": Array<unknown>;
-  "dimension_status": {
-    "1_financials": string;
-    "2_kline": string;
-    "10_valuation": string;
-    "18_trap": string;
-  };
-  "investor_ids": Array<string>;
-  "verdict": string;
-  "aggregate_score": number | null;
-  "votes": Array<{
-    "symbol": string;
-    "investor_id": string;
-    "perspective_id": string;
-    "perspective_label": string;
-    "investor_name_en": string | null;
-    "methodology_source": string | null;
-    "avatar_seed": string | null;
-    "tier": string | null;
-    "school": string;
-    "required_dimensions": Array<string>;
-    "signal": string;
-    "score": number;
-    "confidence": number;
-    "uzi_confidence": number;
-    "reasoning": string;
-    "headline": string;
-    "pass_rules": Array<{
-      "rule_id": string;
-      "name": string;
-      "weight": number;
-      "msg": string;
-    }>;
-    "fail_rules": Array<{
-      "rule_id": string;
-      "name": string;
-      "weight": number;
-      "msg": string;
-    }>;
-    "pass_count": number;
-    "fail_count": number;
-    "skipped_rule_count": number;
-    "weight_pass": number;
-    "weight_total": number;
-    "rule_engine_version": string;
-    "skip_reason": string | null;
-    "time_horizon": string | null;
-    "position_sizing": string | null;
-    "what_would_change_my_mind": string | null;
-    "checks": Array<{
-      "dimension": string;
-      "status": string;
-      "feature_names": Array<string>;
-    }>;
-    "is_methodology_perspective": boolean;
-    "is_real_person_advice": boolean;
-    "rule_mode": string;
-  }>;
-  "trap_level": string | null;
-  "trap_signals_hit": number | null;
-  "risks": Array<string>;
-  "markdown": string;
-  "output_format": "markdown";
-  "html_generated": false;
-  "quality_status": "available" | "degraded" | "data_gap";
-  "confidence": number;
-  "data_gap": Array<string>;
-  "risk_flags": Array<string>;
-}
-
-export type UziNativeMethodResultContent = {
-  "method_id": "dcf" | "comps" | "three_statement" | "quick_lbo" | "accretion_dilution" | "initiation_report" | "earnings_review" | "catalyst_calendar" | "thesis_tracker" | "morning_note" | "quantitative_screen" | "sector_review" | "ic_memo" | "porter_bcg" | "dd_checklist" | "unit_economics" | "value_creation_plan" | "portfolio_rebalance" | "ai_readiness" | "earnings_preview" | "model_update" | "returns_attribution" | "holding_rebalance";
-  "source_commit": "b004d7a988ca53a4805bf36784af091fa1209f22";
-  "implementation": "vendored_uzi_3_9_2_pure_function";
-  "results": Array<{
-    "symbol": string | null;
-    "result": unknown;
-    "data_gap": Array<string>;
-  }>;
-  "quality_status": "available" | "degraded" | "data_gap";
-  "data_gap": Array<string>;
-  "assumptions": Record<string, unknown>;
-}
-
-export type UziNativeCommandResultContent = {
-  "command_id": "analyze-stock" | "quick-scan" | "panel-only" | "scan-trap" | "dcf" | "comps" | "lbo" | "segmental-model" | "initiate" | "earnings" | "catalysts" | "thesis" | "screen" | "dd" | "ic-memo" | "ai-readiness" | "earnings-preview" | "model-update" | "returns" | "rebalance";
-  "source_commit": "b004d7a988ca53a4805bf36784af091fa1209f22";
-  "implementation": "vendored_uzi_3_9_2_command_boundary";
-  "phase": string;
-  "results": Array<{
-    "symbol": string | null;
-    "result": unknown;
-    "data_gap": Array<string>;
-  }>;
-  "quality_status": "available" | "degraded" | "data_gap";
-  "data_gap": Array<string>;
-}
-
-export type UziNativeAnalysisContent = {
-  "source_commit": string;
-  "methodology_version": string;
-  "profile": "lite" | "medium" | "deep";
-  "school"?: "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | null;
-  "results": Array<Record<string, unknown>>;
-  "critical_count": number;
-  "warning_count": number;
-  "report_allowed": boolean;
-  "quality_status": "available" | "degraded" | "quality_gate_blocked";
-  "recovery_history": Array<Record<string, unknown>>;
-  "holding_context"?: Record<string, unknown> | null;
-}
-
-export type FundSnapshotContent = {
-  "query": string;
-  "analysis_mode": "single_fund" | "comparison";
-  "fund_codes": Array<string>;
-  "fund_category": string;
-  "investment_cycle"?: string;
-  "candidate_pool_size"?: number;
-  "funds": Array<{
-    "fund_code": string;
-    "fund_name": string;
-    "fund_type"?: string | null;
-    "as_of"?: string | null;
-    "unit_nav"?: number | null;
-    "accumulated_nav"?: number | null;
-    "returns_pct": {
-      "daily"?: number;
-      "week_1"?: number;
-      "month_1"?: number;
-      "month_3"?: number;
-      "month_6"?: number;
-      "year_1"?: number;
-      "year_2"?: number;
-      "year_3"?: number;
-      "year_to_date"?: number;
-      "since_inception"?: number;
-    };
-    "fee_pct"?: number | null;
-    "ranking_source"?: string | null;
-    "nav_history"?: Array<{
-      "date": string;
-      "nav": number;
-    }>;
-    "risk"?: {
-      "observation_count"?: number;
-      "max_drawdown_pct"?: number;
-      "annualized_volatility_pct"?: number | null;
-      "period_return_pct"?: number;
-      "period_start"?: string;
-      "period_end"?: string;
-    };
-    "top_holdings"?: Array<{
-      "rank": number;
-      "code": string;
-      "name": string;
-      "weight_pct"?: number | null;
-      "shares_10k"?: number | null;
-      "market_value_10k"?: number | null;
-    }>;
-    "holdings_period"?: string | null;
-    "top10_concentration_pct"?: number | null;
-    "holdings_source"?: string;
-    "asset_allocation"?: Array<{
-      "asset_type": string;
-      "label": string;
-      "weight_pct": number;
-    }>;
-    "asset_allocation_period"?: string | null;
-    "bond_holdings"?: Array<{
-      "rank": number;
-      "code": string;
-      "name": string;
-      "security_type": string;
-      "weight_pct"?: number | null;
-      "shares_10k"?: number | null;
-      "market_value_10k"?: number | null;
-      "effective_weight_pct"?: number | null;
-      "report_date"?: string | null;
-      "report_id"?: string | null;
-      "source_ref"?: string | null;
-    }>;
-    "target_fund_holdings"?: Array<{
-      "rank": number;
-      "code": string;
-      "name": string;
-      "security_type": string;
-      "weight_pct"?: number | null;
-      "shares_10k"?: number | null;
-      "market_value_10k"?: number | null;
-      "effective_weight_pct"?: number | null;
-      "report_date"?: string | null;
-      "report_id"?: string | null;
-      "source_ref"?: string | null;
-    }>;
-    "target_fund_period"?: string | null;
-    "target_fund_source_ref"?: string | null;
-    "lookthrough_holdings"?: Array<{
-      "rank": number;
-      "code": string;
-      "name": string;
-      "security_type": string;
-      "weight_pct"?: number | null;
-      "shares_10k"?: number | null;
-      "market_value_10k"?: number | null;
-      "effective_weight_pct"?: number | null;
-      "report_date"?: string | null;
-      "report_id"?: string | null;
-      "source_ref"?: string | null;
-    }>;
-    "lookthrough_period"?: string | null;
-    "holdings_coverage"?: {
-      "asset_allocation": "available" | "unavailable" | "not_applicable";
-      "direct_equity": "available" | "unavailable" | "not_applicable";
-      "bond": "available" | "unavailable" | "not_applicable";
-      "target_fund": "available" | "unavailable" | "not_applicable";
-      "lookthrough": "available" | "unavailable" | "not_applicable";
-      "is_fund_of_funds": boolean;
-    };
-    "fund_overview"?: {
-      "fund_company"?: unknown;
-      "fund_manager"?: unknown;
-      "inception_date"?: string | null;
-      "latest_scale"?: unknown;
-      "custodian"?: unknown;
-      "investment_objective"?: unknown;
-      "investment_strategy"?: unknown;
-      "benchmark_definition"?: unknown;
-    };
-    "benchmark_definition"?: string | null;
-    "benchmark_performance"?: Array<{
-      "period": string;
-      "period_group"?: string | null;
-      "fund_return_pct"?: number | null;
-      "benchmark_return_pct"?: number | null;
-      "excess_return_pct"?: number | null;
-      "fund_max_drawdown_pct"?: number | null;
-      "benchmark_max_drawdown_pct"?: number | null;
-      "peer_rank"?: unknown;
-    }>;
-    "manager_tenures"?: Array<{
-      "manager": string;
-      "managers"?: Array<string>;
-      "start_date": string;
-      "end_date"?: string | null;
-      "current": boolean;
-      "tenure_text"?: unknown;
-      "tenure_return_pct"?: number | null;
-    }>;
-    "scale_history"?: Array<{
-      "report_date": string;
-      "subscriptions_100m_shares"?: number | null;
-      "redemptions_100m_shares"?: number | null;
-      "net_flow_100m_shares"?: number | null;
-      "total_shares_100m"?: number | null;
-      "net_assets_100m_cny"?: number | null;
-      "reported_share_change_pct"?: number | null;
-    }>;
-    "scale_change"?: {
-      "latest_report_date"?: string | null;
-      "previous_report_date"?: string | null;
-      "latest_total_shares_100m"?: number | null;
-      "latest_net_assets_100m_cny"?: number | null;
-      "latest_net_flow_100m_shares"?: number | null;
-      "total_share_change_pct"?: number | null;
-      "net_asset_change_pct"?: number | null;
-      "status"?: string;
-    };
-    "data_gap": Array<string>;
-    "quality_status"?: "available" | "degraded" | "data_gap";
-  }>;
-  "quality_status": "available" | "degraded" | "data_gap";
-  "data_gap": Array<string>;
-  "provider_errors"?: Array<{
-    "stage": string;
-    "error_type": string;
-  }>;
-  "retrieved_at": string;
-}
-
-export type FundAnalysisContent = {
-  "methodology_version": string;
-  "analysis_mode": "single_fund" | "comparison";
-  "fund_category"?: string | null;
-  "investment_cycle"?: string | null;
-  "candidate_count": number;
-  "candidates": Array<{
-    "fund_code": string;
-    "fund_name": string;
-    "fund_type"?: string | null;
-    "as_of"?: string | null;
-    "unit_nav"?: number | null;
-    "returns_pct": {
-      "daily"?: number;
-      "week_1"?: number;
-      "month_1"?: number;
-      "month_3"?: number;
-      "month_6"?: number;
-      "year_1"?: number;
-      "year_2"?: number;
-      "year_3"?: number;
-      "year_to_date"?: number;
-      "since_inception"?: number;
-    };
-    "risk": {
-      "observation_count"?: number;
-      "max_drawdown_pct"?: number;
-      "annualized_volatility_pct"?: number | null;
-      "period_return_pct"?: number;
-      "period_start"?: string;
-      "period_end"?: string;
-    };
-    "fee_pct"?: number | null;
-    "metrics": {
-      "return_1y"?: number;
-      "return_3y_annualized"?: number;
-      "benchmark_excess_1y"?: number;
-      "max_drawdown"?: number;
-      "volatility"?: number;
-      "fee"?: number;
-      "return_consistency"?: number;
-    };
-    "top_holdings"?: Array<{
-      "rank": number;
-      "code": string;
-      "name": string;
-      "weight_pct"?: number | null;
-      "shares_10k"?: number | null;
-      "market_value_10k"?: number | null;
-    }>;
-    "holdings_period"?: string | null;
-    "top10_concentration_pct"?: number | null;
-    "holdings_source"?: string | null;
-    "asset_allocation"?: Array<{
-      "asset_type": string;
-      "label": string;
-      "weight_pct": number;
-    }>;
-    "asset_allocation_period"?: string | null;
-    "bond_holdings"?: Array<{
-      "rank": number;
-      "code": string;
-      "name": string;
-      "security_type": string;
-      "weight_pct"?: number | null;
-      "shares_10k"?: number | null;
-      "market_value_10k"?: number | null;
-      "effective_weight_pct"?: number | null;
-      "report_date"?: string | null;
-      "report_id"?: string | null;
-      "source_ref"?: string | null;
-    }>;
-    "target_fund_holdings"?: Array<{
-      "rank": number;
-      "code": string;
-      "name": string;
-      "security_type": string;
-      "weight_pct"?: number | null;
-      "shares_10k"?: number | null;
-      "market_value_10k"?: number | null;
-      "effective_weight_pct"?: number | null;
-      "report_date"?: string | null;
-      "report_id"?: string | null;
-      "source_ref"?: string | null;
-    }>;
-    "target_fund_period"?: string | null;
-    "target_fund_source_ref"?: string | null;
-    "lookthrough_holdings"?: Array<{
-      "rank": number;
-      "code": string;
-      "name": string;
-      "security_type": string;
-      "weight_pct"?: number | null;
-      "shares_10k"?: number | null;
-      "market_value_10k"?: number | null;
-      "effective_weight_pct"?: number | null;
-      "report_date"?: string | null;
-      "report_id"?: string | null;
-      "source_ref"?: string | null;
-    }>;
-    "lookthrough_period"?: string | null;
-    "holdings_coverage"?: {
-      "asset_allocation": "available" | "unavailable" | "not_applicable";
-      "direct_equity": "available" | "unavailable" | "not_applicable";
-      "bond": "available" | "unavailable" | "not_applicable";
-      "target_fund": "available" | "unavailable" | "not_applicable";
-      "lookthrough": "available" | "unavailable" | "not_applicable";
-      "is_fund_of_funds": boolean;
-    };
-    "benchmark_definition"?: string | null;
-    "benchmark_performance"?: Array<{
-      "period": string;
-      "period_group"?: string | null;
-      "fund_return_pct"?: number | null;
-      "benchmark_return_pct"?: number | null;
-      "excess_return_pct"?: number | null;
-      "fund_max_drawdown_pct"?: number | null;
-      "benchmark_max_drawdown_pct"?: number | null;
-      "peer_rank"?: unknown;
-    }>;
-    "manager_tenures"?: Array<{
-      "manager": string;
-      "managers"?: Array<string>;
-      "start_date": string;
-      "end_date"?: string | null;
-      "current": boolean;
-      "tenure_text"?: unknown;
-      "tenure_return_pct"?: number | null;
-    }>;
-    "scale_history"?: Array<{
-      "report_date": string;
-      "subscriptions_100m_shares"?: number | null;
-      "redemptions_100m_shares"?: number | null;
-      "net_flow_100m_shares"?: number | null;
-      "total_shares_100m"?: number | null;
-      "net_assets_100m_cny"?: number | null;
-      "reported_share_change_pct"?: number | null;
-    }>;
-    "scale_change"?: {
-      "latest_report_date"?: string | null;
-      "previous_report_date"?: string | null;
-      "latest_total_shares_100m"?: number | null;
-      "latest_net_assets_100m_cny"?: number | null;
-      "latest_net_flow_100m_shares"?: number | null;
-      "total_share_change_pct"?: number | null;
-      "net_asset_change_pct"?: number | null;
-      "status"?: string;
-    };
-    "comparison_group"?: string;
-    "score"?: number | null;
-    "score_coverage": number;
-    "score_components": Array<{
-      "component": string;
-      "value": number;
-      "weight": number;
-      "percentile": number;
-    }>;
-    "selection_eligible": boolean;
-    "rank"?: number | null;
-    "data_gap": Array<string>;
-    "quality_status": "available" | "degraded" | "data_gap";
-  }>;
-  "recommendations": Array<{
-    "fund_code": string;
-    "fund_name": string;
-    "fund_type"?: string | null;
-    "comparison_group": string;
-    "rank": number;
-    "score": number;
-    "score_coverage": number;
-    "reason": string;
-    "risk": string;
-  }>;
-  "selection_policy": {
-    "description": string;
-    "comparison_required": boolean;
-    "minimum_score_coverage": number;
-    "minimum_comparable_sample": number;
-    "components": Array<{
-      "id": string;
-      "weight": number;
-      "direction": "higher" | "lower";
-    }>;
-    "non_imputation_rule": string;
-  };
-  "quality_status": "available" | "degraded" | "data_gap";
-  "data_gap": Array<string>;
-  "provider_errors"?: Array<{
-    "stage": string;
-    "error_type": string;
-  }>;
-  "generated_at": string;
-}
-
-export type FundHoldingReportBatchContent = {
-  "batch_id": string;
-  "source_run_id": string;
-  "source_artifact_id": string;
-  "fund_code": string;
-  "fund_name": string;
-  "fund_type"?: string | null;
-  "profile": "lite" | "medium" | "deep";
-  "status": "running" | "completed" | "completed_partial" | "failed" | "cancelled";
-  "concurrency": number;
-  "holding_source": "direct_equity_disclosure" | "target_etf_lookthrough";
-  "is_fund_of_funds"?: boolean;
-  "disclosure_date"?: string | null;
-  "disclosure_age_days"?: number | null;
-  "stale_level"?: "current" | "warning" | "confirmation_required" | "unknown";
-  "cancel_requested"?: boolean;
-  "holdings": Array<{
-    "rank": number;
-    "symbol": string;
-    "name": string;
-    "market": string;
-    "supported": boolean;
-    "status": "queued" | "running" | "completed" | "completed_partial" | "failed" | "cancelled" | "unsupported";
-    "fund_weight_pct"?: number | null;
-    "target_security_weight_pct"?: number | null;
-    "holding_source": string;
-    "disclosure_date"?: string | null;
-    "child_run_id"?: string | null;
-    "attempt_run_ids": Array<string>;
-    "report_available": boolean;
-    "retry_count": number;
-    "data_gap": Array<string>;
-    "error"?: string | null;
-    "started_at"?: string | null;
-    "completed_at"?: string | null;
-  }>;
-  "counts": {
-    "total": number;
-    "supported": number;
-    "queued": number;
-    "running": number;
-    "deliverable": number;
-    "failed": number;
-    "cancelled": number;
-    "unsupported": number;
-  };
-  "data_gap": Array<string>;
-  "created_at": string;
-  "updated_at": string;
-  "completed_at"?: string | null;
-}
-
-export type FinanceArtifactContentMap = {
-  "user_request": UserRequestContent
-  "normalized_query": NormalizedQueryContent
-  "stock_snapshot_bundle": StockSnapshotBundleContent
-  "snapshot": SnapshotContent
-  "evidence_set": EvidenceSetContent
-  "screening_result": ScreeningResultContent
-  "sector_analysis": SectorAnalysisContent
-  "thesis_review": ThesisReviewContent
-  "source_record_set": SourceRecordSetContent
-  "distillation_result": DistillationResultContent
-  "distillation_review": DistillationReviewContent
-  "research_report": ResearchReportContent
-  "main_agent_synthesis": MainAgentSynthesisContent
-  "quick_scan": QuickScanContent
-  "uzi_native_method_result": UziNativeMethodResultContent
-  "uzi_native_command_result": UziNativeCommandResultContent
-  "uzi_native_analysis": UziNativeAnalysisContent
-  "fund_snapshot": FundSnapshotContent
-  "fund_analysis": FundAnalysisContent
-  "fund_holding_report_batch": FundHoldingReportBatchContent
-}
-
 export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
   "user_request": [
     "query",
@@ -1360,6 +45,8 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "source_records",
     "snapshots",
     "source_refs",
+    "market_data_bundle",
+    "report_data_manifest",
     "holding_context",
     "holding_context.parent_batch_id",
     "holding_context.source_fund_run_id",
@@ -1431,6 +118,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
   ],
   "snapshot": [
     "snapshot_type",
+    "dimension_id",
     "scope",
     "symbol",
     "sector",
@@ -1441,6 +129,11 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "quality_status",
     "missing_fields",
     "degrade_reasons",
+    "query_manifest",
+    "scoring_policy",
+    "scoring_policy.excluded",
+    "scoring_policy.reason_code",
+    "scoring_policy.reason",
     "facts",
     "source",
     "source_trace",
@@ -1561,6 +254,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "theme",
     "findings",
     "findings[].snapshot_type",
+    "findings[].dimension_id",
     "findings[].scope",
     "findings[].symbol",
     "findings[].sector",
@@ -1571,6 +265,11 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "findings[].retrieved_at",
     "findings[].created_at",
     "findings[].quality_status",
+    "findings[].query_manifest",
+    "findings[].scoring_policy",
+    "findings[].scoring_policy.excluded",
+    "findings[].scoring_policy.reason_code",
+    "findings[].scoring_policy.reason",
     "findings[].facts",
     "findings[].source",
     "findings[].source.skill",
@@ -1603,6 +302,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "findings[].degrade_reasons",
     "related_snapshots",
     "related_snapshots[].snapshot_type",
+    "related_snapshots[].dimension_id",
     "related_snapshots[].scope",
     "related_snapshots[].symbol",
     "related_snapshots[].sector",
@@ -1613,6 +313,11 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "related_snapshots[].retrieved_at",
     "related_snapshots[].created_at",
     "related_snapshots[].quality_status",
+    "related_snapshots[].query_manifest",
+    "related_snapshots[].scoring_policy",
+    "related_snapshots[].scoring_policy.excluded",
+    "related_snapshots[].scoring_policy.reason_code",
+    "related_snapshots[].scoring_policy.reason",
     "related_snapshots[].facts",
     "related_snapshots[].source",
     "related_snapshots[].source.skill",
@@ -1730,6 +435,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "catalysts.samples",
     "policy_snapshots",
     "policy_snapshots[].snapshot_type",
+    "policy_snapshots[].dimension_id",
     "policy_snapshots[].scope",
     "policy_snapshots[].symbol",
     "policy_snapshots[].sector",
@@ -1740,6 +446,11 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "policy_snapshots[].retrieved_at",
     "policy_snapshots[].created_at",
     "policy_snapshots[].quality_status",
+    "policy_snapshots[].query_manifest",
+    "policy_snapshots[].scoring_policy",
+    "policy_snapshots[].scoring_policy.excluded",
+    "policy_snapshots[].scoring_policy.reason_code",
+    "policy_snapshots[].scoring_policy.reason",
     "policy_snapshots[].facts",
     "policy_snapshots[].source",
     "policy_snapshots[].source.skill",
@@ -2127,6 +838,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "source_commit",
     "methodology_version",
     "profile",
+    "agent_workflow_mode",
     "school",
     "results",
     "critical_count",
@@ -2134,6 +846,35 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "report_allowed",
     "quality_status",
     "recovery_history",
+    "recovery",
+    "recovery.schema_version",
+    "recovery.kind",
+    "recovery.action",
+    "recovery.retryable",
+    "recovery.manual_retryable",
+    "recovery.input_hash",
+    "recovery.stages",
+    "recovery.dimensions",
+    "recovery.reason_codes",
+    "recovery.repairable_stages",
+    "recovery.output_dimensions",
+    "recovery.exhausted_stages",
+    "recovery.failure_records",
+    "recovery.failure_records[].stage",
+    "recovery.failure_records[].kind",
+    "recovery.failure_records[].error_type",
+    "recovery.failure_records[].provider_status_code",
+    "recovery.failure_records[].provider_error_code",
+    "recovery.failure_records[].provider_error_type",
+    "recovery.failure_records[].provider_request_id",
+    "recovery.failure_records[].retry_after_seconds",
+    "recovery.failure_records[].provider_retryable",
+    "recovery.failure_records[].validation_fields",
+    "recovery.failure_records[].validation_codes",
+    "recovery.failure_records[].validation_reasons",
+    "recovery.failure_records[].validation_reasons[].field",
+    "recovery.failure_records[].validation_reasons[].code",
+    "recovery.failure_records[].validation_reasons[].missing_fields",
     "holding_context",
   ],
   "fund_snapshot": [
@@ -2214,6 +955,7 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "funds[].target_fund_holdings[].source_ref",
     "funds[].target_fund_period",
     "funds[].target_fund_source_ref",
+    "funds[].target_fund_published_at",
     "funds[].lookthrough_holdings",
     "funds[].lookthrough_holdings[].rank",
     "funds[].lookthrough_holdings[].code",

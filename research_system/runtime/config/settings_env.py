@@ -24,16 +24,12 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
     workspace_root = root / "workspace"
     config_root = workspace_root / "config"
     return {
-        "provider_name": env_values.get("PROVIDER_NAME", "openai"),
-        "default_model": env_values.get("OPENAI_MODEL", "gpt-5.6-luna"),
-        "openai_reasoning_effort": env_values.get("OPENAI_REASONING_EFFORT") or None,
-        "openai_service_tier": env_values.get("OPENAI_SERVICE_TIER", "default").strip().lower(),
-        "openai_disable_response_storage": env_values.get("OPENAI_DISABLE_RESPONSE_STORAGE", "true").strip().lower()
-        in {"1", "true", "yes", "on"},
+        "provider_name": "codex",
+        "codex_enabled": env_values.get("CODEX_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
+        "default_model": env_values.get("CODEX_MODEL", "gpt-5.6-luna"),
+        "codex_reasoning_effort": env_values.get("CODEX_REASONING_EFFORT", "low") or None,
         "embedding_model": env_values.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
         "embedding_dimensions": int(env_values.get("OPENAI_EMBEDDING_DIMENSIONS", "1536")),
-        "openai_api_key": env_values.get("OPENAI_API_KEY"),
-        "openai_base_url": env_values.get("OPENAI_BASE_URL"),
         "tushare_token": env_values.get("TUSHARE_TOKEN"),
         "mx_api_key": env_values.get("MX_APIKEY"),
         "qdrant_url": env_values.get("QDRANT_URL"),
@@ -121,9 +117,21 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         "uzi_llm_request_timeout_seconds": int(
             env_values.get("UZI_LLM_REQUEST_TIMEOUT_SECONDS", "480")
         ),
+        "uzi_llm_lite_request_timeout_seconds": int(
+            env_values.get("UZI_LLM_LITE_REQUEST_TIMEOUT_SECONDS", "240")
+        ),
+        "uzi_llm_medium_request_timeout_seconds": int(
+            env_values.get("UZI_LLM_MEDIUM_REQUEST_TIMEOUT_SECONDS", "600")
+        ),
+        "uzi_llm_deep_request_timeout_seconds": int(
+            env_values.get("UZI_LLM_DEEP_REQUEST_TIMEOUT_SECONDS", "900")
+        ),
+        "uzi_llm_buy_zone_request_timeout_seconds": int(
+            env_values.get("UZI_LLM_BUY_ZONE_REQUEST_TIMEOUT_SECONDS", "300")
+        ),
         "uzi_llm_max_concurrency": int(env_values.get("UZI_LLM_MAX_CONCURRENCY", "2")),
         "uzi_llm_transient_retries": int(
-            env_values.get("UZI_LLM_TRANSIENT_RETRIES", "6")
+            env_values.get("UZI_LLM_TRANSIENT_RETRIES", "2")
         ),
         "uzi_llm_retry_base_seconds": float(
             env_values.get("UZI_LLM_RETRY_BASE_SECONDS", "2")
@@ -132,8 +140,21 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
             env_values.get("UZI_LLM_RETRY_MAX_SECONDS", "60")
         ),
         "max_child_threads_per_turn": int(env_values.get("MAX_CHILD_THREADS_PER_TURN", "8")),
+        "market_data_auto_collection_enabled": env_values.get(
+            "COGNITRADE_MARKET_DATA_AUTO_COLLECTION_ENABLED", "false"
+        ).strip().lower()
+        in {"1", "true", "yes", "on"},
+        "market_data_collection_concurrency": int(
+            env_values.get("COGNITRADE_MARKET_DATA_COLLECTION_CONCURRENCY", "5")
+        ),
         "fund_holding_report_concurrency": int(
             env_values.get("COGNITRADE_FUND_HOLDING_REPORT_CONCURRENCY", "2")
+        ),
+        "fund_holding_report_max_auto_retries": int(
+            env_values.get("COGNITRADE_FUND_HOLDING_REPORT_MAX_AUTO_RETRIES", "3")
+        ),
+        "strategy_backfill_batch_timeout_seconds": int(
+            env_values.get("COGNITRADE_STRATEGY_BACKFILL_BATCH_TIMEOUT_SECONDS", "21600")
         ),
         "artifacts_retention_days": int(env_values.get("ARTIFACTS_RETENTION_DAYS", "30")),
         "max_artifacts_size_mb": int(env_values.get("MAX_ARTIFACTS_SIZE_MB", "1024")),

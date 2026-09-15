@@ -1,19 +1,20 @@
 from __future__ import annotations
 
+import importlib
+import re
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
-import importlib
 from pathlib import Path
-import re
-from typing import Any, Iterable
+from typing import Any
 
 from research_system.adapters.vendors.mx_api_adapter import MxApiAdapter
-from research_system.adapters.vendors.uzi_web_search_adapter import UziWebSearchAdapter
-from research_system.adapters.vendors.uzi_qualitative_fallback import UziQualitativeFallback
-from research_system.adapters.vendors.uzi_qualitative_fallback import is_junk_fallback_text
 from research_system.adapters.vendors.uzi_browser_adapter import UziBrowserAdapter
+from research_system.adapters.vendors.uzi_qualitative_fallback import (
+    is_junk_fallback_text,
+)
+from research_system.adapters.vendors.uzi_web_search_adapter import UziWebSearchAdapter
 from research_system.runtime.platform.settings import Settings
-
 
 # UZI 3.9.4 data_integrity.py checks, projected onto Cognitrade's canonical
 # feature names.  Criticality and dimension ownership intentionally match the
@@ -310,33 +311,47 @@ def recover_suggested_fixes_until_exhausted(
             exhausted_reason = "cancelled"
             break
         current = _exact_integrity(snapshots, resolved_symbols)
-        if not current.get("critical_missing") and float(current.get("coverage_pct") or 0) >= 60:
-            exhausted_reason = "critical_cleared"
-            break
-        target_severity = "critical" if current.get("critical_missing") else "optional"
+        # Upstream emits one finite worklist ordered as critical -> optional ->
+        # enrichment.  The previous host loop stopped as soon as the critical
+        # coverage gate reached 60%, which meant an entirely empty enrichment
+        # dimension (notably 12_capital_flow) was never attempted at all.
+        # Exhaust every real action before returning; the caller can still
+        # distinguish a cleared critical gate from unresolved warnings.
         work = []
-        for report in current["symbols"]:
-            symbol = str(report.get("symbol") or "")
-            for task in list(report.get("recovery_tasks") or []):
-                if not isinstance(task, dict):
-                    continue
-                if str(task.get("severity") or "") != target_severity:
-                    continue
-                ordered_actions = sorted(
-                    (str(action) for action in list(task.get("suggested_actions") or []) if str(action).strip()),
-                    key=_recovery_action_priority,
-                )
-                for action in ordered_actions:
-                    identity = (
-                        symbol,
-                        str(task.get("dim") or ""),
-                        str(task.get("field") or ""),
-                        action,
+        for target_severity in ("critical", "optional", "enrichment"):
+            for report in current["symbols"]:
+                symbol = str(report.get("symbol") or "")
+                for task in list(report.get("recovery_tasks") or []):
+                    if not isinstance(task, dict):
+                        continue
+                    if str(task.get("severity") or "") != target_severity:
+                        continue
+                    ordered_actions = sorted(
+                        (
+                            str(action)
+                            for action in list(task.get("suggested_actions") or [])
+                            if str(action).strip()
+                        ),
+                        key=_recovery_action_priority,
                     )
-                    if identity not in seen_actions:
-                        work.append((identity, task, action))
+                    for action in ordered_actions:
+                        identity = (
+                            symbol,
+                            str(task.get("dim") or ""),
+                            str(task.get("field") or ""),
+                            action,
+                        )
+                        if identity not in seen_actions:
+                            work.append((identity, task, action))
+            if work:
+                break
         if not work:
-            exhausted_reason = "critical_cleared" if not current.get("critical_missing") else "all_real_actions_exhausted"
+            remaining = _task_identities(current)
+            exhausted_reason = (
+                "all_recovery_tasks_cleared"
+                if not remaining
+                else "all_real_actions_exhausted"
+            )
             break
         identity, task, action = work[0]
         seen_actions.add(identity)
@@ -381,14 +396,13 @@ def recover_suggested_fixes_until_exhausted(
         "schema_version": "uzi-3.9.4-suggested-fix-loop-v1",
         "profile": selected_profile,
         "stage_order": [
-            "primary_providers",
             "integrity_check",
             "playwright",
             "mx_api",
             "official_web_ddgs",
-            "qualitative_agent",
+            "qualitative_agent_deferred",
+            "unsafe_inference_rejected",
             "recompute",
-            "self_review",
         ],
         "before_recovery": before,
         "after_recovery": after,
@@ -398,9 +412,131 @@ def recover_suggested_fixes_until_exhausted(
         "attempts": attempts,
         "cycles": cycles,
         "critical_cleared": not bool(after.get("critical_missing")),
-        "exhausted": exhausted_reason != "critical_cleared",
+        "exhausted": exhausted_reason not in {
+            "critical_cleared",
+            "all_recovery_tasks_cleared",
+        },
         "exhausted_reason": exhausted_reason,
         "round_limit": None,
+    }
+
+
+def recover_uzi_draft_snapshots(
+    snapshots: list[dict[str, Any]],
+    *,
+    query: str,
+    symbols: Iterable[str],
+    profile: str | None,
+    settings: Settings,
+    cancellation: Any | None = None,
+) -> dict[str, Any]:
+    """Run UZI's complete Agent recovery chain against mutable draft data.
+
+    This function deliberately mutates only the caller-owned in-memory
+    snapshots.  A data-center caller must append recovered snapshots as new
+    database rows and let a user explicitly publish the resulting immutable
+    Bundle; it must never mutate an existing Snapshot or Bundle.
+    """
+
+    selected_profile = _require_profile(profile)
+    resolved_symbols = list(
+        dict.fromkeys(str(item).strip() for item in symbols if str(item).strip())
+    )
+    integrity_before = assess_integrity(snapshots, resolved_symbols)
+    cancelled_stage = {
+        "schema_version": "uzi-3.9.4-agent-os-v1",
+        "profile": selected_profile,
+        "enabled": False,
+        "attempted": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "attempts": [],
+        "disabled_reason": "cancelled",
+    }
+    qualitative_recovery = (
+        dict(cancelled_stage)
+        if _cancelled(cancellation)
+        else recover_qualitative_snapshots(
+            snapshots,
+            query=query,
+            symbols=resolved_symbols,
+            profile=selected_profile,
+            settings=settings,
+        )
+    )
+    playwright_recovery = (
+        dict(cancelled_stage)
+        if _cancelled(cancellation)
+        else recover_playwright_snapshots(
+            snapshots,
+            query=query,
+            symbols=resolved_symbols,
+            profile=selected_profile,
+            settings=settings,
+        )
+    )
+    strict_recovery = (
+        dict(cancelled_stage)
+        if _cancelled(cancellation)
+        else recover_suggested_fixes_until_exhausted(
+            snapshots,
+            query=query,
+            symbols=resolved_symbols,
+            profile=selected_profile,
+            settings=settings,
+            cancellation=cancellation,
+        )
+    )
+    qualitative_agent_evidence = (
+        dict(cancelled_stage)
+        if _cancelled(cancellation)
+        else collect_qualitative_agent_evidence(
+            snapshots,
+            query=query,
+            symbols=resolved_symbols,
+            profile=selected_profile,
+            settings=settings,
+            cancellation=cancellation,
+        )
+    )
+    integrity_after = assess_integrity(snapshots, resolved_symbols)
+    attempted = sum(
+        int(stage.get("attempted") or 0)
+        for stage in (
+            strict_recovery,
+            qualitative_recovery,
+            playwright_recovery,
+            qualitative_agent_evidence,
+        )
+    )
+    succeeded = sum(
+        int(stage.get("succeeded") or 0)
+        for stage in (
+            strict_recovery,
+            qualitative_recovery,
+            playwright_recovery,
+            qualitative_agent_evidence,
+        )
+    )
+    return {
+        "schema_version": "uzi-3.9.4-draft-agent-recovery-v1",
+        "profile": selected_profile,
+        "stage_order": [
+            "qualitative_mx_ddgs",
+            "playwright_fallback",
+            "suggested_fix_loop",
+            "qualitative_agent_evidence",
+            "integrity_recompute",
+        ],
+        "integrity_before": integrity_before,
+        "integrity_after": integrity_after,
+        "strict_recovery": strict_recovery,
+        "qualitative_recovery": qualitative_recovery,
+        "playwright_recovery": playwright_recovery,
+        "qualitative_agent_evidence": qualitative_agent_evidence,
+        "attempted": attempted,
+        "succeeded": succeeded,
+        "failed": max(attempted - succeeded, 0),
     }
 
 
@@ -408,8 +544,12 @@ def _exact_integrity(
     snapshots: list[dict[str, Any]],
     symbols: list[str],
 ) -> dict[str, Any]:
-    from domain_packs.finance_ashare.subagents.uzi_392_native_methods import build_uzi_raw
-    from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import Uzi392FetcherRuntime
+    from domain_packs.finance_ashare.subagents.uzi_392_native_methods import (
+        build_uzi_raw,
+    )
+    from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import (
+        Uzi392FetcherRuntime,
+    )
 
     Uzi392FetcherRuntime(workspace_root=Path(__file__).resolve().parents[3] / "workspace")
     module = importlib.import_module("lib.data_integrity")
@@ -509,7 +649,7 @@ def _execute_recovery_action(
                 "stage": "mx_api", "status": "available" if applied else "exhausted", "source_id": "mx_api",
                 "exhausted_reason": None if applied else "numeric_or_factual_text_not_projected",
             }
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - provider boundary is isolated
             return {
                 "stage": "mx_api", "status": "provider_unavailable", "source_id": "mx_api",
                 "exhausted_reason": f"{exc.__class__.__name__}:{str(exc)[:120]}",
@@ -530,7 +670,7 @@ def _execute_recovery_action(
                 "source_trace": list(payload.get("source_trace") or []),
                 "exhausted_reason": None if applied else "no_structured_real_field_returned",
             }
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - provider boundary is isolated
             return {
                 "stage": "official_web_ddgs", "status": "provider_unavailable", "source_id": "ddgs",
                 "exhausted_reason": f"{exc.__class__.__name__}:{str(exc)[:120]}",
@@ -594,57 +734,12 @@ def recover_qualitative_snapshots(
     """Apply UZI's six-dimension real fallback and preserve every attempt."""
 
     selected_profile = _require_profile(profile)
-    if selected_profile == "lite":
-        return {
-            "schema_version": "uzi-3.9.4-agent-os-v1",
-            "profile": selected_profile,
-            "enabled": False,
-            "order": ["mx_api", "ddgs"],
-            "attempted": 0,
-            "succeeded": 0,
-            "failed": 0,
-            "attempts": [],
-            "disabled_reason": "profile_ddgs_budget_zero",
-        }
-    fallback = UziQualitativeFallback(settings)
-    attempts: list[dict[str, Any]] = []
-    resolved_symbols = list(dict.fromkeys(str(item).strip() for item in symbols if str(item).strip()))
-    for symbol in resolved_symbols:
-        identity = _identity(snapshots, symbol)
-        context = {
-            "code": symbol,
-            "name": identity["name"],
-            "industry": identity["industry"] or "综合",
-        }
-        for snapshot_type, target in _QUALITATIVE_TARGETS.items():
-            snapshot = _find_snapshot(snapshots, snapshot_type, symbol)
-            if snapshot is None or not _qualitative_field_missing(snapshot, str(target["field"])):
-                continue
-            rendered_query = str(target["query"]).format(**context)
-            result = fallback.collect(
-                query=rendered_query,
-                dimension=snapshot_type,
-                symbol=symbol,
-            )
-            _apply_recovery(snapshot, snapshot_type, result)
-            attempts.append({
-                "symbol": symbol,
-                "snapshot_type": snapshot_type,
-                "status": result["status"],
-                "source_id": result.get("source_id"),
-                "query": rendered_query,
-                "source_trace": list(result.get("source_trace") or []),
-            })
-    return {
-        "schema_version": "uzi-3.9.4-agent-os-v1",
-        "profile": selected_profile,
-        "enabled": True,
-        "order": ["mx_api", "ddgs"],
-        "attempted": len(attempts),
-        "succeeded": sum(row["status"] == "available" for row in attempts),
-        "failed": sum(row["status"] != "available" for row in attempts),
-        "attempts": attempts,
-    }
+    from domain_packs.finance_ashare.tools.uzi_native_postfetch import (
+        recover_snapshot_postfetch,
+    )
+
+    return recover_snapshot_postfetch(snapshots, symbols=symbols, profile=selected_profile,
+                                      settings=settings, qualitative=True, browser=False)
 
 
 def collect_qualitative_agent_evidence(
@@ -668,19 +763,10 @@ def collect_qualitative_agent_evidence(
     """
 
     selected_profile = _require_profile(profile)
-    if selected_profile == "lite":
-        return {
-            "schema_version": "uzi-3.9.4-qualitative-agent-evidence-v1",
-            "profile": selected_profile,
-            "enabled": False,
-            "group_count": 0,
-            "completed_group_count": 0,
-            "attempted": 0,
-            "succeeded": 0,
-            "failed": 0,
-            "attempts": [],
-            "disabled_reason": "profile_does_not_require_qualitative_deep_dive",
-        }
+    # This is the interactive/full Agent hard gate, not Stage 1's optional
+    # DDGS autofill budget.  Formal Lite reports therefore collect the same
+    # six-dimension cited evidence as Medium/Deep; only the standalone
+    # ``quick_scan`` command bypasses this function at the caller boundary.
 
     resolved_symbols = list(dict.fromkeys(
         str(item).strip() for item in symbols if str(item).strip()
@@ -712,7 +798,7 @@ def collect_qualitative_agent_evidence(
                 group_label = futures[future]
                 try:
                     group_attempts = future.result()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - one Agent group is isolated
                     group_attempts = [{
                         "group_label": group_label,
                         "status": "provider_unavailable",
@@ -785,7 +871,7 @@ def _collect_qualitative_agent_group(
                         "source_id": "mx_api",
                     }
                     traces.append({"source_id": "mx_api", "status": "available", "transport": "api"})
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - optional MX source is isolated
                 traces.append({
                     "source_id": "mx_api",
                     "status": "provider_unavailable",
@@ -809,7 +895,7 @@ def _collect_qualitative_agent_group(
             ]
             evidence["web_search_results"] = web_rows
             traces.extend(list(web_payload.get("source_trace") or []))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - optional web source is isolated
             traces.append({
                 "source_id": "ddgs",
                 "status": "provider_unavailable",
@@ -831,7 +917,8 @@ def _collect_qualitative_agent_group(
         facts["agent_qualitative_evidence"] = existing
         snapshot["source_trace"] = [*list(snapshot.get("source_trace") or []), *traces]
         urls_after = _http_urls(snapshot)
-        status = "available" if len(urls_after) >= 2 else "data_gap"
+        new_urls = sorted(set(urls_after).difference(urls_before))
+        status = "available" if len(urls_after) >= 2 and new_urls else "data_gap"
         attempts.append({
             "group_label": group_label,
             "symbol": symbol,
@@ -840,6 +927,7 @@ def _collect_qualitative_agent_group(
             "query": rendered_query,
             "url_count_before": len(urls_before),
             "url_count_after": len(urls_after),
+            "new_url_count": len(new_urls),
             "browser_source_ids": list(browser_sources),
             "source_trace": traces,
             "reason": None if status == "available" else "requires_two_cited_sources",
@@ -855,12 +943,10 @@ def recover_playwright_snapshots(
     profile: str | None,
     settings: Settings,
 ) -> dict[str, Any]:
-    """Run UZI 3.9.4's profile-scoped final browser fallback stage."""
+    """Run fixed SKILL's explicitly requested, profile-scoped active pass."""
 
     selected_profile = _require_profile(profile)
-    enabled_dimensions = _PLAYWRIGHT_PROFILE_DIMS.get(selected_profile, frozenset())
-    attempts: list[dict[str, Any]] = []
-    if not enabled_dimensions:
+    if selected_profile == "lite":
         return {
             "schema_version": "uzi-3.9.4-agent-os-v1",
             "profile": selected_profile,
@@ -871,7 +957,7 @@ def recover_playwright_snapshots(
             "attempts": [],
             "disabled_reason": "profile_playwright_mode_off",
         }
-    if not settings.browser_sources_enabled or not settings.sensitive_sources_enabled:
+    if not settings.browser_sources_enabled:
         return {
             "schema_version": "uzi-3.9.4-agent-os-v1",
             "profile": selected_profile,
@@ -880,55 +966,14 @@ def recover_playwright_snapshots(
             "succeeded": 0,
             "failed": 0,
             "attempts": [],
-            "disabled_reason": "sensitive_browser_policy_disabled",
+            "disabled_reason": "browser_sources_disabled",
         }
-    browser = UziBrowserAdapter(settings)
-    resolved_symbols = list(dict.fromkeys(str(item).strip() for item in symbols if str(item).strip()))
-    for symbol in resolved_symbols:
-        identity = _identity(snapshots, symbol)
-        for snapshot_type in sorted(enabled_dimensions):
-            snapshot = _find_snapshot(snapshots, snapshot_type, symbol)
-            if snapshot is None:
-                continue
-            needs, reason = _snapshot_needs_browser(snapshot)
-            if not needs:
-                continue
-            browser_query = _browser_query(snapshot_type, query, symbol, identity)
-            result = browser.collect_many(
-                source_ids=_PLAYWRIGHT_STRATEGIES[snapshot_type],
-                symbol=symbol,
-                query=browser_query,
-            )
-            evidence = dict(result.get("evidence") or {})
-            projected = _project_browser_evidence(snapshot_type, evidence, identity)
-            success = bool(projected)
-            trace = list(result.get("source_trace") or [])
-            if evidence and not projected:
-                trace.append({
-                    "source_id": "playwright",
-                    "strategy_id": snapshot_type,
-                    "status": "parse_failed",
-                    "reason": "uzi_strategy_parser_returned_no_structured_fields",
-                })
-            _apply_browser_recovery(snapshot, evidence, projected, trace, reason)
-            attempts.append({
-                "symbol": symbol,
-                "snapshot_type": snapshot_type,
-                "status": "available" if success else "data_gap",
-                "reason": reason,
-                "source_ids": list(_PLAYWRIGHT_STRATEGIES[snapshot_type]),
-                "source_trace": list(result.get("source_trace") or []),
-            })
-    return {
-        "schema_version": "uzi-3.9.4-agent-os-v1",
-        "profile": selected_profile,
-        "enabled": True,
-        "attempted": len(attempts),
-        "succeeded": sum(row["status"] == "available" for row in attempts),
-        "failed": sum(row["status"] != "available" for row in attempts),
-        "attempts": attempts,
-        "disabled_reason": None,
-    }
+    from domain_packs.finance_ashare.tools.uzi_native_postfetch import (
+        recover_snapshot_postfetch,
+    )
+
+    return recover_snapshot_postfetch(snapshots, symbols=symbols, profile=selected_profile,
+                                      settings=settings, qualitative=False, browser=True, force_browser=True)
 
 
 def _require_profile(profile: str | None) -> str:
@@ -1060,7 +1105,11 @@ def _project_browser_evidence(
         peers = []
         seen = set()
         for link in links:
-            match = re.search(r"/S/((?:SH|SZ|BJ)\d{6}|HK\d{5})", str(link.get("url") or ""), re.I)
+            match = re.search(
+                r"/S/((?:SH|SZ|BJ)\d{6}|HK\d{5})",
+                str(link.get("url") or ""),
+                re.IGNORECASE,
+            )
             name = str(link.get("text") or "").strip()
             if not match or len(name) < 2:
                 continue
@@ -1321,7 +1370,8 @@ __all__ = [
     "assess_integrity",
     "collect_qualitative_agent_evidence",
     "generate_recovery_tasks",
-    "recover_suggested_fixes_until_exhausted",
-    "recover_qualitative_snapshots",
     "recover_playwright_snapshots",
+    "recover_qualitative_snapshots",
+    "recover_suggested_fixes_until_exhausted",
+    "recover_uzi_draft_snapshots",
 ]

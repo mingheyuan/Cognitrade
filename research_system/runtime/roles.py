@@ -223,7 +223,6 @@ class ChildTurnRuntime:
                 "transcript": [],
                 "graph_state_ref": str(self.root / "execution_snapshot.json"),
                 "continuation": child.continuation,
-                "usage": dict(child.usage),
             },
         )
 

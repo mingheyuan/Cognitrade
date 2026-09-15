@@ -1,12 +1,7 @@
 import { Activity, CheckCircle2, ChevronDown, GitBranch, ShieldCheck, Waypoints } from 'lucide-react'
 import { BusinessDataView } from './BusinessDataView'
 import type { RunDetail, RunStep } from '../research-contracts'
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
-}
+import { asRecord } from '../utils/value'
 
 function text(value: unknown, fallback = '未提供'): string {
   if (value === null || value === undefined || value === '') return fallback

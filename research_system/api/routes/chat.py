@@ -6,9 +6,15 @@ from fastapi import APIRouter, Depends, Query, status
 from starlette.concurrency import run_in_threadpool
 
 from research_system.api.chat_service import ChatService
-from research_system.api.dependencies import ApiPrincipal, get_chat_service, get_run_service, require_principal
+from research_system.api.dependencies import (
+    ApiPrincipal,
+    get_chat_service,
+    get_run_service,
+    require_principal,
+)
 from research_system.api.models import ChatResearchRequest, ChatThreadRenameRequest
 from research_system.api.route_support import (
+    call_public_service,
     identity_scope_kwargs,
     research_validation_capabilities,
 )
@@ -16,13 +22,7 @@ from research_system.api.validation import safe_identifier, validate_research_re
 from research_system.runtime.presentation.display import localize_public_error_fields
 from research_system.schemas.protocol import RequestEnvelope
 
-
 router = APIRouter(prefix="/chat", tags=["chat"])
-
-
-async def _public_call(operation, *args, **kwargs):
-    result = await run_in_threadpool(operation, *args, **kwargs)
-    return localize_public_error_fields(result)
 
 
 @router.post("/threads", status_code=status.HTTP_201_CREATED)
@@ -30,7 +30,7 @@ async def create_chat_thread(
     service: Annotated[ChatService, Depends(get_chat_service)],
     principal: ApiPrincipal = Depends(require_principal),
 ) -> dict:
-    return await _public_call(
+    return await call_public_service(
         service.create_thread,
         **identity_scope_kwargs(service, principal),
     )
@@ -43,7 +43,7 @@ async def list_chat_thread_records(
     scope: Literal["active", "all", "archived"] = "active",
     principal: ApiPrincipal = Depends(require_principal),
 ) -> list[dict]:
-    return await _public_call(
+    return await call_public_service(
         service.list_threads,
         limit=limit,
         scope=scope,
@@ -58,7 +58,7 @@ async def get_chat_thread(
     principal: ApiPrincipal = Depends(require_principal),
 ) -> dict:
     resolved_thread_id = safe_identifier(thread_id, field_name="thread_id")
-    return await _public_call(
+    return await call_public_service(
         service.get_thread,
         resolved_thread_id,
         **identity_scope_kwargs(service, principal),
@@ -73,7 +73,7 @@ async def preview_chat_thread(
     principal: ApiPrincipal = Depends(require_principal),
 ) -> dict:
     resolved_thread_id = safe_identifier(thread_id, field_name="thread_id")
-    return await _public_call(
+    return await call_public_service(
         service.preview_thread,
         resolved_thread_id,
         turn_limit=turn_limit,
@@ -89,7 +89,7 @@ async def rename_chat_thread(
     principal: ApiPrincipal = Depends(require_principal),
 ) -> dict:
     resolved_thread_id = safe_identifier(thread_id, field_name="thread_id")
-    return await _public_call(
+    return await call_public_service(
         service.rename_thread,
         resolved_thread_id,
         thread_label=request.thread_label,
@@ -104,7 +104,7 @@ async def fork_chat_thread(
     principal: ApiPrincipal = Depends(require_principal),
 ) -> dict:
     resolved_thread_id = safe_identifier(thread_id, field_name="thread_id")
-    return await _public_call(
+    return await call_public_service(
         service.fork_thread,
         resolved_thread_id,
         **identity_scope_kwargs(service, principal),
@@ -118,7 +118,7 @@ async def archive_chat_thread(
     principal: ApiPrincipal = Depends(require_principal),
 ) -> dict:
     resolved_thread_id = safe_identifier(thread_id, field_name="thread_id")
-    return await _public_call(
+    return await call_public_service(
         service.archive_thread,
         resolved_thread_id,
         **identity_scope_kwargs(service, principal),
@@ -132,7 +132,7 @@ async def unarchive_chat_thread(
     principal: ApiPrincipal = Depends(require_principal),
 ) -> dict:
     resolved_thread_id = safe_identifier(thread_id, field_name="thread_id")
-    return await _public_call(
+    return await call_public_service(
         service.unarchive_thread,
         resolved_thread_id,
         **identity_scope_kwargs(service, principal),
@@ -146,7 +146,7 @@ async def compact_chat_thread(
     principal: ApiPrincipal = Depends(require_principal),
 ) -> dict:
     resolved_thread_id = safe_identifier(thread_id, field_name="thread_id")
-    return await _public_call(
+    return await call_public_service(
         service.compact_thread,
         resolved_thread_id,
         **identity_scope_kwargs(service, principal),

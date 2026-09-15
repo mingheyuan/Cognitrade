@@ -9,7 +9,7 @@ import sys
 from tempfile import TemporaryDirectory
 from typing import Any, Protocol
 
-from research_system.api.hikyuu_backtest_service import HikyuuBacktestService
+from research_system.strategies.backtesting.hikyuu_signal_engine import prepare_hikyuu_home
 from research_system.strategies.backtesting.instruments import TradableInstrument
 from research_system.strategies.errors import StrategyDomainError
 
@@ -29,7 +29,7 @@ class TechnicalSignalCore(Protocol):
 
 
 class HikyuuSignalCore:
-    engine_version = "hikyuu-crtSG-report-gate-v1"
+    engine_version = "hikyuu-crtSG-report-gate-v2"
 
     def __init__(self, runtime_root: Path, *, timeout_seconds: int = 120) -> None:
         self.runtime_root = Path(runtime_root)
@@ -52,7 +52,7 @@ class HikyuuSignalCore:
                 status_code=503,
             )
         home = self.runtime_root / "home"
-        HikyuuBacktestService._prepare_hikyuu_home(home)
+        prepare_hikyuu_home(home)
         request = {
             "operation": "report_gate_signals",
             "symbol": instrument.code,
@@ -83,7 +83,7 @@ class HikyuuSignalCore:
                     [
                         sys.executable,
                         "-m",
-                        "research_system.api.hikyuu_backtest_runner",
+                        "research_system.strategies.backtesting.hikyuu_signal_runner",
                         str(request_path),
                         str(response_path),
                     ],

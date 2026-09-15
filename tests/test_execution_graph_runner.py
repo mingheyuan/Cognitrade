@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event, Thread
+from unittest.mock import patch
 
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.execution.core.graph_runner import (
     ExecutionGraphRunner,
+    GraphCancelledError,
     GraphGovernanceError,
 )
 from research_system.runtime.planning.capability_planner import (
@@ -108,6 +110,74 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
             )
         )
 
+    def test_control_file_cancel_reaches_single_in_flight_worker_before_return(self) -> None:
+        started, exited = Event(), Event()
+
+        def cooperative(context):
+            started.set()
+            try:
+                if context.cancellation.wait(3):
+                    raise GraphCancelledError("cancelled inside active request")
+                raise AssertionError("control file cancellation did not reach worker")
+            finally:
+                exited.set()
+
+        with TemporaryDirectory() as temporary_directory:
+            runner = ExecutionGraphRunner(registry=self.registry, run_root=Path(temporary_directory))
+            results = {}
+
+            def execute():
+                results["result"] = runner.run(
+                    graph=self._legal_graph(), run_id="cancel-run",
+                    thread_id="cancel-thread", request_id="cancel-request",
+                    seed_artifacts=[ArtifactDraft(
+                        artifact_type="contract_document", content={"text": "Supplier shall deliver."},
+                        source_refs=[{"type": "contract", "id": "contract-1"}],
+                    )],
+                )
+
+            with patch.object(self.registry, "resolve_executor", return_value=cooperative):
+                thread = Thread(target=execute, daemon=True)
+                thread.start()
+                self.assertTrue(started.wait(2))
+                write_json(runner.control_path, {"cancel_requested": True})
+                thread.join(2)
+            self.assertFalse(thread.is_alive())
+            self.assertTrue(exited.is_set())
+            self.assertEqual(results["result"].snapshot.status, "cancelled")
+            self.assertFalse(results["result"].final_artifact_ids)
+
+    def test_root_deadline_cancels_active_worker_and_remains_timed_out(self) -> None:
+        from time import monotonic
+
+        exited = Event()
+
+        def cooperative(context):
+            self.assertLessEqual(context.deadline_at, deadline)
+            try:
+                context.cancellation.wait(3)
+                raise GraphCancelledError("request released on root timeout")
+            finally:
+                exited.set()
+
+        with TemporaryDirectory() as temporary_directory:
+            deadline = monotonic() + 0.4
+            runner = ExecutionGraphRunner(
+                registry=self.registry, run_root=Path(temporary_directory), deadline_at=deadline,
+            )
+            with patch.object(self.registry, "resolve_executor", return_value=cooperative):
+                result = runner.run(
+                    graph=self._legal_graph(), run_id="deadline-run",
+                    thread_id="deadline-thread", request_id="deadline-request",
+                    seed_artifacts=[ArtifactDraft(
+                        artifact_type="contract_document", content={"text": "Supplier shall deliver."},
+                        source_refs=[{"type": "contract", "id": "contract-1"}],
+                    )],
+                )
+            self.assertTrue(exited.is_set())
+            self.assertEqual(result.snapshot.status, "timed_out")
+            self.assertFalse(result.final_artifact_ids)
+
     def test_runs_non_finance_pack_on_unified_frontiers_and_artifact_board(self) -> None:
         with TemporaryDirectory() as temporary_directory:
             events: list[dict] = []
@@ -183,6 +253,31 @@ class ExecutionGraphRunnerTests(unittest.TestCase):
             self.assertTrue(
                 any(event["event_type"] == "gate_evaluator_completed" for event in events)
             )
+            snapshot_events = [
+                event
+                for event in events
+                if event["event_type"]
+                in {
+                    "graph_snapshot_created",
+                    "graph_snapshot_commit_started",
+                    "graph_snapshot_persisted",
+                }
+            ]
+            self.assertTrue(snapshot_events)
+            for event in snapshot_events:
+                self.assertNotIn("snapshot", event)
+                self.assertRegex(str(event.get("snapshot_hash") or ""), r"^[0-9a-f]{64}$")
+                self.assertTrue(
+                    (Path(temporary_directory) / str(event["snapshot_ref"])).is_file()
+                )
+            persisted = [event for event in snapshot_events if event["event_type"] == "graph_snapshot_persisted"]
+            metrics_path = Path(temporary_directory) / "execution_metrics.json"
+            metrics = read_json(metrics_path)
+            self.assertEqual(metrics["persistence_count"], len(persisted))
+            self.assertTrue(all(event["duration_seconds"] >= 0 for event in persisted))
+            self.assertAlmostEqual(metrics["persistence_seconds"], sum(event["duration_seconds"] for event in persisted), places=4)
+            self.assertLess(metrics_path.stat().st_size, 512)
+            self.assertNotIn("snapshot", metrics)
             self.assertEqual(runner.replay().model_dump(mode="json"), result.snapshot.model_dump(mode="json"))
             for artifact in runner.board.list_artifacts(run_id="legal-run", status="active"):
                 self.assertTrue(artifact.source_refs)

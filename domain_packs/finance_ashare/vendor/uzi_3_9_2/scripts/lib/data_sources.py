@@ -8,6 +8,7 @@ Install: pip install akshare yfinance pandas requests
 from __future__ import annotations
 
 import os
+import re
 import time
 from datetime import datetime, timedelta
 from typing import Any
@@ -1356,16 +1357,74 @@ def _fetch_hot_impl(ti: TickerInfo) -> dict:
 # ─────────────────────────────────────────────────────────────
 def fetch_northbound(ti: TickerInfo) -> dict:
     """North-bound capital. TTL = 2h (daily aggregate)."""
-    if ak is None or ti.market != "A":
+    if requests is None or ti.market != "A":
         return {}
     key = f"hsgt__{ti.code}"
     return cached(ti.full, key, lambda: _fetch_north_impl(ti), ttl=TTL_DAILY)
 
 
 def _fetch_north_impl(ti: TickerInfo) -> dict:
+    """Fetch the newest northbound records with one bounded HTTP request.
+
+    AkShare's helper follows every page even though the API sorts newest first.
+    Some long-listed stocks have hundreds of pages, which exceeds the pipeline
+    timeout and makes resume retry forever. The fixed EastMoney host and strict
+    six-digit code validation also keep user input out of the URL authority.
+    """
+    if requests is None or not re.fullmatch(r"\d{6}", ti.code):
+        return {}
     try:
-        df = ak.stock_hsgt_individual_em(stock=ti.code)
-        return {"flow_history": df.tail(60).to_dict("records") if df is not None else []}
+        url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+        params = {
+            "sortColumns": "TRADE_DATE",
+            "sortTypes": "-1",
+            "pageSize": "500",
+            "pageNumber": "1",
+            "reportName": "RPT_MUTUAL_HOLDSTOCKNDATE_STA",
+            "columns": "ALL",
+            "source": "WEB",
+            "client": "WEB",
+            "filter": f'(SECURITY_CODE="{ti.code}")(INTERVAL_TYPE="1")',
+        }
+        response = requests.get(
+            url,
+            params=params,
+            timeout=12,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": f"https://data.eastmoney.com/hsgt/StockHdStatistics/{ti.code}.html",
+            },
+        )
+        response.raise_for_status()
+        result = (response.json() or {}).get("result") or {}
+        rows = result.get("data") or []
+        latest_rows = sorted(
+            (row for row in rows if isinstance(row, dict)),
+            key=lambda row: str(row.get("TRADE_DATE") or ""),
+        )[-60:]
+
+        def _num_or_none(value):
+            try:
+                return float(value) if value not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
+        return {
+            "flow_history": [
+                {
+                    "持股日期": str(row.get("TRADE_DATE") or "")[:10],
+                    "当日收盘价": _num_or_none(row.get("CLOSE_PRICE")),
+                    "当日涨跌幅": _num_or_none(row.get("CHANGE_RATE")),
+                    "持股数量": _num_or_none(row.get("HOLD_SHARES")),
+                    "持股市值": _num_or_none(row.get("HOLD_MARKET_CAP")),
+                    "持股数量占A股百分比": _num_or_none(row.get("HOLD_SHARES_RATIO")),
+                    "今日增持股数": _num_or_none(row.get("ADD_SHARES_REPAIR")),
+                    "今日增持资金": _num_or_none(row.get("PREDICT_AMC")),
+                    "今日持股市值变化": _num_or_none(row.get("HMC_CHANGE")),
+                }
+                for row in latest_rows
+            ]
+        }
     except Exception:
         return {}
 

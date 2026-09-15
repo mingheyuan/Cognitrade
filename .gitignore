@@ -3,6 +3,8 @@ research_system/.env
 
 __pycache__/
 .cache/
+cache/
+output/
 *.py[cod]
 *.pyo
 *.pyd

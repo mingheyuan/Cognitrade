@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from importlib import import_module
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 import math
 from typing import Any
 
@@ -11,15 +11,25 @@ from research_system.adapters.vendors.akshare_utils import normalize_value
 class YFinanceFundamentalAdapter:
     vendor_name = "yfinance"
 
-    def get_fundamental_snapshot(self, *, symbol: str) -> dict[str, Any]:
+    def get_fundamental_snapshot(
+        self, *, symbol: str, as_of_date: date | None = None
+    ) -> dict[str, Any]:
         yf = import_module("yfinance")
         ticker_symbol = self._ticker(symbol)
         ticker = yf.Ticker(ticker_symbol)
-        info = self._safe_info(ticker)
-        income_frame = getattr(ticker, "financials", None)
-        quarterly_income = getattr(ticker, "quarterly_financials", None)
-        balance_frame = getattr(ticker, "balance_sheet", None)
-        cashflow_frame = getattr(ticker, "cashflow", None)
+        info = self._safe_info(ticker) if as_of_date is None else {}
+        income_frame = self._filter_frame_as_of(
+            getattr(ticker, "financials", None), as_of_date
+        )
+        quarterly_income = self._filter_frame_as_of(
+            getattr(ticker, "quarterly_financials", None), as_of_date
+        )
+        balance_frame = self._filter_frame_as_of(
+            getattr(ticker, "balance_sheet", None), as_of_date
+        )
+        cashflow_frame = self._filter_frame_as_of(
+            getattr(ticker, "cashflow", None), as_of_date
+        )
         annual_history, financial_period, financial_basis = self._financial_history(
             income_frame,
             quarterly_income,
@@ -81,6 +91,20 @@ class YFinanceFundamentalAdapter:
             return {str(key): normalize_value(value) for key, value in dict(ticker.info or {}).items()}
         except Exception:
             return {}
+
+    @staticmethod
+    def _filter_frame_as_of(frame, as_of_date: date | None):
+        if frame is None or getattr(frame, "empty", True) or as_of_date is None:
+            return frame
+        keep = []
+        for column in frame.columns:
+            try:
+                period = column.date() if hasattr(column, "date") else date.fromisoformat(str(column)[:10])
+            except (TypeError, ValueError):
+                continue
+            if period <= as_of_date:
+                keep.append(column)
+        return frame.loc[:, keep]
 
     @staticmethod
     def _records(frame) -> list[dict[str, Any]]:

@@ -119,13 +119,13 @@ class DataSourceRegistry:
                 name_cn="eFinance",
                 base_url="https://efinance.readthedocs.io",
                 markets=("cn", "cn_equity"),
-                dims=("market",),
+                dims=("market", "capital_flow"),
                 tier="tier2",
                 official=False,
                 access="sdk",
                 stability="medium",
                 latency_level="medium",
-                notes="Optional quote fallback when AkShare path degrades.",
+                notes="Optional quote and individual capital-flow fallback when AkShare paths degrade.",
             ),
             DataSource(
                 id="sse",
@@ -276,7 +276,7 @@ class DataSourceRegistry:
                     notes="UZI-Skill 3.9.4 source registry parity entry; availability is verified per run.",
                     upstream_dims=upstream_dims,
                     health=str(health),
-                    upstream="UZI-Skill@b004d7a988ca53a4805bf36784af091fa1209f22",
+                    upstream="UZI-Skill@b3665e85b8666477038e11157d8e8feb0e006b76",
                 )
             )
         return rows

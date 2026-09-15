@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import unittest
 from datetime import date, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-import unittest
 from unittest.mock import patch
 
 import pandas as pd
@@ -16,21 +16,27 @@ from domain_packs.finance_ashare.skills.uzi_source_snapshot.skill import (
     ValuationSnapshotSkill,
 )
 from domain_packs.finance_ashare.subagents.fund_methodology import build_fund_analysis
-from domain_packs.finance_ashare.subagents.runtime import collect_fund_snapshot, compose_fund_report
+from domain_packs.finance_ashare.subagents.runtime import (
+    collect_fund_snapshot,
+    compose_fund_report,
+)
 from domain_packs.finance_ashare.subagents.uzi_methodology import build_features
 from domain_packs.finance_ashare.subagents.uzi_panel_rules import evaluate_investor
-from domain_packs.finance_ashare.tools.fund_master import FundResolution, FundSecurityMaster
-from research_system.api.errors import ApiError
+from domain_packs.finance_ashare.tools.fund_master import (
+    FundResolution,
+    FundSecurityMaster,
+)
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
+from research_system.api.errors import ApiError
 from research_system.api.validation import validate_research_request
 from research_system.runtime.agent_os import AgentOS
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
 from research_system.runtime.intake.pack_intake import PackIntakeService
 from research_system.runtime.planning.capability_planner import CapabilityPlanner
 from research_system.runtime.platform.settings import Settings
-from research_system.schemas.domain_pack import CapabilityPlanningRequest
 from research_system.schemas.core_runtime import RequestIntakeDecision
+from research_system.schemas.domain_pack import CapabilityPlanningRequest
 from research_system.schemas.protocol import RequestEnvelope
 
 
@@ -269,7 +275,7 @@ class FundResearchTests(unittest.TestCase):
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
-                    "openai_api_key": None,
+                    "codex_enabled": False,
                 }
             )
             with (
@@ -539,6 +545,9 @@ class FundResearchTests(unittest.TestCase):
         target = FundSnapshotSkill._parse_target_fund_report(
             """
             本报告期自 2026 年 4 月 1 日起至 6 月 30 日止。
+            目录
+            8.6 期末投资目标基金明细 ........ 38
+            8.7 报告期末按行业分类的股票投资组合 ........ 39
             3.4.7 目标基金 基本情况
             基金名称 招商中证半导体产业交易型开放式指数证券投资基金
             基金主代码 561980
@@ -586,6 +595,429 @@ class FundResearchTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["weight_pct"], 15.02)
         self.assertEqual(rows[0]["market_value_10k"], 112420.46)
+
+    def test_historical_holdings_select_latest_period_published_by_cutoff(self) -> None:
+        holdings = pd.DataFrame(
+            [
+                {
+                    "序号": rank,
+                    "股票代码": f"{600000 + rank:06d}",
+                    "股票名称": f"样本{rank}",
+                    "占净值比例": float(11 - rank),
+                    "季度": period,
+                }
+                for period in ("2026年1季度", "2026年2季度", "2026年3季度")
+                for rank in range(1, 11)
+            ]
+        )
+        announcements = pd.DataFrame(
+            [
+                {
+                    "公告标题": f"测试股票型基金2026年第{quarter}季度报告",
+                    "公告日期": published,
+                    "报告ID": report_id,
+                }
+                for quarter, published, report_id in (
+                    (1, "2026-04-20", "AN-Q1"),
+                    (2, "2026-07-20", "AN-Q2"),
+                    (3, "2026-10-20", "AN-Q3"),
+                )
+            ]
+        )
+        skill = FundSnapshotSkill(
+            fund_master=FundSecurityMaster(
+                catalog_loader=lambda: pd.DataFrame(
+                    [
+                        {
+                            "基金代码": "020464",
+                            "基金简称": "测试股票型基金",
+                            "基金类型": "股票型",
+                        }
+                    ]
+                )
+            ),
+            holdings_loader=lambda _code, _year: holdings,
+            announcement_loader=lambda _code: announcements,
+            report_pdf_loader=lambda _url: b"%PDF fixture",
+        )
+
+        with patch.object(skill, "_verify_holdings_against_report") as verify:
+            payload = skill.run_holdings_as_of(
+                fund_code="020464",
+                as_of_date=date(2026, 8, 1),
+            )
+
+        fund = payload["funds"][0]
+        self.assertEqual(fund["holdings_period"], "2026年2季度")
+        self.assertEqual(len(fund["top_holdings"]), 10)
+        self.assertEqual(payload["source_refs"][0]["report_id"], "AN-Q2")
+        self.assertEqual(payload["source_refs"][0]["published_at"], "2026-07-20")
+        self.assertTrue(payload["source_refs"][0]["immutable_proof"])
+        self.assertFalse(payload["historical_reconstruction"]["retryable"])
+        verify.assert_called_once()
+
+    def test_historical_holdings_does_not_fall_back_when_latest_report_fails(self) -> None:
+        holdings = pd.DataFrame(
+            [
+                {
+                    "序号": rank,
+                    "股票代码": f"{600000 + rank:06d}",
+                    "股票名称": f"样本{rank}",
+                    "占净值比例": float(11 - rank),
+                    "季度": "2026年2季度",
+                }
+                for rank in range(1, 11)
+            ]
+        )
+        announcements = pd.DataFrame(
+            [
+                {
+                    "公告标题": "测试基金2026年中期报告",
+                    "公告日期": "2026-08-31",
+                    "报告ID": "AN-NEW",
+                },
+                {
+                    "公告标题": "测试基金2026年第2季度报告",
+                    "公告日期": "2026-07-20",
+                    "报告ID": "AN-OLD",
+                },
+            ]
+        )
+        downloaded: list[str] = []
+
+        def report_pdf_loader(url: str) -> bytes:
+            downloaded.append(url)
+            raise TimeoutError("latest report temporarily unavailable")
+
+        skill = FundSnapshotSkill(
+            holdings_loader=lambda _code, _year: holdings,
+            announcement_loader=lambda _code: announcements,
+            report_pdf_loader=report_pdf_loader,
+        )
+
+        rows, period, proof, errors = skill._historical_direct_equity_holdings(
+            "020464",
+            as_of_date=date(2026, 9, 1),
+            source_type="fund_direct_equity_holdings",
+            cancellation=None,
+        )
+
+        self.assertEqual(rows, [])
+        self.assertIsNone(period)
+        self.assertIsNone(proof)
+        self.assertEqual(len(downloaded), 1)
+        self.assertIn("AN-NEW", downloaded[0])
+        self.assertTrue(errors[0]["retryable"])
+
+    def test_historical_target_does_not_fall_back_when_latest_report_fails(self) -> None:
+        announcements = pd.DataFrame(
+            [
+                {
+                    "公告标题": "测试联接基金2026年中期报告",
+                    "公告日期": "2026-08-31",
+                    "报告ID": "AN-NEW",
+                },
+                {
+                    "公告标题": "测试联接基金2026年第2季度报告",
+                    "公告日期": "2026-07-20",
+                    "报告ID": "AN-OLD",
+                },
+            ]
+        )
+        downloaded: list[str] = []
+
+        def report_pdf_loader(url: str) -> bytes:
+            downloaded.append(url)
+            raise TimeoutError("latest report temporarily unavailable")
+
+        skill = FundSnapshotSkill(
+            announcement_loader=lambda _code: announcements,
+            report_pdf_loader=report_pdf_loader,
+        )
+
+        target, proof, errors = skill._historical_target_fund(
+            "020464",
+            as_of_date=date(2026, 9, 1),
+            cancellation=None,
+        )
+
+        self.assertEqual(target, {})
+        self.assertIsNone(proof)
+        self.assertEqual(len(downloaded), 1)
+        self.assertIn("AN-NEW", downloaded[0])
+        self.assertTrue(errors[0]["retryable"])
+
+    def test_historical_holdings_without_publication_proof_fails_closed(self) -> None:
+        holdings = pd.DataFrame(
+            [
+                {
+                    "序号": rank,
+                    "股票代码": f"{600000 + rank:06d}",
+                    "股票名称": f"样本{rank}",
+                    "占净值比例": float(11 - rank),
+                    "季度": "2026年2季度",
+                }
+                for rank in range(1, 11)
+            ]
+        )
+        skill = FundSnapshotSkill(
+            fund_master=FundSecurityMaster(
+                catalog_loader=lambda: pd.DataFrame(
+                    [
+                        {
+                            "基金代码": "020464",
+                            "基金简称": "测试股票型基金",
+                            "基金类型": "股票型",
+                        }
+                    ]
+                )
+            ),
+            holdings_loader=lambda _code, _year: holdings,
+            announcement_loader=lambda _code: pd.DataFrame(),
+        )
+
+        payload = skill.run_holdings_as_of(
+            fund_code="020464",
+            as_of_date=date(2026, 8, 1),
+        )
+
+        self.assertEqual(payload["source_refs"], [])
+        self.assertEqual(payload["funds"][0]["top_holdings"], [])
+        self.assertIn("historical_publication_proof_unavailable", payload["data_gap"])
+        self.assertFalse(payload["historical_reconstruction"]["retryable"])
+
+    def test_target_fund_normalizer_preserves_publication_proof_fields(self) -> None:
+        target = FundSnapshotSkill._normalize_target_fund(
+            {
+                "code": "561980",
+                "name": "目标 ETF",
+                "weight_pct": 92.22,
+                "report_date": "2026-06-30",
+                "source_ref": "https://example.test/report.pdf",
+                "published_at": "2026-07-21",
+                "content_hash": "a" * 64,
+            }
+        )
+
+        self.assertEqual(target["published_at"], "2026-07-21")
+        self.assertEqual(target["content_hash"], "a" * 64)
+
+    def test_official_report_verifier_binds_codes_names_and_weights(self) -> None:
+        rows = [
+            {
+                "rank": rank,
+                "code": f"{600000 + rank:06d}",
+                "name": f"样本{rank}",
+                "weight_pct": float(11 - rank),
+            }
+            for rank in range(1, 11)
+        ]
+        report_text = "基金主代码 020464\n2026年6月30日\n" + "\n".join(
+            f"{row['rank']} {row['code']} {row['name']} 100 1000.00 {row['weight_pct']:.2f}"
+            for row in rows
+        )
+        reader = SimpleNamespace(
+            pages=[SimpleNamespace(extract_text=lambda: report_text)]
+        )
+
+        with patch(
+            "domain_packs.finance_ashare.skills.fund_snapshot.skill.PdfReader",
+            return_value=reader,
+        ):
+            FundSnapshotSkill._verify_holdings_against_report(
+                rows,
+                pdf_bytes=b"%PDF fixture",
+                period_end=date(2026, 6, 30),
+                fund_code="020464",
+            )
+
+    def test_official_report_verifier_fails_closed_on_value_mismatch(self) -> None:
+        rows = [
+            {
+                "rank": rank,
+                "code": f"{600000 + rank:06d}",
+                "name": f"样本{rank}",
+                "weight_pct": float(11 - rank),
+            }
+            for rank in range(1, 11)
+        ]
+        report_text = "基金主代码 020464\n2026年6月30日\n" + "\n".join(
+            f"{row['rank']} {row['code']} {row['name']} 100 1000.00 {row['weight_pct']:.2f}"
+            for row in rows
+        )
+        reader = SimpleNamespace(
+            pages=[SimpleNamespace(extract_text=lambda: report_text)]
+        )
+        tampered = [dict(row) for row in rows]
+        tampered[0]["weight_pct"] = 99.0
+
+        with (
+            patch(
+                "domain_packs.finance_ashare.skills.fund_snapshot.skill.PdfReader",
+                return_value=reader,
+            ),
+            self.assertRaisesRegex(ValueError, "600001"),
+        ):
+            FundSnapshotSkill._verify_holdings_against_report(
+                tampered,
+                pdf_bytes=b"%PDF fixture",
+                period_end=date(2026, 6, 30),
+                fund_code="020464",
+            )
+
+    def test_official_report_verifier_checks_every_returned_candidate(self) -> None:
+        rows = [
+            {
+                "rank": rank,
+                "code": f"{600000 + rank:06d}",
+                "name": f"样本{rank}",
+                "weight_pct": float(21 - rank),
+            }
+            for rank in range(1, 12)
+        ]
+        report_text = "基金主代码 020464\n2026年6月30日\n" + "\n".join(
+            f"{row['rank']} {row['code']} {row['name']} 100 1000.00 {row['weight_pct']:.2f}"
+            for row in rows
+        )
+        reader = SimpleNamespace(
+            pages=[SimpleNamespace(extract_text=lambda: report_text)]
+        )
+        tampered = [dict(row) for row in rows]
+        tampered[10]["weight_pct"] = 99.0
+
+        with (
+            patch(
+                "domain_packs.finance_ashare.skills.fund_snapshot.skill.PdfReader",
+                return_value=reader,
+            ),
+            self.assertRaisesRegex(ValueError, "600011"),
+        ):
+            FundSnapshotSkill._verify_holdings_against_report(
+                tampered,
+                pdf_bytes=b"%PDF fixture",
+                period_end=date(2026, 6, 30),
+                fund_code="020464",
+            )
+
+    def test_official_report_verifier_rejects_wrong_fund_report(self) -> None:
+        FundSnapshotSkill._verify_report_fund_code(
+            "下属分级基金的交易代码 020464 020465",
+            "020465",
+        )
+        with self.assertRaisesRegex(ValueError, "020464"):
+            FundSnapshotSkill._verify_report_fund_code(
+                "基金主代码 020465 2026年6月30日",
+                "020464",
+            )
+
+    def test_historical_feeder_binds_both_official_disclosure_legs(self) -> None:
+        skill = FundSnapshotSkill(
+            fund_master=FundSecurityMaster(
+                catalog_loader=lambda: pd.DataFrame(
+                    [
+                        {
+                            "基金代码": "020464",
+                            "基金简称": "测试 ETF 联接A",
+                            "基金类型": "指数型-股票",
+                        }
+                    ]
+                )
+            )
+        )
+        parent_ref = {
+            "type": "fund_target_disclosure",
+            "provider": "eastmoney_official_report",
+            "id": "https://pdf.dfcfw.com/pdf/H2_AN_PARENT_1.pdf",
+            "content_ref": "https://pdf.dfcfw.com/pdf/H2_AN_PARENT_1.pdf",
+            "content_hash": "a" * 64,
+            "immutable_proof": True,
+            "published_at": "2026-07-21",
+        }
+        target_ref = {
+            "type": "fund_target_etf_holdings",
+            "provider": "eastmoney_official_report",
+            "id": "https://pdf.dfcfw.com/pdf/H2_AN_TARGET_1.pdf",
+            "content_ref": "https://pdf.dfcfw.com/pdf/H2_AN_TARGET_1.pdf",
+            "content_hash": "b" * 64,
+            "immutable_proof": True,
+            "published_at": "2026-08-31",
+        }
+        target = {
+            "rank": 1,
+            "code": "561980",
+            "name": "目标 ETF",
+            "security_type": "fund",
+            "weight_pct": 92.22,
+            "report_date": "2026-06-30",
+            "source_ref": parent_ref["content_ref"],
+            "published_at": parent_ref["published_at"],
+            "content_hash": parent_ref["content_hash"],
+        }
+        target_rows = [
+            {
+                "rank": rank,
+                "code": f"{600000 + rank:06d}",
+                "name": f"样本{rank}",
+                "weight_pct": float(11 - rank),
+            }
+            for rank in range(1, 11)
+        ]
+
+        with (
+            patch.object(
+                skill,
+                "_historical_target_fund",
+                return_value=(target, parent_ref, []),
+            ),
+            patch.object(
+                skill,
+                "_historical_direct_equity_holdings",
+                return_value=(
+                    target_rows,
+                    "2026年2季度",
+                    target_ref,
+                    [],
+                ),
+            ),
+        ):
+            payload = skill.run_holdings_as_of(
+                fund_code="020464",
+                as_of_date=date(2026, 9, 1),
+            )
+
+        fund = payload["funds"][0]
+        self.assertEqual(
+            {row["type"] for row in payload["source_refs"]},
+            {"fund_target_disclosure", "fund_target_etf_holdings"},
+        )
+        self.assertEqual(
+            {row["content_hash"] for row in payload["source_refs"]},
+            {"a" * 64, "b" * 64},
+        )
+        self.assertEqual(fund["target_fund_holdings"][0]["code"], "561980")
+        self.assertEqual(fund["lookthrough_holdings"][0]["effective_weight_pct"], 9.222)
+        self.assertEqual(fund["lookthrough_published_at"], "2026-08-31")
+
+    def test_snapshot_retains_twenty_holding_candidates_for_ashare_backfill(self) -> None:
+        disclosed = [
+            {
+                "序号": rank,
+                "股票代码": f"{600000 + rank:06d}",
+                "股票名称": f"样本{rank}",
+                "占净值比例": float(21 - rank),
+                "季度": "2026年2季度",
+            }
+            for rank in range(1, 21)
+        ]
+        skill = FundSnapshotSkill(
+            holdings_loader=lambda _code, _year: pd.DataFrame(disclosed),
+        )
+
+        holdings, period, errors = skill._latest_direct_equity_holdings("020464")
+
+        self.assertEqual(period, "2026年2季度")
+        self.assertEqual(errors, [])
+        self.assertEqual(len(holdings), 20)
 
     def test_fund_methodology_ranks_only_comparable_observed_evidence(self) -> None:
         skill = FundSnapshotSkill(

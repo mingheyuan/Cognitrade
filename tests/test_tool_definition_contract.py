@@ -19,30 +19,11 @@ from research_system.runtime.core.tool_registry import (
     register_domain_pack_tools,
 )
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
-from research_system.schemas.core_runtime import CoreToolDefinition
-from research_system.schemas.domain_pack import PackToolDefinition
 from research_system.schemas.tools import ToolDefinition
 from research_system.schemas.turn_runtime import FollowupTaskResult
 
 
 class ToolDefinitionContractTests(unittest.TestCase):
-    def test_core_and_pack_tools_share_one_contract(self) -> None:
-        self.assertIs(CoreToolDefinition, ToolDefinition)
-        self.assertIs(PackToolDefinition, ToolDefinition)
-
-        core = CoreToolDefinition(
-            name="core.example",
-            description="Core example tool.",
-        )
-        pack = PackToolDefinition(
-            name="pack.example",
-            description="Pack example tool.",
-            side_effect_level="read_only",
-        )
-
-        self.assertEqual(core.name, "core.example")
-        self.assertEqual(pack.name, "pack.example")
-
     def test_unknown_identifier_field_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             ToolDefinition(

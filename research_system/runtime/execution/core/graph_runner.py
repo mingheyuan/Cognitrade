@@ -1,33 +1,27 @@
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event, RLock, Semaphore
 from time import monotonic, perf_counter
-from typing import Any, Callable, Protocol
-
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 import jsonschema
 
-from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.core.approvals import (
     HumanApprovalStore,
     approval_policy_fingerprint,
 )
+from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.core.tool_registry import CoreToolRegistry
-from research_system.runtime.event_store import append_canonical_event
 from research_system.runtime.domain_packs.registry import DomainPackRegistry
-from research_system.runtime.execution.core.execution_graph import (
-    ExecutionGraphScheduler,
-    affected_node_ids_for_patch,
-    apply_execution_graph_patch,
-)
+from research_system.runtime.event_store import append_canonical_event
 from research_system.runtime.execution.core.execution_context import (
     ExecutionNodeContext,
     GateEvaluationContext,
@@ -37,9 +31,19 @@ from research_system.runtime.execution.core.execution_context import (
     GraphNodeTimeoutError,
     GraphTimedOutError,
 )
+from research_system.runtime.execution.core.execution_graph import (
+    ExecutionGraphScheduler,
+    affected_node_ids_for_patch,
+    apply_execution_graph_patch,
+)
 from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
-from research_system.schemas.artifacts import ArtifactDraft, ArtifactProducer, ArtifactRecord
+from research_system.schemas.artifacts import (
+    ArtifactDraft,
+    ArtifactProducer,
+    ArtifactRecord,
+)
 from research_system.schemas.core_runtime import PlanDecision
+from research_system.schemas.events import EventEnvelope
 from research_system.schemas.execution_graph import (
     ExecutionGraph,
     ExecutionGraphPatch,
@@ -50,15 +54,17 @@ from research_system.schemas.execution_runtime import (
     ExecutionRunResult,
     ExecutionRunSnapshot,
     ExecutionUsage,
-    GraphStepOutcome,
     GateEvaluation,
     GraphPatchImpact,
+    GraphStepOutcome,
     NodeExecutionOutput,
     NodeExecutionState,
 )
-from research_system.schemas.events import EventEnvelope
 from research_system.schemas.governance import GateEvaluationResult
-from research_system.schemas.state_machine import RUN_TERMINAL_STATUSES, transition_status
+from research_system.schemas.state_machine import (
+    RUN_TERMINAL_STATUSES,
+    transition_status,
+)
 
 if TYPE_CHECKING:
     from research_system.services.memory.layers import LayeredMemoryStore
@@ -169,6 +175,7 @@ class ExecutionGraphRunner:
         self._task_type = task_type
         self._execution_mode = execution_mode
         self._deadline_at = deadline_at
+        self._active_deadline_at = deadline_at
         self._graph_revision: int | None = None
         self._tool_semaphore: Semaphore | None = None
         self._progress_policy: dict[str, Any] = {}
@@ -381,6 +388,11 @@ class ExecutionGraphRunner:
         self._tool_semaphore = Semaphore(snapshot.graph.governance.max_concurrent_tool_calls)
         self._persist(snapshot)
         started = perf_counter()
+        timeout_seconds = snapshot.graph.governance.timeout_seconds
+        self._active_deadline_at = (
+            self._deadline_at if self._deadline_at is not None
+            else monotonic() + timeout_seconds if timeout_seconds is not None else None
+        )
         step_count = 0
         terminal_snapshot_persisted = False
         self._emit(
@@ -851,10 +863,33 @@ class ExecutionGraphRunner:
             if not commit_intents:
                 raise GraphExecutionError("execution event history has no persisted snapshots")
             snapshot_event = commit_intents[-1]
-        replayed = ExecutionRunSnapshot.model_validate(snapshot_event["snapshot"])
+        replayed = self._snapshot_from_event(snapshot_event)
         if replayed.model_dump(mode="json") != snapshot.model_dump(mode="json"):
             raise GraphExecutionError("execution replay does not match the persisted snapshot")
         return replayed
+
+    def _snapshot_from_event(self, event: dict[str, Any]) -> ExecutionRunSnapshot:
+        """Load current reference receipts while retaining legacy event replay."""
+
+        legacy = event.get("snapshot")
+        if isinstance(legacy, dict):
+            return ExecutionRunSnapshot.model_validate(legacy)
+        relative_ref = str(event.get("snapshot_ref") or "").strip()
+        expected_hash = str(event.get("snapshot_hash") or "").strip().lower()
+        if not relative_ref or not expected_hash:
+            raise GraphExecutionError("execution snapshot receipt is incomplete")
+        candidate = (self.run_root / relative_ref).resolve()
+        try:
+            candidate.relative_to(self.run_root.resolve())
+        except ValueError as exc:
+            raise GraphExecutionError("execution snapshot receipt escapes the run root") from exc
+        payload = read_json(candidate)
+        if not isinstance(payload, dict):
+            raise GraphExecutionError(f"execution snapshot receipt is missing: {relative_ref}")
+        actual_hash = self._snapshot_hash(payload)
+        if actual_hash != expected_hash:
+            raise GraphExecutionError("execution snapshot receipt hash mismatch")
+        return ExecutionRunSnapshot.model_validate(payload)
 
     def _new_snapshot(
         self,
@@ -893,7 +928,13 @@ class ExecutionGraphRunner:
         if pending_approvals:
             self._set_run_status(snapshot, "waiting_approval")
             self._emit("graph_approval_required", approval_ids=pending_approvals)
-        self._emit("graph_snapshot_created", snapshot=snapshot.model_dump(mode="json"))
+        self._emit(
+            "graph_snapshot_created",
+            **self._write_snapshot_checkpoint(
+                snapshot.model_dump(mode="json"),
+                checkpoint_kind="created",
+            ),
+        )
         return snapshot
 
     def _validate_graph_governance(self, graph: ExecutionGraph, *, run_id: str) -> None:
@@ -1191,9 +1232,8 @@ class ExecutionGraphRunner:
         snapshot: ExecutionRunSnapshot,
         frontier: list[ExecutionNode],
     ) -> list[_NodeOutcome]:
-        if len(frontier) == 1:
-            return [self._execute_node(snapshot, frontier[0])]
         outcomes: list[_NodeOutcome] = []
+        control_error: GraphExecutionError | None = None
         with ThreadPoolExecutor(
             max_workers=min(len(frontier), snapshot.graph.governance.max_concurrency),
             thread_name_prefix="cognitrade-graph",
@@ -1201,7 +1241,23 @@ class ExecutionGraphRunner:
             futures: dict[Future[_NodeOutcome], ExecutionNode] = {
                 pool.submit(self._execute_node, snapshot, node): node for node in frontier
             }
-            outcomes.extend(future.result() for future in as_completed(futures))
+            pending = set(futures)
+            while pending:
+                control = read_json(self.control_path) or {}
+                if self._cancel_requested.is_set() or control.get("cancel_requested"):
+                    self._cancel_requested.set()
+                    control_error = GraphCancelledError("run cancellation requested")
+                elif self._active_deadline_at is not None and monotonic() >= self._active_deadline_at:
+                    control_error = GraphTimedOutError("turn timeout exceeded")
+                if control_error is not None:
+                    with self._lock:
+                        for cancellation in self._node_cancellations.values():
+                            cancellation.set()
+                done, pending = wait(pending, timeout=0.25, return_when=FIRST_COMPLETED)
+                outcomes.extend(future.result() for future in done)
+        # Do not launch recovery while an old worker still owns its transport.
+        if control_error is not None:
+            raise control_error
         order = {node.node_id: index for index, node in enumerate(frontier)}
         outcomes.sort(key=lambda item: order[item.node.node_id])
         return outcomes
@@ -1300,6 +1356,11 @@ class ExecutionGraphRunner:
                         artifact_board=self.board,
                         cache_root=self.cache_root,
                         cancellation=cancellation,
+                        deadline_at=min(
+                            self._active_deadline_at or float("inf"),
+                            monotonic() + self._node_timeout_seconds(node)
+                            if self._node_timeout_seconds(node) is not None else float("inf"),
+                        ),
                         tool_registry=self.tool_registry,
                         skill_runtime=self._skill_runtime_for(snapshot, node),
                         memory_store=self.memory_store,
@@ -1320,6 +1381,8 @@ class ExecutionGraphRunner:
                         context,
                         timeout_seconds=self._node_timeout_seconds(node),
                     )
+                    if self._cancel_requested.is_set() or cancellation.is_set():
+                        raise GraphCancelledError(f"node cancelled: {node.node_id}")
                     output = self._normalize_output(raw_output)
                     input_contract = self._evaluate_method_input_contract(node, inputs)
                     if input_contract is not None:
@@ -1442,14 +1505,29 @@ class ExecutionGraphRunner:
         selected: list[ArtifactRecord] = []
         for port in node.consumes:
             if node.input_artifact_ids:
-                candidates = [
+                pinned_for_type = [
                     artifact
                     for artifact_id in node.input_artifact_ids
                     for artifact in [self.board.get(artifact_id)]
                     if artifact is not None
-                    and artifact.status == "active"
                     and artifact.artifact_type == port.artifact_type
                 ]
+                if pinned_for_type:
+                    # A same-type pin remains strict, including invalidation.
+                    candidates = [
+                        artifact
+                        for artifact in pinned_for_type
+                        if artifact.status == "active"
+                    ]
+                else:
+                    # IDs are shared by all ports on the node. An ID belonging
+                    # to an already-available optional input must not hide a
+                    # different port produced later by a dependency.
+                    candidates = self.board.list_artifacts(
+                        run_id=snapshot.run_id,
+                        artifact_type=port.artifact_type,
+                        status="active",
+                    )
             else:
                 candidates = self.board.list_artifacts(
                     run_id=snapshot.run_id,
@@ -2947,15 +3025,66 @@ class ExecutionGraphRunner:
             write_json(self.control_path, payload)
 
     def _persist(self, snapshot: ExecutionRunSnapshot) -> None:
+        started_at = monotonic()
         snapshot.graph = ExecutionGraph.model_validate(snapshot.graph.model_dump(mode="python"))
         payload = snapshot.model_dump(mode="json")
+        receipt = self._write_snapshot_checkpoint(payload, checkpoint_kind="safe_point")
         self._emit(
             "graph_snapshot_commit_started",
-            snapshot=payload,
+            **receipt,
         )
         write_json(self.graph_path, snapshot.graph.model_dump(mode="json"))
         write_json(self.snapshot_path, payload)
-        self._emit("graph_snapshot_persisted", snapshot=payload)
+        duration = max(0.0, monotonic() - started_at)
+        # Keep timing out of the graph itself: persisting these small counters
+        # must never trigger another snapshot or copy raw Bundle contents.
+        with self._lock:
+            metrics_path = self.run_root / "execution_metrics.json"
+            previous = read_json(metrics_path) or {}
+            metrics = {
+                "persistence_count": int(previous.get("persistence_count") or 0) + 1,
+                "persistence_last_seconds": round(duration, 6),
+                "persistence_seconds": round(float(previous.get("persistence_seconds") or 0) + duration, 6),
+                "snapshot_size_bytes": receipt["snapshot_size_bytes"],
+            }
+            write_json(metrics_path, metrics)
+        self._emit("graph_snapshot_persisted", **receipt, duration_seconds=round(duration, 6),
+                   persistence_seconds=metrics["persistence_seconds"])
+
+    def _write_snapshot_checkpoint(
+        self,
+        payload: dict[str, Any],
+        *,
+        checkpoint_kind: str,
+    ) -> dict[str, Any]:
+        relative_path = Path("checkpoints") / f"execution_snapshot-{generate_ulid()}.json"
+        write_json(self.run_root / relative_path, payload)
+        graph = payload.get("graph") if isinstance(payload.get("graph"), dict) else {}
+        return {
+            "snapshot_ref": relative_path.as_posix(),
+            "snapshot_hash": self._snapshot_hash(payload),
+            "snapshot_size_bytes": len(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ),
+            "checkpoint_kind": checkpoint_kind,
+            "status": payload.get("status"),
+            "graph_revision": graph.get("revision"),
+        }
+
+    @staticmethod
+    def _snapshot_hash(payload: dict[str, Any]) -> str:
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     def _load_snapshot(self) -> ExecutionRunSnapshot | None:
         payload = read_json(self.snapshot_path)
@@ -3098,6 +3227,19 @@ class ExecutionGraphRunner:
             message=f"当前：{current}；下一步：{next_step}",
             **{key: value for key, value in details.items() if value is not None},
         )
+        # A small latest-value projection lets batch polling avoid re-reading
+        # the execution graph or an ever-growing event log on every refresh.
+        with self._lock:
+            write_json(self.run_root / "execution_progress.json", {
+                "node_id": node_id, "phase": phase, "status": status,
+                "current_action": current, "next_action": next_step,
+                **{key: value for key, value in details.items()
+                   if key in {"progress_percent", "stage_index", "stage_total", "uzi_stage",
+                              "completed_stages", "stage_phase",
+                              "progress_scope", "workflow_phase", "workflow_completed_stages", "workflow_total_stages", "analysis_cycle",
+                              "request_phase", "request_attempt", "request_timing", "cache_hit", "cache_reason"}
+                   and value is not None},
+            })
 
     def _emit_observer_progress(self, payload: dict[str, Any]) -> None:
         self._emit_main_agent_progress(

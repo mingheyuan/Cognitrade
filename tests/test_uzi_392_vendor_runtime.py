@@ -1,13 +1,20 @@
 from __future__ import annotations
 
-import os
+import importlib
 import operator
-from pathlib import Path
+import os
+import threading
 import time
-from types import SimpleNamespace
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import yaml
+
+from domain_packs.finance_ashare.tools import snapshot_collector
 from domain_packs.finance_ashare.vendor.uzi_3_9_2 import (
     UZI_COMMAND_IDS,
     UZI_FETCHER_IDS,
@@ -17,7 +24,6 @@ from domain_packs.finance_ashare.vendor.uzi_3_9_2 import (
     verify_vendored_uzi_integrity,
 )
 from domain_packs.finance_ashare.vendor.uzi_3_9_2 import runtime as uzi_runtime
-from domain_packs.finance_ashare.tools import snapshot_collector
 
 
 class Uzi392VendorRuntimeTests(unittest.TestCase):
@@ -44,6 +50,26 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
         self.assertTrue(report["standalone_skill_tree_matches"])
         self.assertIn("quick-scan", UZI_COMMAND_IDS)
         self.assertEqual(len(UZI_FETCHER_IDS), 22)
+
+    def test_capability_ledger_report_hashes_match_runtime_integrity_lock(self) -> None:
+        ledger_path = (
+            Path(__file__).resolve().parents[1]
+            / "domain_packs"
+            / "finance_ashare"
+            / "migration"
+            / "uzi_3_9_2_capability_ledger.yaml"
+        )
+        ledger = yaml.safe_load(ledger_path.read_text(encoding="utf-8"))
+        native_report = ledger["native_report"]
+
+        self.assertEqual(
+            native_report["template_sha256"],
+            uzi_runtime.UZI_REPORT_TEMPLATE_SHA256,
+        )
+        self.assertEqual(
+            native_report["renderer_helpers"],
+            uzi_runtime.UZI_REPORT_RENDERER_SHA256,
+        )
 
     def test_all_referenced_standalone_skill_resources_are_vendored(self) -> None:
         root = (
@@ -290,6 +316,261 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
         self.assertNotIn("secret-cookie", repr(captured[0]))
         self.assertIs(pipeline_collect.run_process_jobs, run_process_jobs)
 
+    def test_parallel_symbol_scope_reuses_request_global_pipeline_wrappers(self) -> None:
+        pipeline_run = importlib.import_module("lib.pipeline.run")
+        pipeline_collect = importlib.import_module("lib.pipeline.collect")
+        symbol_result = {
+            "0_basic": {
+                "data": {"name": "贵州茅台"},
+                "source": "fixture:basic",
+                "fallback": False,
+            }
+        }
+
+        with (
+            patch.object(pipeline_run, "_preflight_guards"),
+            patch.object(pipeline_collect, "collect", return_value=symbol_result),
+            patch.object(self.runtime, "_write_native_raw"),
+            patch.object(
+                uzi_runtime,
+                "_pipeline_symbol_collection_scope",
+            ) as nested_scope,
+            self.runtime.parallel_symbol_collection_scope(
+                options={
+                    "cognitrade_root_route_mode": "multi",
+                    "cognitrade_xueqiu_policy": {
+                        "enabled": False,
+                        "cookie": None,
+                    },
+                }
+            ) as scoped_options,
+        ):
+            raw = self.runtime.collect_symbol(
+                ticker="600519",
+                resume=False,
+                options=scoped_options,
+            )
+
+        nested_scope.assert_not_called()
+        self.assertEqual(raw["_uzi_execution"]["lane"], "pipeline")
+
+    def test_parallel_symbol_scope_serializes_cross_symbol_mini_racer_jobs(self) -> None:
+        runner = importlib.import_module("lib.pipeline.process_runner")
+        active = 0
+        peak_active = 0
+        state_lock = threading.Lock()
+
+        def run_process_jobs(jobs, *, max_workers, overall_timeout):
+            del max_workers, overall_timeout
+            nonlocal active, peak_active
+            if jobs and jobs[0].serial_group == "mini_racer":
+                with state_lock:
+                    active += 1
+                    peak_active = max(peak_active, active)
+                time.sleep(0.03)
+                with state_lock:
+                    active -= 1
+            return [runner.ProcessOutcome(key=job.key, value=job.key) for job in jobs]
+
+        pipeline_collect = SimpleNamespace(
+            run_process_jobs=run_process_jobs,
+            ProcessOutcome=runner.ProcessOutcome,
+        )
+        jobs = [
+            runner.ProcessJob(
+                key=f"mini-{index}",
+                target=operator.add,
+                args=(1, 2),
+                serial_group="mini_racer",
+            )
+            for index in range(2)
+        ]
+
+        with (
+            uzi_runtime._pipeline_mini_racer_serial_scope(pipeline_collect),
+            ThreadPoolExecutor(max_workers=2) as pool,
+        ):
+            futures = [
+                pool.submit(
+                    pipeline_collect.run_process_jobs,
+                    [job],
+                    max_workers=6,
+                    overall_timeout=0.01,
+                )
+                for job in jobs
+            ]
+            outcomes = [future.result(timeout=1) for future in futures]
+
+        self.assertEqual(peak_active, 1)
+        self.assertEqual(
+            {outcome[0].key for outcome in outcomes},
+            {"mini-0", "mini-1"},
+        )
+        self.assertTrue(all(outcome[0].value for outcome in outcomes), outcomes)
+        self.assertIs(pipeline_collect.run_process_jobs, run_process_jobs)
+
+    def test_mini_racer_timeout_recovers_only_its_owned_sentinel(self) -> None:
+        runner = importlib.import_module("lib.pipeline.process_runner")
+        calls: list[tuple[str, bool]] = []
+
+        with TemporaryDirectory() as temporary:
+            sentinel = Path(temporary) / "mini-racer.sentinel"
+
+            def run_process_jobs(jobs, *, max_workers, overall_timeout):
+                del max_workers, overall_timeout
+                self.assertEqual(len(jobs), 1)
+                job = jobs[0]
+                calls.append((job.key, sentinel.exists()))
+                if job.key == "capital-flow":
+                    owner_token = job.args[-1]
+                    sentinel.write_text(
+                        "1|fetch_capital_flow|"
+                        f"{uzi_runtime._MINI_RACER_SENTINEL_OWNER_PREFIX}"
+                        f"{owner_token}\n",
+                        encoding="utf-8",
+                    )
+                    return [
+                        runner.ProcessOutcome(
+                            key=job.key,
+                            error="fetcher timeout > 120s",
+                            timed_out=True,
+                        )
+                    ]
+                return [runner.ProcessOutcome(key=job.key, value=job.key)]
+
+            pipeline_collect = SimpleNamespace(
+                run_process_jobs=run_process_jobs,
+                ProcessOutcome=runner.ProcessOutcome,
+            )
+            jobs = [
+                runner.ProcessJob(
+                    key="capital-flow",
+                    target=operator.add,
+                    args=(1, 2),
+                    serial_group="mini_racer",
+                ),
+                runner.ProcessJob(
+                    key="valuation",
+                    target=operator.add,
+                    args=(1, 2),
+                    serial_group="mini_racer",
+                ),
+            ]
+
+            with (
+                patch.object(
+                    uzi_runtime,
+                    "_mini_racer_sentinel_path",
+                    return_value=sentinel,
+                ),
+                uzi_runtime._pipeline_mini_racer_serial_scope(pipeline_collect),
+            ):
+                outcomes = pipeline_collect.run_process_jobs(
+                    jobs,
+                    max_workers=6,
+                    overall_timeout=300,
+                )
+
+            self.assertFalse(sentinel.exists())
+
+        self.assertEqual(
+            calls,
+            [("capital-flow", False), ("valuation", False)],
+        )
+        self.assertTrue(outcomes[0].timed_out)
+        self.assertEqual(outcomes[1].value, "valuation")
+
+    def test_mini_racer_crash_and_foreign_sentinels_remain_fail_safe(self) -> None:
+        runner = importlib.import_module("lib.pipeline.process_runner")
+
+        with TemporaryDirectory() as temporary:
+            sentinel = Path(temporary) / "mini-racer.sentinel"
+
+            def crashing_process_runner(jobs, *, max_workers, overall_timeout):
+                del max_workers, overall_timeout
+                job = jobs[0]
+                owner_token = job.args[-1]
+                sentinel.write_text(
+                    "1|fetch_capital_flow|"
+                    f"{uzi_runtime._MINI_RACER_SENTINEL_OWNER_PREFIX}"
+                    f"{owner_token}\n",
+                    encoding="utf-8",
+                )
+                return [
+                    runner.ProcessOutcome(
+                        key=job.key,
+                        error="worker pipe failed: EOFError",
+                    )
+                ]
+
+            pipeline_collect = SimpleNamespace(
+                run_process_jobs=crashing_process_runner,
+                ProcessOutcome=runner.ProcessOutcome,
+            )
+            crash_job = runner.ProcessJob(
+                key="capital-flow",
+                target=operator.add,
+                args=(1, 2),
+                serial_group="mini_racer",
+            )
+            with patch.object(
+                uzi_runtime,
+                "_mini_racer_sentinel_path",
+                return_value=sentinel,
+            ), uzi_runtime._pipeline_mini_racer_serial_scope(pipeline_collect):
+                outcomes = pipeline_collect.run_process_jobs(
+                    [crash_job],
+                    max_workers=1,
+                    overall_timeout=300,
+                )
+                self.assertFalse(outcomes[0].timed_out)
+                self.assertTrue(sentinel.exists())
+
+                sentinel.write_text(
+                    "1|fetch_capital_flow|cognitrade-timeout-owner=other\n",
+                    encoding="utf-8",
+                )
+                self.assertFalse(
+                    uzi_runtime._recover_timed_out_mini_racer_sentinel("owned")
+                )
+                self.assertTrue(sentinel.exists())
+
+                sentinel.write_text(
+                    "1|fetch_capital_flow\n",
+                    encoding="utf-8",
+                )
+                self.assertFalse(
+                    uzi_runtime._recover_timed_out_mini_racer_sentinel("owned")
+                )
+                self.assertTrue(sentinel.exists())
+
+    def test_mini_racer_child_wrapper_tags_the_pinned_crash_marker(self) -> None:
+        run_real_test = importlib.import_module("run_real_test")
+        original_arm = run_real_test._arm_mini_racer_sentinel
+
+        with TemporaryDirectory() as temporary:
+            sentinel = Path(temporary) / "mini-racer.sentinel"
+
+            def target():
+                run_real_test._arm_mini_racer_sentinel("fetch_capital_flow")
+                return sentinel.read_text(encoding="utf-8")
+
+            with patch.object(run_real_test, "_MINI_RACER_SENTINEL", sentinel):
+                payload = uzi_runtime._run_pipeline_owned_mini_racer_job(
+                    target,
+                    (),
+                    {},
+                    "owned-token",
+                )
+
+        self.assertTrue(
+            payload.endswith(
+                "|fetch_capital_flow|"
+                "cognitrade-timeout-owner=owned-token\n"
+            )
+        )
+        self.assertIs(run_real_test._arm_mini_racer_sentinel, original_arm)
+
     def test_process_runner_enforces_hard_timeout_with_platform_startup_budget(self) -> None:
         runner = __import__(
             "lib.pipeline.process_runner",
@@ -442,6 +723,10 @@ class Uzi392VendorRuntimeTests(unittest.TestCase):
                 "COGNITRADE_SENSITIVE_SOURCE_ALLOWLIST": "",
                 "COGNITRADE_XUEQIU_COOKIE": "",
             },
+        ), patch.object(
+            snapshot_collector,
+            "_UZI_MINI_RACER_FETCHERS",
+            frozenset({"7_industry", "10_valuation"}),
         ), patch.object(Uzi392FetcherRuntime, "collect", autospec=True) as mocked:
             mocked.side_effect = lambda _self, fetcher_id, **kwargs: collect(fetcher_id, **kwargs)
             rows = snapshot_collector.collect_snapshots(

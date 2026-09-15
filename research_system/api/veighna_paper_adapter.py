@@ -50,13 +50,6 @@ class VeighNaPaperAdapter:
         self.runtime_root = Path(
             runtime_root or Path(gettempdir()) / "cognitrade" / "veighna_runtime"
         ).resolve()
-        # Keep every paper-trading runtime inside the configured writable
-        # storage boundary even when the optional VeighNa packages are absent.
-        # Besides making the fallback engine deterministic, this guarantees
-        # that a later native-engine activation reuses the same controlled
-        # .vntrader directory instead of consulting the process home.
-        self.runtime_root.mkdir(parents=True, exist_ok=True)
-        (self.runtime_root / ".vntrader").mkdir(parents=True, exist_ok=True)
         self._available = False
         self._load_error: str | None = None
         self._native: dict[str, Any] = {}

@@ -1,25 +1,33 @@
 from __future__ import annotations
 
 import contextlib
+import json
+import os
 from collections import Counter
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-import json
-import os
 from threading import RLock
 from typing import Any
 
 from research_system.runtime.agent_os import AgentOS
-from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
 from research_system.runtime.core.id_utils import generate_ulid
+from research_system.runtime.core.time_utils import parse_utc_datetime
 from research_system.runtime.presentation.display import (
     localize_runtime_error,
     localize_runtime_event,
     runtime_status_message,
 )
+from research_system.runtime.storage.jsonl import read_json, read_jsonl, write_json
 from research_system.schemas.core_runtime import MainAgentState
-from research_system.schemas.execution_runtime import ExecutionRunResult, ExecutionRunSnapshot
-from research_system.schemas.protocol import ProgressState, RequestEnvelope, ResponseEnvelope
+from research_system.schemas.execution_runtime import (
+    ExecutionRunResult,
+    ExecutionRunSnapshot,
+)
+from research_system.schemas.protocol import (
+    ProgressState,
+    RequestEnvelope,
+    ResponseEnvelope,
+)
 
 
 class AgentOSRunService:
@@ -38,6 +46,8 @@ class AgentOSRunService:
         self._worker_id = f"api-worker:{generate_ulid()}"
         self._chat_completion_callback = None
         self._fund_holding_reports = None
+        self._report_inputs = None
+        self._deferred_report_recovery = False
         self._lease_seconds = max(
             float(getattr(agent_os.settings, "run_timeout_seconds", 300.0)) * 2.0,
             60.0,
@@ -52,19 +62,74 @@ class AgentOSRunService:
         """Bind the Pack-specific batch facade without changing Agent OS execution."""
         self._fund_holding_reports = service
 
+    def bind_report_inputs(self, service) -> None:
+        """Bind the DB-backed formal-report Bundle preflight boundary."""
+        self._report_inputs = service
+        binder = getattr(self.agent_os, "bind_resolved_request_preflight", None)
+        if callable(binder):
+            binder(service.freeze_request)
+        continuation_binder = getattr(self.agent_os, "bind_continuation_preflight", None)
+        validator = getattr(service, "validate_continuation_request", None)
+        if callable(continuation_binder) and callable(validator):
+            continuation_binder(validator)
+        if getattr(self, "_deferred_report_recovery", False):
+            self._deferred_report_recovery = False
+            self._recover_pending_runs()
+        recover = getattr(self._fund_holding_reports, "recover_pending_batches", None)
+        if callable(recover):
+            # FundHoldingReportService is constructed before the strategy DB in
+            # the API lifespan.  DB-backed child recovery must start only after
+            # this trust boundary is available, otherwise an old projected
+            # request could bypass parent-Bundle revocation checks.
+            recover()
+
+    @property
+    def report_input_service(self):
+        return self._report_inputs
+
+    def _require_fund_child_lineage(
+        self,
+        run_id: str,
+        *,
+        user_id: str | None,
+        tenant_id: str | None,
+    ) -> None:
+        """Apply one fail-closed guard to every hidden-child delivery surface."""
+
+        holding_reports = self._fund_holding_reports
+        if holding_reports is None or not holding_reports.is_hidden_child(run_id):
+            return
+        holding_reports.require_child_report_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+
     def run(self, request: RequestEnvelope, *, run_id: str | None = None) -> ResponseEnvelope:
+        request = self._freeze_report_inputs(request)
         if bool((request.constraints or {}).get("background")):
             return self.submit_background(request)
         return self.agent_os.handle_request(request, run_id=run_id)
 
     def submit_background(self, request: RequestEnvelope) -> ResponseEnvelope:
-        run_id = generate_ulid()
-        self.agent_os.prepare_run(
-            request,
-            run_id=run_id,
-            intent=request.intent or "agent_os.pending",
-        )
-        self._submit_background_worker(run_id, request)
+        request = self._freeze_report_inputs(request)
+        # Reserve once before starting a worker. Otherwise concurrent repeated
+        # POSTs create orphan reservations even if execution later deduplicates.
+        with self._background_lock:
+            existing_run_id = self.agent_os.run_store.find_run_by_idempotency_key(
+                request.idempotency_key or "",
+                tenant_id=request.tenant_id,
+                user_id=request.user_id,
+            )
+            if existing_run_id:
+                return self.agent_os.handle_request(request)
+            run_id = generate_ulid()
+            self.agent_os.prepare_run(
+                request,
+                run_id=run_id,
+                intent=request.intent or "agent_os.pending",
+            )
+            self._submit_background_worker(run_id, request)
         return ResponseEnvelope(
             request_id=request.request_id,
             run_id=run_id,
@@ -85,6 +150,12 @@ class AgentOSRunService:
                 "background": True,
             },
         )
+
+    def _freeze_report_inputs(self, request: RequestEnvelope) -> RequestEnvelope:
+        service = self._report_inputs
+        if service is None:
+            return request
+        return service.freeze_request(request)
 
     def close(self) -> None:
         # A worker may have completed the Turn state transition but still be
@@ -119,6 +190,15 @@ class AgentOSRunService:
             if isinstance(constraints, dict) and constraints.get("fund_holding_report_child") is True:
                 # The dedicated holding-report coordinator owns recovery and its
                 # independent concurrency limit for these child Runs.
+                continue
+            slots = request_payload.get("slots") if isinstance(request_payload, dict) else None
+            if self._report_inputs is None and (
+                (isinstance(slots, dict) and slots.get("report_data_manifest"))
+                or (isinstance(constraints, dict) and constraints.get("data_source_mode") == "bundle_only")
+            ):
+                # API construction precedes the report-input binding. Do not
+                # race cached report execution against its safety boundary.
+                self._deferred_report_recovery = True
                 continue
             request_payload: dict[str, Any] = {}
             try:
@@ -206,7 +286,7 @@ class AgentOSRunService:
         now = datetime.now(timezone.utc)
         existing = read_json(lease_path)
         if isinstance(existing, dict):
-            expires_at = self._parse_lease_time(existing.get("expires_at"))
+            expires_at = parse_utc_datetime(existing.get("expires_at"))
             if expires_at is not None and expires_at > now:
                 return False
             with contextlib.suppress(FileNotFoundError):
@@ -241,16 +321,6 @@ class AgentOSRunService:
         lease = read_json(lease_path)
         if isinstance(lease, dict) and lease.get("worker_id") == self._worker_id:
             lease_path.unlink(missing_ok=True)
-
-    @staticmethod
-    def _parse_lease_time(value: object) -> datetime | None:
-        try:
-            parsed = datetime.fromisoformat(str(value or ""))
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
 
     def _decorate_history_row(
         self,
@@ -424,6 +494,11 @@ class AgentOSRunService:
                 tenant_id=tenant_id,
             )
             return {**detail, "run_id": run_id, "events": self._execution_events(run_id)}
+        self._require_fund_child_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         detail = self.agent_os.inspect_run(run_id)
         if detail.get("mode") == "pending":
             return {
@@ -472,6 +547,11 @@ class AgentOSRunService:
                 user_id=user_id,
                 tenant_id=tenant_id,
             )
+        self._require_fund_child_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         return self.agent_os.inspect_run(run_id)
 
     def artifacts(
@@ -493,6 +573,11 @@ class AgentOSRunService:
                 user_id=user_id,
                 tenant_id=tenant_id,
             )
+        self._require_fund_child_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         detail = self.agent_os.inspect_run(run_id)
         artifacts = list(detail.get("artifacts") or [])
         if artifact_type:
@@ -578,6 +663,11 @@ class AgentOSRunService:
         holding_reports = self._fund_holding_reports
         if holding_reports is not None and holding_reports.is_batch(run_id):
             return holding_reports.trace(run_id, user_id=user_id, tenant_id=tenant_id)
+        self._require_fund_child_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         detail = self.agent_os.inspect_run(run_id)
         if detail.get("mode") == "pending":
             return {
@@ -733,6 +823,8 @@ class AgentOSRunService:
                         "progress_percent": live_node_progress[node.node_id].get("progress_percent"),
                         "stage_index": live_node_progress[node.node_id].get("stage_index"),
                         "stage_total": live_node_progress[node.node_id].get("stage_total"),
+                        "completed_stages": live_node_progress[node.node_id].get("completed_stages"),
+                        "stage_phase": live_node_progress[node.node_id].get("stage_phase"),
                     }
                     if node.node_id in live_node_progress
                     else {}
@@ -868,6 +960,11 @@ class AgentOSRunService:
                 "scope_thread_ids": [thread_id],
                 "snapshot": state,
             }
+        self._require_fund_child_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         detail = self.agent_os.inspect_run(run_id)
         if detail.get("mode") == "pending":
             request = detail.get("request") or {}
@@ -1022,6 +1119,11 @@ class AgentOSRunService:
                     ]
                 },
             }
+        self._require_fund_child_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         detail = self.agent_os.inspect_run(run_id)
         if detail.get("mode") == "pending":
             return {
@@ -1147,6 +1249,11 @@ class AgentOSRunService:
         tenant_id: str | None = None,
     ) -> ResponseEnvelope:
         self._assert_run_scope(run_id, user_id=user_id, tenant_id=tenant_id)
+        self._require_fund_child_lineage(
+            run_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         request = self._request_envelope(run_id)
         return self._response(request, self.agent_os.rerun_from(run_id, from_node))
 
@@ -1156,6 +1263,11 @@ class AgentOSRunService:
         result: ExecutionRunResult,
     ) -> ResponseEnvelope:
         snapshot = result.snapshot
+        self._require_fund_child_lineage(
+            snapshot.run_id,
+            user_id=request.user_id,
+            tenant_id=request.tenant_id,
+        )
         response_status = snapshot.status
         artifacts = self.agent_os.inspect_run(snapshot.run_id).get("artifacts") or []
         final_ids = set(result.final_artifact_ids)

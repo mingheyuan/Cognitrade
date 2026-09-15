@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import re
 import zipfile
-from collections import Counter
+from collections import Counter, OrderedDict
+from collections.abc import Iterable
 from concurrent.futures import Future, ThreadPoolExecutor
+from copy import deepcopy
 from datetime import date, datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from threading import RLock
-from typing import Any, Iterable
+from typing import Any
+from zoneinfo import ZoneInfo
 
 from domain_packs.finance_ashare.holding_reports import (
     StaleHoldingsConfirmationRequired,
@@ -18,6 +21,12 @@ from domain_packs.finance_ashare.holding_reports import (
 from domain_packs.finance_ashare.reporting import (
     render_uzi_native_html,
     render_uzi_native_pdf,
+)
+from research_system.market_data.report_inputs import (
+    ReportInputError,
+    bundle_hashes_for_symbols,
+    normalize_manifest,
+    slots_for_manifest,
 )
 from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.core.id_utils import generate_ulid
@@ -30,6 +39,9 @@ from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.schemas.protocol import RequestEnvelope
 
 _BATCH_FILE = "fund_holding_batch.json"
+_TERMINAL_ITEM_STATUSES = {
+    "completed", "completed_partial", "failed", "cancelled", "unsupported"
+}
 _DELIVERABLE_ITEM_STATUSES = {"completed"}
 _RECOVERABLE_RUN_STATUSES = {"running", "paused", "waiting_approval", "gated", "timed_out", "failed", "cancelled"}
 
@@ -55,9 +67,19 @@ class FundHoldingReportService:
         self.run_service = run_service
         self.max_concurrency = max(
             1,
-            min(int(getattr(settings, "fund_holding_report_concurrency", 2)), 10),
+            min(int(getattr(settings, "fund_holding_report_concurrency", 2)), 5),
+        )
+        self.llm_max_concurrency = max(
+            1,
+            int(getattr(settings, "uzi_llm_max_concurrency", 2)),
+        )
+        self.max_auto_retries = max(
+            0,
+            int(getattr(settings, "fund_holding_report_max_auto_retries", 3)),
         )
         self._lock = RLock()
+        self._manifest_cache: OrderedDict[tuple, dict[str, Any]] = OrderedDict()
+        self._batch_read_cache: OrderedDict[tuple, dict[str, Any]] = OrderedDict()
         self._executor = ThreadPoolExecutor(
             max_workers=self.max_concurrency,
             thread_name_prefix="cognitrade-fund-holding",
@@ -73,9 +95,271 @@ class FundHoldingReportService:
         self._closed = True
         self._executor.shutdown(wait=False, cancel_futures=True)
 
+    def recover_pending_batches(self) -> None:
+        """Resume persisted batches after the DB report boundary is bound."""
+
+        self._recover_batches()
+
+    @property
+    def report_input_service(self):
+        """Resolve the optional DB-backed Bundle boundary lazily.
+
+        The API lifespan binds it after the shared database is constructed, so
+        the holding coordinator must not snapshot the value in ``__init__``.
+        """
+
+        return getattr(self.run_service, "report_input_service", None)
+
+    def _has_fund_report_lineage(self) -> bool:
+        service = self.report_input_service
+        return bool(
+            service is not None
+            and getattr(service, "has_fund_report_lineage", False)
+        )
+
+    def resolve_fund_input(
+        self,
+        *,
+        fund_code: str,
+        as_of_date: date | str,
+        fund_bundle_id: str | None = None,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Read the authoritative fund disclosure without acquiring any data.
+
+        Non-database test/legacy gateways retain their old run-based entry.
+        Once the database boundary is configured, an unavailable Bundle is an
+        explicit input error, never a reason to fall back to a stale run.
+        """
+
+        resolver = getattr(self.report_input_service, "resolve_fund_report_parent", None)
+        if not self._has_fund_report_lineage() or not callable(resolver):
+            return None
+        resolved = resolver(
+            fund_code=fund_code,
+            as_of_date=as_of_date,
+            fund_bundle_id=fund_bundle_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        payload = dict(resolved["payload"])
+        target_date = date.fromisoformat(str(as_of_date)[:10])
+        disclosure_date = date.fromisoformat(str(payload["disclosure_date"])[:10])
+        age = (target_date - disclosure_date).days
+        frozen = {
+            **payload,
+            "source_artifact_id": payload.get("source_artifact_id") or "",
+            "fund_bundle_id": resolved["fund_bundle_id"],
+            "fund_bundle_manifest_hash": resolved["bundle_manifest_hash"],
+            "fund_snapshot_id": resolved["snapshot_id"],
+            "top_n": 10,
+            "disclosure_age_days": age,
+            "stale_level": "confirmation_required" if age > 180 else "warning" if age > 120 else "current",
+            "data_gap": [],
+            "holdings": [
+                {
+                    **dict(row),
+                    "canonical_symbol": row["symbol"],
+                    "symbol": row["code"],
+                    "market": "A",
+                    "supported": True,
+                    "status": "queued",
+                    "target_security_weight_pct": row.get("disclosed_weight_pct"),
+                }
+                for row in payload["holdings"]
+            ],
+        }
+        return {
+            "frozen": frozen,
+            "fund_payload": {
+                **payload,
+                "fund_bundle_id": resolved["fund_bundle_id"],
+                "fund_bundle_manifest_hash": resolved["bundle_manifest_hash"],
+                "fund_snapshot_id": resolved["snapshot_id"],
+                "disclosure_age_days": age,
+                "stale_level": frozen["stale_level"],
+                "report_allowed": True,
+                "critical_count": 0,
+                "point_in_time_verified": True,
+                "availability": {
+                    "published_at": payload["availability_at"],
+                    "cutoff_at": payload["cutoff_at"],
+                    "source": "frozen_fund_bundle",
+                },
+                "research_mode": "asof_reconstruction" if target_date < datetime.now(ZoneInfo("Asia/Shanghai")).date() else "current_day",
+            },
+        }
+
+    def _trusted_fund_manifest(
+        self,
+        manifest: dict[str, Any],
+        *,
+        fund_code: str,
+        symbols: Iterable[str],
+        user_id: str | None,
+        tenant_id: str | None,
+    ) -> dict[str, Any]:
+        service = self.report_input_service
+        loader = getattr(service, "load_fund_report_manifest", None)
+        if callable(loader):
+            return loader(
+                manifest,
+                fund_code=fund_code,
+                expected_symbols=symbols,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
+        return normalize_manifest(manifest, expected_symbols=list(symbols))
+
+    @staticmethod
+    def _supported_symbols(state: dict[str, Any]) -> list[str]:
+        return [
+            str(item.get("symbol") or "").strip()
+            for item in state.get("holdings") or []
+            if item.get("supported") and str(item.get("symbol") or "").strip()
+        ]
+
+    @staticmethod
+    def _assert_source_matches_fund_manifest(
+        frozen: dict[str, Any],
+        manifest: dict[str, Any],
+    ) -> None:
+        """Keep the legacy display artifact aligned with the DB authority."""
+
+        holdings = [
+            dict(item)
+            for item in frozen.get("holdings") or []
+            if isinstance(item, dict)
+        ]
+        manifest_items = [
+            dict(item)
+            for item in manifest.get("items") or []
+            if isinstance(item, dict)
+        ]
+
+        def code(value: object) -> str:
+            match = re.search(r"(?<!\d)(\d{6})(?!\d)", str(value or "").upper())
+            return match.group(1) if match else str(value or "").strip().upper()
+
+        if (
+            len(holdings) != 10
+            or any(not item.get("supported") for item in holdings)
+            or [code(item.get("symbol")) for item in holdings]
+            != [code(item.get("symbol")) for item in manifest_items]
+        ):
+            raise ReportInputError(
+                "fund_holding_portfolio_mismatch",
+                "原基金快照必须与父基金 PIT Bundle 的前十大 A 股顺序完全一致",
+            )
+        for holding, item in zip(holdings, manifest_items, strict=True):
+            try:
+                matches = abs(
+                    float(holding.get("fund_weight_pct"))
+                    - float(item.get("weight"))
+                ) <= 1e-8
+            except (TypeError, ValueError):
+                matches = False
+            if not matches:
+                raise ReportInputError(
+                    "fund_holding_weight_mismatch",
+                    f"{holding.get('symbol')} 的原基金快照权重与父基金 Bundle 不一致",
+                )
+
+    def freeze_report_inputs(
+        self,
+        symbols: Iterable[str],
+        *,
+        as_of_date: date | str,
+        profile: str,
+        pin_set_hash: str,
+        user_id: str | None,
+        tenant_id: str | None,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        service = self.report_input_service
+        if service is None:
+            return None
+        resolved_context = dict(context or {})
+        from research_system.strategies.runtime_pins import deployed_workflow_pins
+        runtime_pins = deployed_workflow_pins(self.settings)
+        published_pins = dict(resolved_context.get("published_workflow_pins") or {})
+        for key, value in published_pins.items():
+            if key in runtime_pins and runtime_pins[key] != value:
+                raise ReportInputError("published_workflow_changed", f"已发布策略 {key} 与当前运行版本不同，请使用对应运行环境或发布新版本")
+        workflow_pins = {**runtime_pins, "strategy_pin_set_hash": pin_set_hash, "research_profile": profile}
+        fund_code = str(resolved_context.get("fund_code") or "").strip()
+        if fund_code and callable(getattr(service, "freeze_fund_holdings", None)):
+            return service.freeze_fund_holdings(
+                fund_code=fund_code,
+                expected_symbols=symbols,
+                as_of_date=as_of_date,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                workflow_pins=workflow_pins,
+                context=resolved_context,
+                fund_bundle_id=str(
+                    resolved_context.get("fund_bundle_id") or ""
+                ).strip()
+                or None,
+            )
+        return service.freeze_symbols(
+            symbols,
+            as_of_date=as_of_date,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            workflow_pins=workflow_pins,
+            context=resolved_context,
+        )
+
+    def frozen_report_manifest(
+        self,
+        batch_id: str,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Return the original immutable manifest for node-level recovery."""
+
+        state = self._load_batch(batch_id, user_id=user_id, tenant_id=tenant_id)
+        manifest = self._manifest_for_state(state)
+        if not isinstance(manifest, dict):
+            return None
+        self._trusted_fund_manifest(
+            manifest,
+            fund_code=str(state.get("fund_code") or ""),
+            symbols=self._supported_symbols(state),
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        # Trust checks may materialise current projections of the same DB
+        # records; recovery still consumes the exact original frozen body.
+        return manifest
+
+    def revise_report_inputs(self, batch_id: str, *, symbols: list[str],
+                             user_id: str | None = None, tenant_id: str | None = None) -> dict[str, Any]:
+        original = self.frozen_report_manifest(batch_id, user_id=user_id, tenant_id=tenant_id)
+        if original is None or self.report_input_service is None:
+            raise ReportInputError("report_manifest_missing", "原报告没有可修订的冻结输入")
+        revised = self.report_input_service.revise_manifest(
+            manifest_id=original["manifest_id"], manifest_hash=original["manifest_hash"],
+            symbols=symbols, tenant_id=tenant_id, user_id=user_id,
+        )
+        return {"manifest_id": revised["manifest_id"], "manifest_hash": revised["manifest_hash"]}
+
+    def load_revised_report_inputs(self, reference: dict[str, Any], *, fund_code: str,
+                                   symbols: list[str], user_id: str | None = None,
+                                   tenant_id: str | None = None) -> dict[str, Any]:
+        manifest = self.report_input_service.load_manifest_reference(
+            manifest_id=reference["manifest_id"], manifest_hash=reference["manifest_hash"],
+            tenant_id=tenant_id, user_id=user_id,
+        )
+        return self._trusted_fund_manifest(manifest, fund_code=fund_code, symbols=symbols,
+                                           tenant_id=tenant_id, user_id=user_id)
+
     def create_batch(
         self,
-        source_run_id: str,
+        source_run_id: str | None = None,
         *,
         fund_code: str,
         profile: str,
@@ -87,26 +371,93 @@ class FundHoldingReportService:
         pin_set_hash: str | None = None,
         canonical_reuse: dict[str, dict[str, Any]] | None = None,
         selected_symbols: Iterable[str] | None = None,
+        report_manifest: dict[str, Any] | None = None,
+        fund_bundle_id: str | None = None,
         user_id: str | None = None,
         tenant_id: str | None = None,
     ) -> dict[str, Any]:
         normalized_profile = self._profile(profile)
-        payload = self.run_service.artifacts(
-            source_run_id,
-            artifact_type="fund_snapshot",
-            status="active",
+        if self._has_fund_report_lineage() and int(top_n) != 10:
+            raise ReportInputError(
+                "fund_top_ten_required",
+                "数据库基金报告路径必须且只能分析前十大持仓",
+            )
+        normalized_as_of_date = str(
+            as_of_date or datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+        )[:10]
+        if report_manifest is not None:
+            parent_dependencies = list(report_manifest.get("dependencies") or [])
+            for dependency in parent_dependencies:
+                if dependency.get("dependency_kind") == "fund_top_holdings":
+                    pinned_parent = str(dependency.get("bundle_id") or "")
+                    if fund_bundle_id and pinned_parent != fund_bundle_id:
+                        raise ReportInputError("fund_bundle_manifest_mismatch", "基金 Bundle 与冻结 Manifest 不一致")
+                    fund_bundle_id = pinned_parent or fund_bundle_id
+        bundle_input = self.resolve_fund_input(
+            fund_code=fund_code,
+            as_of_date=normalized_as_of_date,
+            fund_bundle_id=fund_bundle_id,
             user_id=user_id,
             tenant_id=tenant_id,
         )
-        frozen = freeze_fund_holdings(
-            list(payload.get("artifacts") or []),
-            fund_code=fund_code,
-            source_artifact_id=source_artifact_id,
-            top_n=top_n,
-        )
+        if bundle_input is not None:
+            frozen = bundle_input["frozen"]
+            fund_bundle_id = frozen["fund_bundle_id"]
+        else:
+            if not source_run_id:
+                raise ReportInputError("fund_bundle_unavailable", "缺少基金 Bundle；旧入口必须提供来源运行")
+            payload = self.run_service.artifacts(
+                source_run_id,
+                artifact_type="fund_snapshot",
+                status="active",
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
+            frozen = freeze_fund_holdings(
+                list(payload.get("artifacts") or []),
+                fund_code=fund_code,
+                source_artifact_id=source_artifact_id,
+                top_n=top_n,
+                now=date.fromisoformat(normalized_as_of_date),
+            )
         require_stale_confirmation(frozen, confirmed=confirm_stale)
-        normalized_as_of_date = str(as_of_date or date.today().isoformat())[:10]
         normalized_pin_set_hash = str(pin_set_hash or "legacy-unpinned")
+        supported_symbols = [
+            str(row.get("symbol") or "").strip()
+            for row in frozen.get("holdings") or []
+            if bool(row.get("supported")) and str(row.get("symbol") or "").strip()
+        ]
+        if report_manifest is None and self.report_input_service is not None:
+            report_manifest = self.freeze_report_inputs(
+                supported_symbols,
+                as_of_date=normalized_as_of_date,
+                profile=normalized_profile,
+                pin_set_hash=normalized_pin_set_hash,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                context={
+                    "source_run_id": source_run_id,
+                    "source_fund_artifact_id": frozen["source_artifact_id"],
+                    "fund_code": frozen["fund_code"],
+                    "fund_bundle_id": fund_bundle_id,
+                    "holdings": list(frozen.get("holdings") or []),
+                },
+            )
+        if report_manifest is not None:
+            report_manifest = self._trusted_fund_manifest(
+                report_manifest,
+                fund_code=str(frozen["fund_code"]),
+                symbols=supported_symbols,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
+            if self._has_fund_report_lineage():
+                self._assert_source_matches_fund_manifest(frozen, report_manifest)
+        report_manifest_hash = str((report_manifest or {}).get("manifest_hash") or "legacy-unverified")
+        bundle_manifest_hashes = bundle_hashes_for_symbols(
+            report_manifest,
+            supported_symbols,
+        )
         reusable = {
             str(symbol): dict(payload)
             for symbol, payload in (canonical_reuse or {}).items()
@@ -126,6 +477,7 @@ class FundHoldingReportService:
                 top_n=int(frozen["top_n"]),
                 as_of_date=normalized_as_of_date,
                 pin_set_hash=normalized_pin_set_hash,
+                report_manifest_hash=report_manifest_hash,
                 user_id=user_id,
                 tenant_id=tenant_id,
             )
@@ -154,6 +506,8 @@ class FundHoldingReportService:
                     "top_n": int(frozen["top_n"]),
                     "as_of_date": normalized_as_of_date,
                     "pin_set_hash": normalized_pin_set_hash,
+                    "report_manifest_id": (report_manifest or {}).get("manifest_id"),
+                    "report_manifest_hash": report_manifest_hash,
                 },
                 constraints={"managed_fund_holding_batch": True},
             )
@@ -168,6 +522,8 @@ class FundHoldingReportService:
                 "request_id": request.request_id,
                 "source_run_id": source_run_id,
                 "source_artifact_id": frozen["source_artifact_id"],
+                "fund_bundle_id": fund_bundle_id,
+                "fund_bundle_manifest_hash": frozen.get("fund_bundle_manifest_hash"),
                 "fund_code": frozen["fund_code"],
                 "fund_name": frozen["fund_name"],
                 "fund_type": frozen.get("fund_type"),
@@ -175,8 +531,14 @@ class FundHoldingReportService:
                 "top_n": int(frozen["top_n"]),
                 "as_of_date": normalized_as_of_date,
                 "pin_set_hash": normalized_pin_set_hash,
+                "report_manifest_id": (report_manifest or {}).get("manifest_id"),
+                "report_manifest_hash": report_manifest_hash,
+                "bundle_manifest_hashes": bundle_manifest_hashes,
+                "_report_data_manifest": report_manifest,
                 "status": "running",
                 "concurrency": self.max_concurrency,
+                "llm_concurrency": self.llm_max_concurrency,
+                "max_auto_retries": self.max_auto_retries,
                 "holding_source": frozen["holding_source"],
                 "is_fund_of_funds": bool(frozen.get("is_fund_of_funds")),
                 "disclosure_date": frozen.get("disclosure_date"),
@@ -191,6 +553,7 @@ class FundHoldingReportService:
                 "updated_at": now,
                 "completed_at": None,
             }
+            self._externalize_batch_manifest(state)
             for holding in list(frozen.get("holdings") or []):
                 item = {
                     **dict(holding),
@@ -249,7 +612,7 @@ class FundHoldingReportService:
     ) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for root in self._batch_roots():
-            state = read_json(root / _BATCH_FILE)
+            state = self._read_batch_file(root)
             if not isinstance(state, dict):
                 continue
             if source_run_id and str(state.get("source_run_id") or "") != source_run_id:
@@ -258,7 +621,13 @@ class FundHoldingReportService:
                 continue
             if not self._matches_scope(root, user_id=user_id, tenant_id=tenant_id):
                 continue
-            rows.append(self._public(state))
+            rows.append(
+                self._public_delivery_state(
+                    state,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                )
+            )
         rows.sort(key=lambda row: str(row.get("created_at") or ""), reverse=True)
         return rows
 
@@ -271,10 +640,14 @@ class FundHoldingReportService:
     ) -> dict[str, Any]:
         root = self._batch_root(batch_id)
         self._assert_scope(root, user_id=user_id, tenant_id=tenant_id)
-        state = read_json(root / _BATCH_FILE)
+        state = self._read_batch_file(root)
         if not isinstance(state, dict):
             raise FundHoldingBatchNotFound(batch_id)
-        return self._public(state)
+        return self._public_delivery_state(
+            state,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
 
     def run_detail(
         self,
@@ -308,27 +681,59 @@ class FundHoldingReportService:
     ) -> dict[str, Any]:
         root = self._batch_root(batch_id)
         self._assert_scope(root, user_id=user_id, tenant_id=tenant_id)
-        state = read_json(root / _BATCH_FILE) or {}
+        state = self._read_batch_file(root) or {}
+        public_state = self._public_delivery_state(
+            state,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
         rows = ArtifactBoard(root / "artifact_board.jsonl").list_artifacts(
             thread_id=None,
             artifact_type=artifact_type,
             status=status,
         )
+        artifact_rows = [row.model_dump(mode="json") for row in rows]
+        if public_state.get("report_manifest_status") == "invalidated":
+            # Preserve the immutable ArtifactBoard history on disk while
+            # projecting the revoked lineage into every public batch view.
+            for row in artifact_rows:
+                if row.get("artifact_type") != "fund_holding_report_batch":
+                    continue
+                content = dict(row.get("content") or {})
+                content.update(
+                    {
+                        "status": public_state.get("status"),
+                        "counts": public_state.get("counts"),
+                        "holdings": public_state.get("holdings"),
+                        "data_gap": public_state.get("data_gap"),
+                        "report_manifest_status": "invalidated",
+                    }
+                )
+                row["content"] = content
+                row["risk_flags"] = list(
+                    dict.fromkeys(
+                        [
+                            *list(row.get("risk_flags") or []),
+                            "fund_report_parent_dependency_invalidated",
+                        ]
+                    )
+                )
         return {
             "run_id": batch_id,
             "mode": "fund_holding_batch",
-            "status": state.get("status"),
+            "status": public_state.get("status"),
             "turn": None,
-            "artifacts": [row.model_dump(mode="json") for row in rows],
+            "artifacts": artifact_rows,
         }
 
     def history_row(self, batch_id: str) -> dict[str, Any]:
-        state = read_json(self._batch_root(batch_id) / _BATCH_FILE)
+        state = self._read_batch_file(self._batch_root(batch_id))
         if not isinstance(state, dict):
             raise FundHoldingBatchNotFound(batch_id)
-        counts = dict(state.get("counts") or {})
+        public_state = self._public_delivery_state(state)
+        counts = dict(public_state.get("counts") or {})
         message = (
-            f"{state.get('fund_name')} 前十大持仓报告："
+            f"{public_state.get('fund_name')} 前十大持仓报告："
             f"{counts.get('deliverable', 0)}/{counts.get('supported', 0)} 可交付"
         )
         return {
@@ -337,15 +742,15 @@ class FundHoldingReportService:
             "intent": "fund_holding_research",
             "domain_id": "finance_ashare",
             "mode": "fund_holding_batch",
-            "status": state.get("status"),
+            "status": public_state.get("status"),
             "graph_id": None,
             "graph_revision": None,
-            "updated_at": state.get("updated_at"),
+            "updated_at": public_state.get("updated_at"),
             "message": message,
-            "display_summary": f"{state.get('status')}: {message}",
+            "display_summary": f"{public_state.get('status')}: {message}",
             "child_run_ids": [
                 item.get("child_run_id")
-                for item in state.get("holdings") or []
+                for item in public_state.get("holdings") or []
                 if item.get("child_run_id")
             ],
             "child_run_count": counts.get("supported", 0),
@@ -355,16 +760,46 @@ class FundHoldingReportService:
 
     def metrics(self, batch_id: str, **scope) -> dict[str, Any]:
         state = self.detail(batch_id, **scope)
+        duration_seconds = self._duration_seconds(state)
         return {
             "run_id": batch_id,
             "status": state["status"],
             "counts": state["counts"],
             "tool_call_count": 0,
-            "usage": {"tokens": 0, "cost": 0.0, "duration_seconds": 0.0},
+            "usage": {
+                "tokens": 0,
+                "cost": 0.0,
+                "duration_seconds": duration_seconds,
+            },
+            "concurrency": {
+                "holding_reports": int(
+                    state.get("concurrency") or self.max_concurrency
+                ),
+                "uzi_llm": int(
+                    state.get("llm_concurrency") or self.llm_max_concurrency
+                ),
+            },
             "node_status_counts": dict(Counter(item["status"] for item in state["holdings"])),
             "event_type_counts": {},
             "graph_event_counts": {},
         }
+
+    @staticmethod
+    def _duration_seconds(state: dict[str, Any]) -> float:
+        started = str(state.get("created_at") or "").strip()
+        finished = str(
+            state.get("completed_at")
+            or state.get("updated_at")
+            or ""
+        ).strip()
+        if not started or not finished:
+            return 0.0
+        try:
+            start_dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            finish_dt = datetime.fromisoformat(finished.replace("Z", "+00:00"))
+        except ValueError:
+            return 0.0
+        return round(max((finish_dt - start_dt).total_seconds(), 0.0), 3)
 
     def steps(self, batch_id: str, **scope) -> dict[str, Any]:
         state = self.detail(batch_id, **scope)
@@ -448,6 +883,15 @@ class FundHoldingReportService:
         scheduled: list[tuple[str, str]] = []
         with self._lock:
             state = self._load_batch(batch_id, user_id=user_id, tenant_id=tenant_id)
+            frozen_manifest = self._manifest_for_state(state)
+            if isinstance(frozen_manifest, dict):
+                self._trusted_fund_manifest(
+                    frozen_manifest,
+                    fund_code=str(state.get("fund_code") or ""),
+                    symbols=self._supported_symbols(state),
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                )
             allowed = {"failed"} | ({"cancelled"} if include_cancelled else set())
             if force:
                 allowed.update({"completed", "completed_partial", "cancelled"})
@@ -473,6 +917,7 @@ class FundHoldingReportService:
             # limit. Retries use the current service pool, so keep the public
             # batch contract aligned with the concurrency actually enforced.
             state["concurrency"] = self.max_concurrency
+            state["max_auto_retries"] = self.max_auto_retries
             state["cancel_requested"] = False
             state["status"] = "running"
             state["completed_at"] = None
@@ -489,7 +934,12 @@ class FundHoldingReportService:
         user_id: str | None = None,
         tenant_id: str | None = None,
     ) -> tuple[bytes, str, int]:
-        state = self.detail(batch_id, user_id=user_id, tenant_id=tenant_id)
+        state = self._public_delivery_state(
+            self._load_batch(batch_id, user_id=user_id, tenant_id=tenant_id),
+            user_id=user_id,
+            tenant_id=tenant_id,
+            force_verify=True,
+        )
         deliverable = [
             item
             for item in state["holdings"]
@@ -541,33 +991,117 @@ class FundHoldingReportService:
         constraints = request.get("constraints") if isinstance(request, dict) else None
         return isinstance(constraints, dict) and constraints.get("fund_holding_report_child") is True
 
+    def require_child_report_lineage(
+        self,
+        child_run_id: str,
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> None:
+        """Block direct child delivery after its parent fund input is revoked."""
+
+        request = read_json(
+            self.agent_os.run_store.load_run_paths(child_run_id).root / "request.json"
+        ) or {}
+        constraints = request.get("constraints") if isinstance(request, dict) else {}
+        parent_batch_id = str(
+            (constraints or {}).get("parent_batch_id") or ""
+        ).strip()
+        if not parent_batch_id:
+            raise FundHoldingReportsUnavailable("持仓股票报告缺少父批次引用")
+        state = self._load_batch(
+            parent_batch_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+        )
+        if self._has_fund_report_lineage() and not self._has_manifest(state):
+            raise FundHoldingReportsUnavailable(
+                "持仓股票报告缺少可验证的父基金冻结 manifest"
+            )
+        public_state = self._public_delivery_state(
+            state,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            force_verify=True,
+        )
+        if public_state.get("report_manifest_status") == "invalidated":
+            raise FundHoldingReportsUnavailable(
+                "父基金 PIT Bundle 或冻结报告 manifest 已失效"
+            )
+
     def _prepare_child(self, state: dict[str, Any], item: dict[str, Any]) -> str:
+        verified_pins = self._assert_deployed_manifest_pins(state)
         child_run_id = generate_ulid()
         attempt = len(item.get("attempt_run_ids") or []) + 1
         parent_request = read_json(
             self.agent_os.run_store.load_run_paths(state["batch_id"]).root / "request.json"
         ) or {}
+        slots: dict[str, Any] = {"symbols": [item["symbol"]]}
+        constraints: dict[str, Any] = {
+            **verified_pins,
+            "research_profile": state["profile"],
+            "fund_holding_report_child": True,
+            "canonical_uzi_analysis": True,
+            "analysis_as_of_date": state.get("as_of_date"),
+            "strategy_pin_set_hash": state.get("pin_set_hash"),
+            "parent_batch_id": state["batch_id"],
+            "hidden_from_history": True,
+        }
+        frozen_manifest = self._manifest_for_state(state)
+        if isinstance(frozen_manifest, dict):
+            slots.update(slots_for_manifest(frozen_manifest, symbols=[str(item["symbol"])]))
+            constraints.update(
+                {
+                    "data_source_mode": "bundle_only",
+                    "report_manifest_id": frozen_manifest.get("manifest_id"),
+                    "report_manifest_hash": frozen_manifest.get("manifest_hash"),
+                    "market_data_bundle_manifest_hash": (
+                        state.get("bundle_manifest_hashes") or {}
+                    ).get(str(item["symbol"])),
+                }
+            )
         request = RequestEnvelope(
             intent="stock_check",
             user_query=f"分析A股 {item['symbol']} {item['name']}，生成可审计的UZI股票研究报告。",
             thread_id=f"holding:{state['batch_id']}:{item['symbol']}:{attempt}",
             user_id=parent_request.get("user_id"),
             tenant_id=parent_request.get("tenant_id"),
-            slots={
-                "symbols": [item["symbol"]],
-            },
-            constraints={
-                "research_profile": state["profile"],
-                "fund_holding_report_child": True,
-                "canonical_uzi_analysis": True,
-                "analysis_as_of_date": state.get("as_of_date"),
-                "strategy_pin_set_hash": state.get("pin_set_hash"),
-                "parent_batch_id": state["batch_id"],
-                "hidden_from_history": True,
-            },
+            slots=slots,
+            constraints=constraints,
         )
         self.agent_os.prepare_run(request, run_id=child_run_id, intent="stock_check")
         return child_run_id
+
+    def _assert_deployed_manifest_pins(self, state: dict[str, Any]) -> dict[str, Any]:
+        manifest = self._manifest_for_state(state)
+        pins = dict(manifest.get("workflow_pins") or {}) if isinstance(manifest, dict) else {}
+        if not all(pins.get(key) for key in ("workflow_commit", "model_id", "prompt_hash")):
+            # Legacy manifests did not pin the complete execution identity.
+            # Preserve compatibility without claiming an exact pinned replay.
+            return {}
+        from research_system.strategies.runtime_pins import deployed_workflow_pins
+
+        deployed = deployed_workflow_pins(self.settings)
+        mismatches = [key for key, value in deployed.items() if key in pins and pins[key] != value]
+        if pins.get("research_profile") and pins["research_profile"] != state.get("profile"):
+            mismatches.append("research_profile")
+        if mismatches:
+            raise ReportInputError(
+                "report_workflow_version_mismatch",
+                "冻结报告执行版本与当前部署不一致（" + "、".join(mismatches)
+                + "）；请使用对应运行环境，或新建修订任务，不能原地换模型恢复。",
+            )
+        return {key: pins[key] for key in (*deployed, "research_profile") if key in pins}
+
+    def _holding_input_preflight(self, state: dict[str, Any], symbol: str) -> dict[str, Any] | None:
+        from research_system.market_data.research_readiness import report_start_preflight
+
+        manifest = self._manifest_for_state(state)
+        if not isinstance(manifest, dict):
+            return None
+        preflight = dict(manifest.get("input_preflight") or {})
+        return next((report_start_preflight(row) for row in preflight.get("stocks") or []
+                     if isinstance(row, dict) and str(row.get("symbol") or "").split(".")[0] == symbol.split(".")[0]), None)
 
     def _submit_item(self, batch_id: str, symbol: str, child_run_id: str) -> None:
         if self._closed:
@@ -588,14 +1122,67 @@ class FundHoldingReportService:
             item = self._item(state, symbol=symbol, child_run_id=child_run_id)
             if item is None or item["status"] not in {"queued", "running"}:
                 return
+            if (
+                self._has_manifest(state)
+                and self.report_input_service is None
+            ):
+                # API construction binds the strategy database after this
+                # coordinator. Leave the persisted child pending until
+                # AgentOSRunService.bind_report_inputs explicitly resumes it.
+                return
             if state.get("cancel_requested") and item["status"] in {"queued", "running"}:
                 item["status"] = "cancelled"
                 item["completed_at"] = self._now()
                 self._refresh_parent_status(state)
                 self._write_batch(state, event_type="fund_holding_child_cancelled")
                 return
+            try:
+                preflight = self._holding_input_preflight(state, symbol)
+            except ReportInputError as exc:
+                item.update({
+                    "status": "failed", "report_available": False, "completed_at": self._now(),
+                    "error": str(exc), "data_gap": [exc.code],
+                    "recovery": {"schema_version": "uzi-recovery-v1", "kind": "input_integrity",
+                                 "action": "restore_frozen_input", "retryable": False, "manual_retryable": False,
+                                 "dimensions": [], "stages": ["report_input"],
+                                 "input_hash": state.get("_report_data_manifest_content_hash") or "",
+                                 "reason_codes": [exc.code]},
+                })
+                self._refresh_parent_status(state)
+                self._write_batch(state, event_type="fund_holding_input_integrity_failed")
+                return
+            if preflight is not None:
+                # Keep diagnostics visible, including old recorded hard-gate
+                # decisions, without mutating the frozen input artifact.
+                item["input_preflight"] = preflight
+            if preflight is not None and preflight.get("can_start_analysis") is False:
+                from domain_packs.finance_ashare.subagents.uzi_recovery import (
+                    content_hash,
+                )
+
+                blockers = list(preflight.get("input_blockers") or [])
+                reasons = [str(row.get("reason_code") or "frozen_input_invalid") for row in blockers]
+                dimensions = sorted({str(row.get("dimension") or row.get("dim") or "") for row in blockers} - {""})
+                item.update({
+                    "status": "failed", "report_available": False, "completed_at": self._now(),
+                    "data_gap": ["input_preflight_blocked", *dimensions],
+                    "error": "冻结报告输入不可安全读取，请修复输入引用：" + "、".join(reasons),
+                    "input_preflight": preflight,
+                    "recovery": {"schema_version": "uzi-recovery-v1", "kind": "input_integrity", "action": "restore_frozen_input",
+                                 "retryable": False, "manual_retryable": False, "dimensions": dimensions,
+                                 "stages": ["report_input"], "input_hash": content_hash(preflight),
+                                 "reason_codes": ["input_preflight_blocked"]},
+                })
+                self._refresh_parent_status(state)
+                self._write_batch(state, event_type="fund_holding_input_preflight_blocked")
+                return
             item["status"] = "running"
             item["started_at"] = item.get("started_at") or self._now()
+            retry_count = max(0, int(item.get("retry_count") or 0))
+            max_auto_retries = max(
+                0,
+                int(state.get("max_auto_retries", self.max_auto_retries)),
+            )
             self._refresh_parent_status(state)
             self._write_batch(state, event_type="fund_holding_child_started")
 
@@ -603,19 +1190,51 @@ class FundHoldingReportService:
         report_available = False
         data_gap: list[str] = []
         error: str | None = None
-        retry_count = 0
         terminal_detail: dict[str, Any] = {}
+        recovery_override: dict[str, Any] | None = None
         try:
+            self._assert_deployed_manifest_pins(state)
             request_payload = read_json(self.agent_os.run_store.load_run_paths(child_run_id).root / "request.json")
             request = RequestEnvelope.model_validate(request_payload or {})
+            report_inputs = self.report_input_service
+            if report_inputs is not None:
+                # Re-cross the DB trust boundary immediately before every
+                # first execution or resumed attempt.  Parent-fund revocation
+                # therefore blocks the child even if its request file was
+                # prepared while the manifest was still valid.
+                request = report_inputs.freeze_request(request)
             seen_recovery_states: set[tuple[Any, ...]] = set()
             while True:
                 detail = self.agent_os.inspect_run(child_run_id)
                 mode = str(detail.get("mode") or "")
                 current = self._detail_status(detail)
+                retry_budget_exhausted = retry_count >= max_auto_retries and (
+                    current in _RECOVERABLE_RUN_STATUSES
+                    or (mode == "pending" and retry_count > 0)
+                )
+                if retry_budget_exhausted:
+                    terminal_detail = detail
+                    report_available, data_gap = self._report_state(detail)
+                    final_status = "failed"
+                    data_gap = list(
+                        dict.fromkeys(
+                            [*data_gap, "holding_stock_report_retry_exhausted"]
+                        )
+                    )
+                    error = (
+                        "持仓股票报告自动恢复已达到上限"
+                        f"（{max_auto_retries} 次），请检查数据缺口后手动重试。"
+                    )
+                    break
                 if mode == "pending":
                     self.agent_os.handle_request(request, run_id=child_run_id)
                 elif current in _RECOVERABLE_RUN_STATUSES:
+                    recovery = self._recovery_decision(detail)
+                    if not recovery["retryable"]:
+                        terminal_detail = detail
+                        final_status = current
+                        report_available, data_gap = self._report_state(detail)
+                        break
                     self.agent_os.resume(child_run_id)
                 elif current != "completed":
                     break
@@ -626,6 +1245,21 @@ class FundHoldingReportService:
                 if report_available and final_status in {"completed", "completed_partial"}:
                     break
                 if final_status not in _RECOVERABLE_RUN_STATUSES:
+                    break
+                recovery = self._recovery_decision(detail)
+                if not recovery["retryable"]:
+                    break
+                if retry_count >= max_auto_retries:
+                    final_status = "failed"
+                    data_gap = list(
+                        dict.fromkeys(
+                            [*data_gap, "holding_stock_report_retry_exhausted"]
+                        )
+                    )
+                    error = (
+                        "持仓股票报告自动恢复已达到上限"
+                        f"（{max_auto_retries} 次），请检查数据缺口后手动重试。"
+                    )
                     break
                 recovery_state = self._recovery_fingerprint(detail)
                 if recovery_state in seen_recovery_states:
@@ -640,11 +1274,24 @@ class FundHoldingReportService:
                     item["retry_count"] = retry_count
                     self._write_batch(state, event_type="fund_holding_child_auto_retry")
         except Exception as exc:
+            if getattr(exc, "code", None) == "report_workflow_version_mismatch":
+                from domain_packs.finance_ashare.subagents.uzi_recovery import (
+                    content_hash,
+                )
+
+                recovery_override = {
+                    "schema_version": "uzi-recovery-v1", "kind": "version_mismatch", "action": "restore_pinned_environment",
+                    "retryable": False, "manual_retryable": False, "dimensions": [], "stages": ["report_input"],
+                    "input_hash": content_hash((self._manifest_for_state(state) or {}).get("workflow_pins")),
+                    "reason_codes": ["report_workflow_version_mismatch"],
+                }
             # The graph may have committed both delivery artifacts before a
             # response/synthesis post-processing step failed.  Reconcile from
             # the durable ArtifactBoard so a usable stock report is not
             # discarded merely because the outer response could not finalize.
             try:
+                if isinstance(exc, ReportInputError):
+                    raise exc
                 detail = self.agent_os.inspect_run(child_run_id)
                 terminal_detail = detail
                 reconciled_report, reconciled_gaps = self._report_state(detail)
@@ -680,6 +1327,7 @@ class FundHoldingReportService:
             if item is None:
                 return
             item["retry_count"] = retry_count
+            item["recovery"] = recovery_override or self._recovery_decision(terminal_detail)
             item["report_available"] = report_available
             item["data_gap"] = list(dict.fromkeys(data_gap))
             item["error"] = error
@@ -697,12 +1345,41 @@ class FundHoldingReportService:
 
     def _recover_batches(self) -> None:
         for root in self._batch_roots():
-            state = read_json(root / _BATCH_FILE)
+            state = self._read_batch_file(root)
             if not isinstance(state, dict) or state.get("status") not in {"running"}:
+                continue
+            if (
+                self._has_manifest(state)
+                and self.report_input_service is None
+            ):
+                # DB-backed manifests require a live loader before any child
+                # can be resumed. Legacy batches without a manifest keep their
+                # historical standalone recovery behaviour.
                 continue
             for item in state.get("holdings") or []:
                 if item.get("status") in {"queued", "running"} and item.get("child_run_id"):
-                    self._submit_item(root.name, str(item["symbol"]), str(item["child_run_id"]))
+                    retry_count = max(0, int(item.get("retry_count") or 0))
+                    max_auto_retries = max(
+                        0,
+                        int(state.get("max_auto_retries", self.max_auto_retries)),
+                    )
+                    if retry_count > 0 and retry_count >= max_auto_retries:
+                        # Reconcile exhausted legacy retry storms before they
+                        # enter the executor queue. This is intentionally
+                        # synchronous and bounded: _execute_item exits before
+                        # another provider call when the persisted budget is
+                        # already exhausted.
+                        self._execute_item(
+                            root.name,
+                            str(item["symbol"]),
+                            str(item["child_run_id"]),
+                        )
+                    else:
+                        self._submit_item(
+                            root.name,
+                            str(item["symbol"]),
+                            str(item["child_run_id"]),
+                        )
 
     def _refresh_parent_status(self, state: dict[str, Any]) -> None:
         items = list(state.get("holdings") or [])
@@ -754,6 +1431,7 @@ class FundHoldingReportService:
         state["data_gap"] = list(dict.fromkeys(gaps))
 
     def _write_batch(self, state: dict[str, Any], *, event_type: str) -> None:
+        self._externalize_batch_manifest(state)
         state["updated_at"] = self._now()
         root = self.agent_os.run_store.load_run_paths(str(state["batch_id"])).root
         write_json(
@@ -793,7 +1471,7 @@ class FundHoldingReportService:
         artifact_content = {
             key: value
             for key, value in state.items()
-            if key not in {"request_id", "source_data_gap"}
+            if key not in {"request_id", "source_data_gap"} and not key.startswith("_report_data_manifest")
         }
         board.add(
             ArtifactRecord(
@@ -812,9 +1490,9 @@ class FundHoldingReportService:
                 content=artifact_content,
                 source_refs=[
                     {
-                        "type": "fund_snapshot_artifact",
-                        "id": state["source_artifact_id"],
-                        "locator": state["source_run_id"],
+                        "type": "fund_snapshot_artifact" if state.get("source_run_id") else "market_data_bundle",
+                        "id": state["source_artifact_id"] if state.get("source_run_id") else state.get("fund_bundle_id"),
+                        "locator": state.get("source_run_id") or state.get("fund_bundle_id"),
                     }
                 ],
                 confidence=(
@@ -988,7 +1666,7 @@ class FundHoldingReportService:
             elif dimension == "agent_analysis" and "可以忽略" in suggested_fix:
                 suggested_fix = "在 Agent OS 中完成结构化 Agent 分析后重算与自审，不允许忽略该 critical"
             elif "run.py" in suggested_fix or "fetch_X" in suggested_fix:
-                suggested_fix = "通过 Agent OS 仅重试该持仓，系统会按当前研究档位重新执行启用的数据源"
+                suggested_fix = "先在数据中心补齐缺失维度并冻结新 Bundle，再生成报告修订；冻结报告不联网补采"
             elif "stage2" in suggested_fix:
                 suggested_fix = "通过 Agent OS 重新合成并执行 UZI 质量自审"
             key = (issue_text, suggested_fix)
@@ -1005,7 +1683,7 @@ class FundHoldingReportService:
                 return f"UZI 质量门未通过：{details}。模型请求已超时，可稍后仅重试此项。"
             if has_provider_unavailable and not has_non_agent_critical:
                 return f"UZI 质量门未通过：{details}。模型上游暂时不可用，可稍后仅重试此项。"
-            return f"UZI 质量门未通过：{details}。补充真实数据或恢复数据源后，可仅重试此项。"
+            return f"UZI 质量门未通过：{details}。输入缺口需先在数据中心补齐并冻结新 Bundle；模型或内容错误可仅重试此项。"
         if final_status == "gated":
             return "UZI 质量门未通过，但子运行未返回具体 critical；请打开“证据”查看运行事件后仅重试此项。"
         return f"子运行以 {final_status} 状态结束，未生成完整报告"
@@ -1016,6 +1694,16 @@ class FundHoldingReportService:
         # The UI must retain the business reason without treating an exception
         # class name as a raw stack-trace diagnostic and hiding the whole gate.
         return re.sub(r"\b[A-Z][A-Za-z0-9_]*(?:Error|Exception)\b", "运行异常", text)
+
+    @staticmethod
+    def _recovery_decision(detail: dict[str, Any]) -> dict[str, Any]:
+        from domain_packs.finance_ashare.subagents.uzi_recovery import native_recovery
+
+        native = next((row for row in reversed(list(detail.get("artifacts") or []))
+                       if isinstance(row, dict) and row.get("artifact_type") == "uzi_native_analysis"
+                       and row.get("status", "active") == "active"), {})
+        content = native.get("content") if isinstance(native.get("content"), dict) else {}
+        return native_recovery(content, run_status=FundHoldingReportService._detail_status(detail))
 
     @staticmethod
     def _recovery_fingerprint(detail: dict[str, Any]) -> tuple[Any, ...]:
@@ -1037,33 +1725,23 @@ class FundHoldingReportService:
             {},
         )
         content = native.get("content") if isinstance(native.get("content"), dict) else {}
-        issues = sorted(
-            (
-                str(issue.get("severity") or ""),
-                str(issue.get("dim") or ""),
-                str(issue.get("issue") or ""),
-                str(issue.get("suggested_fix") or ""),
-            )
+        issues = [
+            issue
             for result in list(content.get("results") or [])
             if isinstance(result, dict)
             for issue in list((result.get("self_review") or {}).get("issues") or [])
             if isinstance(issue, dict)
+        ]
+        from domain_packs.finance_ashare.subagents.uzi_recovery import (
+            recovery_content_hash,
+            recovery_issue_signature,
         )
-        recovery = sorted(
-            (
-                str(row.get("stage") or ""),
-                str(row.get("symbol") or ""),
-                str(row.get("snapshot_type") or ""),
-                str(row.get("source_id") or row.get("source_ids") or ""),
-                str(row.get("status") or ""),
-            )
-            for row in list(content.get("recovery_history") or [])
-            if isinstance(row, dict)
-        )
+
         artifact_signature = sorted(
             (
-                str(row.get("artifact_id") or ""),
                 str(row.get("artifact_type") or ""),
+                recovery_content_hash(row["content"]) if isinstance(row.get("content"), dict)
+                else str(row.get("content_hash") or ""),
                 str(row.get("status") or "active"),
             )
             for row in artifacts
@@ -1071,8 +1749,7 @@ class FundHoldingReportService:
         return (
             FundHoldingReportService._detail_status(detail),
             tuple(artifact_signature),
-            tuple(issues),
-            tuple(recovery),
+            recovery_issue_signature(issues),
         )
 
     def _find_existing(self, **criteria) -> dict[str, Any] | None:
@@ -1081,7 +1758,7 @@ class FundHoldingReportService:
         for root in self._batch_roots():
             if not self._matches_scope(root, user_id=user_id, tenant_id=tenant_id):
                 continue
-            state = read_json(root / _BATCH_FILE)
+            state = self._read_batch_file(root)
             if not isinstance(state, dict):
                 continue
             if all(str(state.get(key) or "") == str(value or "") for key, value in criteria.items()):
@@ -1091,10 +1768,95 @@ class FundHoldingReportService:
     def _load_batch(self, batch_id: str, **scope) -> dict[str, Any]:
         root = self._batch_root(batch_id)
         self._assert_scope(root, **scope)
-        state = read_json(root / _BATCH_FILE)
+        state = self._read_batch_file(root)
         if not isinstance(state, dict):
             raise FundHoldingBatchNotFound(batch_id)
         return state
+
+    @staticmethod
+    def _has_manifest(state: dict[str, Any]) -> bool:
+        return isinstance(state.get("_report_data_manifest"), dict) or bool(state.get("_report_data_manifest_ref"))
+
+    def _read_batch_file(self, root: Path) -> dict[str, Any] | None:
+        """Cache old inline files on read, but never migrate them just to display progress."""
+        path = root / _BATCH_FILE
+        if not path.is_file():
+            return None
+        stat = path.stat()
+        key = (str(path), stat.st_mtime_ns, stat.st_size)
+        with self._lock:
+            payload = self._batch_read_cache.get(key)
+            if payload is None:
+                payload = read_json(path)
+                if not isinstance(payload, dict):
+                    return None
+                self._batch_read_cache[key] = payload
+                while len(self._batch_read_cache) > 2:
+                    self._batch_read_cache.popitem(last=False)
+            self._batch_read_cache.move_to_end(key)
+            # Mutable coordination state is caller-owned; the large frozen
+            # input is shared read-only until an explicit consumer loads it.
+            result = deepcopy({name: value for name, value in payload.items() if name != "_report_data_manifest"})
+            if "_report_data_manifest" in payload:
+                result["_report_data_manifest"] = payload["_report_data_manifest"]
+            return result
+
+    def _manifest_for_state(self, state: dict[str, Any]) -> dict[str, Any] | None:
+        """Load exactly the frozen content, never replace it with newer evidence."""
+        from domain_packs.finance_ashare.subagents.uzi_recovery import content_hash
+
+        inline = state.get("_report_data_manifest")
+        relative = str(state.get("_report_data_manifest_ref") or "")
+        if not relative:
+            return inline if isinstance(inline, dict) else None
+        digest = str(state.get("_report_data_manifest_content_hash") or "")
+        root = self.agent_os.run_store.load_run_paths(str(state["batch_id"])).root.resolve()
+        path = (root / relative).resolve()
+        if (not re.fullmatch(r"[0-9a-f]{64}", digest)
+                or Path(relative).is_absolute()
+                or relative != f"inputs/report-data-manifest-{digest}.json"
+                or not path.is_relative_to(root)
+                or not path.is_file()):
+            raise ReportInputError("report_manifest_reference_invalid", "冻结 Manifest 引用无效或不在本批次目录中")
+        if isinstance(inline, dict) and content_hash(inline) != digest:
+            raise ReportInputError("report_manifest_content_mismatch", "冻结 Manifest 内容不一致，不能混入新证据")
+        stat = path.stat()
+        key = (str(path), digest, stat.st_mtime_ns, stat.st_size)
+        with self._lock:
+            manifest = self._manifest_cache.get(key)
+            if manifest is None:
+                manifest = read_json(path)
+                if not isinstance(manifest, dict) or content_hash(manifest) != digest:
+                    raise ReportInputError("report_manifest_content_mismatch", "冻结 Manifest 文件内容校验失败，请恢复原始输入")
+                self._manifest_cache[key] = manifest
+                while len(self._manifest_cache) > 2:
+                    self._manifest_cache.popitem(last=False)
+            self._manifest_cache.move_to_end(key)
+            return manifest
+
+    def _externalize_batch_manifest(self, state: dict[str, Any]) -> None:
+        """Write one immutable input on creation/explicit update, not on reads."""
+        inline = state.get("_report_data_manifest")
+        if not isinstance(inline, dict):
+            return
+        from domain_packs.finance_ashare.subagents.uzi_recovery import content_hash
+
+        digest = content_hash(inline)
+        if state.get("_report_data_manifest_ref"):
+            self._manifest_for_state(state)  # Reject attempts to replace frozen evidence.
+        else:
+            root = self.agent_os.run_store.load_run_paths(str(state["batch_id"])).root.resolve()
+            relative = f"inputs/report-data-manifest-{digest}.json"
+            path = (root / relative).resolve()
+            if not path.is_relative_to(root):
+                raise ReportInputError("report_manifest_reference_invalid", "冻结 Manifest 输入目录不在本批次内")
+            with self._lock:
+                if not path.exists():
+                    write_json(path, inline)
+                state["_report_data_manifest_ref"] = relative
+                state["_report_data_manifest_content_hash"] = digest
+                self._manifest_for_state(state)
+        state.pop("_report_data_manifest", None)
 
     def _batch_root(self, batch_id: str) -> Path:
         try:
@@ -1146,11 +1908,103 @@ class FundHoldingReportService:
             raise ValueError("research_profile 必须是 lite、medium 或 deep")
         return profile
 
+    def _public_delivery_state(
+        self,
+        state: dict[str, Any],
+        *,
+        user_id: str | None = None,
+        tenant_id: str | None = None,
+        force_verify: bool = False,
+    ) -> dict[str, Any]:
+        """Expose no deliverable after its parent lineage stops validating."""
+
+        should_verify = bool(
+            self._has_fund_report_lineage()
+            and self._has_manifest(state)
+            and (
+                force_verify or str(state.get("status") or "") != "running"
+            )
+        )
+        if not should_verify:
+            return self._public(state)
+        parent_request = read_json(
+            self.agent_os.run_store.load_run_paths(str(state["batch_id"])).root
+            / "request.json"
+        ) or {}
+        resolved_user = user_id if user_id is not None else parent_request.get("user_id")
+        resolved_tenant = (
+            tenant_id if tenant_id is not None else parent_request.get("tenant_id")
+        )
+        try:
+            service = self.report_input_service
+            validator = getattr(service, "validate_fund_report_manifest_reference", None)
+            gateway_validator = getattr(getattr(service, "gateway", None), "validate_fund_report_manifest_reference", None)
+            if callable(validator) and callable(gateway_validator):
+                validator(
+                    {"manifest_id": state.get("report_manifest_id"), "manifest_hash": state.get("report_manifest_hash")},
+                    fund_code=str(state.get("fund_code") or ""),
+                    expected_symbols=self._supported_symbols(state),
+                    user_id=resolved_user, tenant_id=resolved_tenant,
+                )
+            else:
+                self._trusted_fund_manifest(
+                    self._manifest_for_state(state) or {},
+                    fund_code=str(state.get("fund_code") or ""),
+                    symbols=self._supported_symbols(state),
+                    user_id=resolved_user,
+                    tenant_id=resolved_tenant,
+                )
+        except ReportInputError as exc:
+            invalidated = dict(state)
+            invalidated["status"] = "failed"
+            invalidated["report_manifest_status"] = "invalidated"
+            invalidated["report_manifest_error_code"] = exc.code
+            invalidated["data_gap"] = list(
+                dict.fromkeys(
+                    [
+                        *list(state.get("data_gap") or []),
+                        "fund_report_parent_dependency_invalidated",
+                    ]
+                )
+            )
+            invalidated_holdings: list[dict[str, Any]] = []
+            for source in state.get("holdings") or []:
+                item = dict(source)
+                if item.get("supported"):
+                    item["status"] = "failed"
+                    item["report_available"] = False
+                    item["error"] = "父基金 PIT Bundle 或冻结报告 manifest 已失效"
+                    item["data_gap"] = list(
+                        dict.fromkeys(
+                            [
+                                *list(item.get("data_gap") or []),
+                                "fund_report_parent_dependency_invalidated",
+                            ]
+                        )
+                    )
+                invalidated_holdings.append(item)
+            invalidated["holdings"] = invalidated_holdings
+            counts = dict(state.get("counts") or {})
+            supported = sum(1 for item in invalidated_holdings if item.get("supported"))
+            counts.update(
+                {
+                    "supported": supported,
+                    "queued": 0,
+                    "running": 0,
+                    "deliverable": 0,
+                    "failed": supported,
+                    "cancelled": 0,
+                }
+            )
+            invalidated["counts"] = counts
+            return self._public(invalidated)
+        return self._public(state)
+
     def _public(self, state: dict[str, Any]) -> dict[str, Any]:
         payload = {
             key: value
             for key, value in state.items()
-            if key not in {"request_id", "source_data_gap"}
+            if key not in {"request_id", "source_data_gap"} and not key.startswith("_report_data_manifest")
         }
         # Batches written by older coordinators only persisted the word
         # ``gated``.  Enrich those immutable historical rows on read from the
@@ -1160,6 +2014,23 @@ class FundHoldingReportService:
         for item in payload["holdings"]:
             error = str(item.get("error") or "")
             child_run_id = str(item.get("child_run_id") or "")
+            if item.get("canonical_reused"):
+                item["cache_reason"] = (
+                    "fixed_manifest_and_pins_match" if self._has_manifest(state)
+                    else "legacy_canonical_key_match"
+                )
+            if child_run_id:
+                try:
+                    root = self.agent_os.run_store.load_run_paths(child_run_id).root
+                except FileNotFoundError:
+                    root = None
+                if root is not None and item.get("status") == "running":
+                    progress = read_json(root / "execution_progress.json")
+                    if isinstance(progress, dict):
+                        item["progress"] = progress
+                metrics = read_json(root / "execution_metrics.json") if root is not None else None
+                if isinstance(metrics, dict):
+                    item["execution_metrics"] = metrics
             if not child_run_id or "子运行以 gated 状态结束" not in error:
                 continue
             try:

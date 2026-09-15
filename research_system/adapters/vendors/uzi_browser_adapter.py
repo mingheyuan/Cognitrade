@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from time import monotonic
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from research_system.runtime.platform.settings import Settings
 
@@ -125,6 +126,54 @@ class UziBrowserAdapter:
             )
             browser.close()
         return {"source_id": source_id, "url": url, "title": title, "text_excerpt": text, "links": links}
+
+    def fetch_native_html(self, *, source_id: str, url: str, timeout_seconds: float,
+                          wait_for: str | None = None) -> str:
+        """Raw HTML for the pinned parser, under the same source permissions.
+
+        No installation, alternate login or permission fallback occurs here.
+        DOM excerpts cannot replace HTML: native parsers also read embedded JSON.
+        """
+        reason = self._policy_gap(source_id)
+        if reason:
+            raise PermissionError(reason)
+        builder = self._URLS.get(source_id)
+        if builder is None or urlparse(url).scheme not in {"http", "https"} or (
+            urlparse(url).hostname != urlparse(builder("688041.SH", "")).hostname
+        ):
+            raise ValueError("native browser URL does not match its authorized source")
+        if timeout_seconds <= 0:
+            raise TimeoutError("browser request deadline exceeded")
+        from playwright.sync_api import sync_playwright
+
+        deadline = monotonic() + min(15, timeout_seconds)
+
+        def milliseconds():
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise TimeoutError("browser request deadline exceeded")
+            return max(1, remaining * 1000)
+
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True, timeout=milliseconds())
+            try:
+                context = browser.new_context(locale="zh-CN", user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ))
+                if source_id.startswith("xueqiu") and self.settings.xueqiu_cookie:
+                    context.add_cookies(_cookies(self.settings.xueqiu_cookie, ".xueqiu.com"))
+                page = context.new_page()
+                page.goto(url, timeout=milliseconds(), wait_until="domcontentloaded")
+                if wait_for:
+                    try:
+                        page.wait_for_selector(wait_for, timeout=min(5000, milliseconds()))
+                    except Exception:
+                        milliseconds()
+                milliseconds()
+                return page.content()
+            finally:
+                browser.close()
 
     @staticmethod
     def _canonical_source_id(source_id: str) -> str:

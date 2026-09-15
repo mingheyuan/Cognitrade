@@ -42,7 +42,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install -r requirements.txt -r requirements-test.txt
       - name: Validate reversible PostgreSQL migration chain
         env:
           COGNITRADE_DATABASE_URL: ${{ env.COGNITRADE_TEST_POSTGRES_URL }}
@@ -58,71 +58,8 @@ jobs:
           tests.test_strategy_migration_deployment
           tests.test_strategy_legacy_retention
 
-  finance-contracts:
-    name: Finance chain and scoring contracts
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      COGNITRADE_API_ALLOW_UNAUTHENTICATED: "true"
-      PYTHONUNBUFFERED: "1"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.txt
-      # Native finance/UZI dependencies keep process-wide state. Keep the
-      # command/method/report contracts in a fresh interpreter so an earlier
-      # provider test cannot strand their worker initialization.
-      - name: Validate API, planning, fund scoring, and core UZI runtime contracts
-        run: >-
-          python -m unittest
-          tests.test_api_validation_dynamic
-          tests.test_agent_os_task_intake
-          tests.test_pack_planner_contracts
-          tests.test_finance_pack_migration_completion
-          tests.test_finance_ashare_dashboard_contract
-          tests.test_fund_research
-          tests.test_api_v1_fund_holding_reports
-          tests.test_api_v2_finance
-          tests.test_backtest_strategies
-          tests.test_uzi_392_vendor_runtime
-          tests.test_uzi_snapshot_runtime_parity
-          tests.test_uzi_source_parity
-      - name: Validate isolated UZI command, method, report, and provider modules
-        run: |
-          run_module() {
-            local test_module="$1"
-            local module_status=0
-            echo "::group::$test_module"
-            timeout --signal=TERM --kill-after=10s 180s \
-              python -X faulthandler -m unittest -v "$test_module" || module_status=$?
-            if [[ "$module_status" -eq 124 || "$module_status" -eq 137 ]]; then
-              echo "::warning::$test_module did not exit within 180s; retrying once in a fresh process"
-              module_status=0
-              timeout --signal=TERM --kill-after=10s 180s \
-                python -X faulthandler -m unittest -v "$test_module" || module_status=$?
-            fi
-            echo "::endgroup::"
-            return "$module_status"
-          }
-          for test_module in \
-            tests.test_uzi_392_commands \
-            tests.test_uzi_392_native_methods \
-            tests.test_uzi_392_analysis \
-            tests.test_uzi_quick_scan \
-            tests.test_uzi_strict_recovery \
-            tests.test_uzi_native_report \
-            tests.test_uzi_provider_smoke \
-            tests.test_finance_artifact_ui_contracts; do
-            run_module "$test_module" || exit $?
-          done
-
   backend:
     name: Complete backend suite
-    needs: finance-contracts
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -135,7 +72,14 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install -r requirements.txt -r requirements-test.txt
+      - run: python -m pip install pytest
+      - name: Verify generated Finance Artifact inventory is current
+        run: python scripts/generate_finance_artifact_contracts.py --check
+      - name: Run Point-in-Time market-data and fund-holding contracts
+        run: python -m pytest -q tests/market_data
+      - name: Run Codex SDK provider regression
+        run: python -m pytest -q tests/test_codex_provider.py
       - name: Run complete backend suite with native crash diagnostics
         # Several native UZI/provider dependencies keep process-wide state.
         # Isolate every test module while retaining the complete test inventory.
@@ -143,6 +87,13 @@ jobs:
           suite_status=0
           for test_file in tests/test_*.py; do
             test_pattern="${test_file#tests/}"
+            # These run once in the PostgreSQL job, which also exercises their
+            # SQLite paths. Do not repeat them in the generic backend sweep.
+            case "$test_pattern" in
+              test_strategy_database_contract.py|test_strategy_migration_deployment.py|test_strategy_legacy_retention.py)
+                continue
+                ;;
+            esac
             module_status=0
             echo "::group::$test_pattern"
             timeout --signal=TERM --kill-after=10s 180s \
@@ -162,7 +113,6 @@ jobs:
 
   uzi-upstream-tests:
     name: Pinned UZI suite against vendored implementation
-    needs: finance-contracts
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -170,7 +120,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: wbh604/UZI-Skill
-          ref: b004d7a988ca53a4805bf36784af091fa1209f22
+          ref: b3665e85b8666477038e11157d8e8feb0e006b76
           path: upstream-uzi
           persist-credentials: false
       - uses: actions/setup-python@v5
@@ -178,7 +128,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.txt pytest
+      - run: python -m pip install -r requirements.txt -r requirements-test.txt pytest
       - name: Verify vendored scope against the pristine pinned checkout
         env:
           UZI_UPSTREAM_ROOT: ${{ github.workspace }}/upstream-uzi
@@ -194,20 +144,14 @@ jobs:
           # while its medium-profile regression tests expect normal agent mode.
           CI: "false"
         working-directory: upstream-uzi/skills/deep-analysis/scripts
-        # The two process-runner tests are wall-clock microbenchmarks with
-        # 1.0-second spawn budgets. Hosted runners exceeded those budgets while
-        # byte parity and the scheduler behavior remained correct, so the same
-        # semantics are covered below with Cognitrade's production-safe budget.
+        # The process-runner microbenchmarks use 1-second spawn budgets that are
+        # unreliable on hosted runners. The backend suite covers the same
+        # scheduler behavior with Cognitrade's production-safe budget.
         run: python -m pytest -q tests --ignore=tests/pipeline/test_process_runner.py
-      - name: Validate process scheduler with platform-safe production budgets
-        run: >-
-          python -m unittest -v
-          tests.test_uzi_392_vendor_runtime.Uzi392VendorRuntimeTests.test_process_runner_enforces_hard_timeout_with_platform_startup_budget
-          tests.test_uzi_392_vendor_runtime.Uzi392VendorRuntimeTests.test_process_runner_serializes_groups_with_platform_startup_budget
 
   provider-smoke:
-    name: UZI real-provider smoke
-    needs: finance-contracts
+    name: Manual UZI real-provider smoke
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -221,7 +165,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install -r requirements.txt -r requirements-test.txt
       - name: Probe all 22 UZI dimensions with real configured providers
         run: >-
           python -m research_system.runtime.diagnostics.status.uzi_provider_smoke

@@ -22,7 +22,7 @@ const viewTitles: Record<ViewId, { eyebrow: string; title: string }> = {
   paper: { eyebrow: '交易实验室', title: '模拟交易' },
   screening: { eyebrow: '研究工具', title: '智能筛选' },
   funds: { eyebrow: '资产研究', title: '基金研究与选择' },
-  uzi: { eyebrow: '专项方法', title: 'UZI 3.9.4 能力工作区' },
+  uzi: { eyebrow: '专项方法', title: 'UZI 3.9.2 能力工作区' },
   strategies: { eyebrow: '策略治理', title: '策略、信号与回测' },
   runs: { eyebrow: '运行时', title: '运行记录' },
 }

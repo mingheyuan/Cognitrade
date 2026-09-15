@@ -47,6 +47,8 @@ import type {
 } from '../strategy-contracts'
 import type { RunStepsPayload } from '../research-contracts'
 import { errorMessageWithRequestId, localizeErrorMessage } from '../utils/error-message'
+import { asOptionalNumber, asRecord } from '../utils/value'
+import { AppSelect } from './AppSelect'
 
 type FundAnalysisDossierProps = {
   artifacts: Array<Record<string, unknown>>
@@ -90,16 +92,10 @@ const SCORE_LABELS: Record<string, string> = {
 }
 
 const REPORT_PROFILES: Array<{ value: HoldingReportProfile; label: string; detail: string }> = [
-  { value: 'lite', label: '速判', detail: '1–2 分钟 · 精简数据 · 66 席评审' },
-  { value: 'medium', label: '标准', detail: '5–8 分钟 · 标准数据 · 66 席评审' },
-  { value: 'deep', label: '深度', detail: '15–20 分钟 · 深度数据 · 66 席评审与多空辩论' },
+  { value: 'lite', label: '速判', detail: '1–2 分钟 · 10 位评委' },
+  { value: 'medium', label: '标准', detail: '5–8 分钟 · 51 位评委' },
+  { value: 'deep', label: '深度', detail: '15–20 分钟 · 66 位 Agent 角色评审与多空辩论' },
 ]
-
-function asRecord(value: unknown): RecordValue {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as RecordValue
-    : {}
-}
 
 function records(value: unknown): RecordValue[] {
   return Array.isArray(value) ? value.map(asRecord).filter((row) => Object.keys(row).length > 0) : []
@@ -110,15 +106,8 @@ function artifactContent(artifacts: Array<Record<string, unknown>>, type: string
   return asRecord(artifact?.content)
 }
 
-function numberValue(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (value == null || value === '') return null
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : null
-}
-
 function percent(value: unknown, signed = true): string {
-  const number = numberValue(value)
+  const number = asOptionalNumber(value)
   return number == null ? '—' : `${signed && number > 0 ? '+' : ''}${number.toFixed(2)}%`
 }
 
@@ -131,7 +120,7 @@ function disclosureStatus(value: unknown): string {
 }
 
 function numberText(value: unknown, digits = 2): string {
-  const number = numberValue(value)
+  const number = asOptionalNumber(value)
   return number == null ? '—' : number.toLocaleString('zh-CN', { maximumFractionDigits: digits })
 }
 
@@ -437,7 +426,7 @@ export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun,
             <article key={String(row.fund_code)}>
               <span>#{String(row.rank || '—')}</span>
               <div><strong>{String(row.fund_name || row.fund_code)}</strong><small>{String(row.fund_code)} · {String(row.comparison_group || row.fund_type || '未分组')}</small></div>
-              <div><strong>{numberText(row.score, 1)}</strong><small>覆盖 {percent((numberValue(row.score_coverage) || 0) * 100, false)}</small></div>
+              <div><strong>{numberText(row.score, 1)}</strong><small>覆盖 {percent((asOptionalNumber(row.score_coverage) || 0) * 100, false)}</small></div>
               <p>{String(row.reason || '未返回推荐理由')}</p>
               <p className="is-risk">{String(row.risk || '未返回风险摘要')}</p>
             </article>
@@ -477,7 +466,7 @@ export function FundAnalysisDossier({ artifacts, sourceRunId, client, onOpenRun,
         <section>
           <header><Scale size={15} /><h3>选择规则</h3></header>
           <p>{String(policy.description || '后端未返回选择规则说明')}</p>
-          <div className="fund-policy-metrics"><span>最低证据覆盖<strong>{percent((numberValue(policy.minimum_score_coverage) || 0) * 100, false)}</strong></span><span>{isSingleFund ? '横向比较' : '最小可比样本'}<strong>{isSingleFund ? '不要求' : numberText(policy.minimum_comparable_sample, 0)}</strong></span></div>
+          <div className="fund-policy-metrics"><span>最低证据覆盖<strong>{percent((asOptionalNumber(policy.minimum_score_coverage) || 0) * 100, false)}</strong></span><span>{isSingleFund ? '横向比较' : '最小可比样本'}<strong>{isSingleFund ? '不要求' : numberText(policy.minimum_comparable_sample, 0)}</strong></span></div>
           <BusinessDataView value={policy.components || []} fieldKey="components" path="fund_analysis.selection_policy.components" compact />
           <small>{String(policy.non_imputation_rule || '缺失数据不补值。')}</small>
         </section>
@@ -551,12 +540,12 @@ function FundCandidateDossier({
   const targetFund = targetFundHoldings[0] || {}
   const targetFundSource = String(candidate.target_fund_source_ref || '')
   const allocationTotal = assetAllocation.reduce(
-    (total, row) => total + (numberValue(row.weight_pct) || 0),
+    (total, row) => total + (asOptionalNumber(row.weight_pct) || 0),
     0,
   )
   const gaps = Array.isArray(candidate.data_gap) ? candidate.data_gap.map(String) : []
   const isSingleFund = String(candidate.analysis_mode || '') === 'single_fund'
-  const usesSinceInceptionReturn = numberValue(returns.year_3) == null
+  const usesSinceInceptionReturn = asOptionalNumber(returns.year_3) == null
   const [reportProfile, setReportProfile] = useState<HoldingReportProfile | ''>('')
   const [selectedBatchId, setSelectedBatchId] = useState('')
   const [confirmStale, setConfirmStale] = useState(false)
@@ -591,7 +580,12 @@ function FundCandidateDossier({
   const warnsStale = disclosureAge != null && disclosureAge > 120
   const fundCode = String(candidate.fund_code || '')
   const fundName = String(candidate.fund_name || '')
-  const activeAssignment = strategyAssignments.find((row) => row.mode === 'holdings_portfolio' && row.enabled && !row.paused)
+  const activeFundAssignment = strategyAssignments.find((row) => row.mode === 'fund_only' && row.enabled && !row.paused)
+    || strategyAssignments.find((row) => row.mode === 'fund_only')
+  const activeHoldingAssignment = strategyAssignments.find((row) => row.mode === 'holdings_portfolio' && row.enabled && !row.paused)
+    || strategyAssignments.find((row) => row.mode === 'holdings_portfolio')
+  const activeAssignment = activeHoldingAssignment
+    || activeFundAssignment
     || strategyAssignments.find((row) => row.enabled && !row.paused)
     || strategyAssignments[0]
   const assignedStrategy = strategies.find((row) => row.id === activeAssignment?.strategy_id)
@@ -603,19 +597,28 @@ function FundCandidateDossier({
     || assignmentSignals.find((row) => row.kind === 'fund')
   const [signalGenerating, setSignalGenerating] = useState(false)
   const [signalError, setSignalError] = useState('')
-  const strategyContext = (tab: StrategyWorkspaceContext['tab'], holdingSymbol?: string): StrategyWorkspaceContext => ({
-    strategyId: activeAssignment?.strategy_id,
-    tab,
-    fundCode,
-    fundName,
-    sourceRunId,
-    sourceArtifactId: latestStrategyReport?.source_artifact_id ? String(latestStrategyReport.source_artifact_id) : sourceArtifactId,
-    reportSetId: latestStrategyReport?.id,
-    strategyVersionId: activeAssignment?.active_version_id,
-    assignmentId: activeAssignment?.id,
-    mode: 'holdings_portfolio',
-    holdingSymbol,
-  })
+  const strategyContext = (
+    tab: StrategyWorkspaceContext['tab'],
+    holdingSymbol?: string,
+    requestedMode?: StrategyWorkspaceContext['mode'],
+  ): StrategyWorkspaceContext => {
+    const mode = requestedMode || (holdingSymbol ? 'holdings_portfolio' : activeAssignment?.mode || 'fund_only')
+    const assignment = mode === 'fund_only' ? activeFundAssignment : activeHoldingAssignment
+    const contextAssignment = assignment || activeAssignment
+    return {
+      strategyId: contextAssignment?.strategy_id,
+      tab,
+      fundCode,
+      fundName,
+      sourceRunId,
+      sourceArtifactId: latestStrategyReport?.source_artifact_id ? String(latestStrategyReport.source_artifact_id) : sourceArtifactId,
+      reportSetId: latestStrategyReport?.id,
+      strategyVersionId: contextAssignment?.active_version_id,
+      assignmentId: assignment?.id,
+      mode,
+      holdingSymbol,
+    }
+  }
   const generateSignals = async () => {
     if (!activeAssignment || !latestStrategyReport) return
     setSignalGenerating(true)
@@ -634,7 +637,7 @@ function FundCandidateDossier({
         <span className="fund-rank">{isSingleFund ? '分析' : candidate.rank ? `#${candidate.rank}` : '—'}</span>
         <span><strong>{String(candidate.fund_name || candidate.fund_code)}</strong><small>{String(candidate.fund_code || '—')} · {String(candidate.fund_type || '类型未返回')}</small></span>
         <span><small>{isSingleFund ? '分析状态' : '综合分'}</small><strong>{isSingleFund ? candidate.quality_status === 'data_gap' ? '证据不足' : '已完成' : numberText(candidate.score, 1)}</strong></span>
-        <span><small>证据覆盖</small><strong>{percent((numberValue(candidate.score_coverage) || 0) * 100, false)}</strong></span>
+        <span><small>证据覆盖</small><strong>{percent((asOptionalNumber(candidate.score_coverage) || 0) * 100, false)}</strong></span>
         <span className={`quality-pill quality-pill--${String(candidate.quality_status || 'data_gap')}`}>{qualityLabel(candidate.quality_status)}</span>
         <ChevronDown size={16} />
       </summary>
@@ -653,12 +656,12 @@ function FundCandidateDossier({
             <button type="button" onClick={() => onOpenStrategy(strategyContext('assignments'))}><Link2 size={13} />{activeAssignment ? '管理绑定' : '选择策略并绑定'}</button>
             <button type="button" onClick={() => onOpenStrategy(strategyContext('signals'))}><FileText size={13} />{latestStrategyReport ? '查看当日日报' : '生成当日报告'}</button>
             <button type="button" disabled={!activeAssignment || !latestStrategyReport || signalGenerating} onClick={() => void generateSignals()}>{signalGenerating ? <LoaderCircle size={13} className="is-spinning" /> : <GitBranch size={13} />}生成信号</button>
-            <button type="button" disabled={!activeAssignment || !activeAssignment.active_version_id} onClick={() => onOpenStrategy(strategyContext('backtests'))}><LineChartIcon size={13} />使用策略回测</button>
+            <button type="button" disabled={!activeAssignment || !activeAssignment.active_version_id} onClick={() => onOpenStrategy(strategyContext(activeFundAssignment ? 'backtests' : 'assignments', undefined, 'fund_only'))}><LineChartIcon size={13} />{activeFundAssignment ? '回测基金净值' : '创建基金本体绑定'}</button>
           </div>
           {signalError && <p className="fund-strategy-bridge-error"><AlertCircle size={12} />{signalError}</p>}
         </section>
         <div className="fund-return-grid">
-          {RETURN_FIELDS.map(([key, label]) => <article key={key}><span>{label}</span><strong className={(numberValue(returns[key]) || 0) >= 0 ? 'number-up' : 'number-down'}>{percent(returns[key])}</strong></article>)}
+          {RETURN_FIELDS.map(([key, label]) => <article key={key}><span>{label}</span><strong className={(asOptionalNumber(returns[key]) || 0) >= 0 ? 'number-up' : 'number-down'}>{percent(returns[key])}</strong></article>)}
         </div>
 
         <div className="fund-core-grid">
@@ -716,8 +719,8 @@ function FundCandidateDossier({
             <article key={String(row.component)}>
               <span>{String(row.component) === 'return_3y_annualized' && usesSinceInceptionReturn ? '成立以来年化收益' : SCORE_LABELS[String(row.component)] || String(row.component)}</span>
               <strong>{numberText(row.value, 2)}</strong>
-              <div><i style={{ width: `${Math.max(0, Math.min(100, numberValue(row.percentile) || 0))}%` }} /></div>
-              <small>同类百分位 {numberText(row.percentile, 1)} · 权重 {percent((numberValue(row.weight) || 0) * 100, false)}{String(row.component) === 'return_3y_annualized' && usesSinceInceptionReturn ? ` · ${String(risk.period_start || '成立')} 至 ${String(risk.period_end || '最新')}` : ''}</small>
+              <div><i style={{ width: `${Math.max(0, Math.min(100, asOptionalNumber(row.percentile) || 0))}%` }} /></div>
+              <small>同类百分位 {numberText(row.percentile, 1)} · 权重 {percent((asOptionalNumber(row.weight) || 0) * 100, false)}{String(row.component) === 'return_3y_annualized' && usesSinceInceptionReturn ? ` · ${String(risk.period_start || '成立')} 至 ${String(risk.period_end || '最新')}` : ''}</small>
             </article>
           ))}</div> : <p>没有足够可比数据形成评分拆解。</p>}
         </section>
@@ -776,10 +779,10 @@ function FundCandidateDossier({
               <div className="fund-holding-report-config">
                 <label>
                   <span>研究档位</span>
-                  <select value={effectiveReportProfile} onChange={(event) => { setReportProfile(event.target.value as HoldingReportProfile | ''); setSelectedBatchId('') }} disabled={holdingBatchesLoading || currentBatch?.status === 'running'}>
+                  <AppSelect value={effectiveReportProfile} onChange={(event) => { setReportProfile(event.target.value as HoldingReportProfile | ''); setSelectedBatchId('') }} disabled={holdingBatchesLoading || currentBatch?.status === 'running'}>
                     <option value="">请选择研究深度</option>
                     {REPORT_PROFILES.map((profile) => <option key={profile.value} value={profile.value}>{profile.label} · {profile.detail}</option>)}
-                  </select>
+                  </AppSelect>
                 </label>
                 <div className={`fund-holding-disclosure ${warnsStale ? 'is-stale' : ''}`}>
                   <span>持仓披露</span>
@@ -853,7 +856,7 @@ function FundCandidateDossier({
                       <div className="fund-holding-report-name"><strong>{item.name}</strong><small>{item.symbol} · {item.market} · 基金权重 {percent(item.fund_weight_pct, false)}</small></div>
                       <span className="fund-holding-report-status">{item.status === 'running' && <LoaderCircle size={12} className="is-spinning" />}{holdingItemStatusLabel(item.status)}</span>
                       <div className="fund-holding-report-actions">
-                        <button type="button" title="打开该基金持仓组合策略回测；股票代码只作为 lineage 上下文" onClick={() => onOpenStrategy(strategyContext(activeAssignment ? 'backtests' : 'assignments', item.symbol))}><LineChartIcon size={13} />策略回测</button>
+                        <button type="button" title="打开该基金持仓组合策略回测；股票代码只作为 lineage 上下文" onClick={() => onOpenStrategy(strategyContext(activeHoldingAssignment ? 'backtests' : 'assignments', item.symbol, 'holdings_portfolio'))}><LineChartIcon size={13} />持仓组合回测</button>
                         {item.status === 'failed' && <button type="button" title="只重试这一只股票，其他持仓报告不重新执行" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'retry', [item.symbol])} disabled={holdingAction === holdingMutationKey('retry', currentBatch.batch_id, [item.symbol])}><RefreshCw size={13} />仅重试此项</button>}
                         {item.status === 'cancelled' && <button type="button" title="只继续这一只股票，其他持仓报告不重新执行" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'continue', [item.symbol])} disabled={holdingAction === holdingMutationKey('continue', currentBatch.batch_id, [item.symbol])}><RefreshCw size={13} />仅继续此项</button>}
                         {['completed', 'completed_partial'].includes(item.status) && <button type="button" title="只重新生成这一只股票，其他持仓报告保持不变" onClick={() => onMutateHoldingBatch(currentBatch.batch_id, 'regenerate', [item.symbol])} disabled={holdingAction === holdingMutationKey('regenerate', currentBatch.batch_id, [item.symbol])}><RefreshCw size={13} />重新生成此项</button>}

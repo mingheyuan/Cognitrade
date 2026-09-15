@@ -10,6 +10,7 @@ import {
   ShieldQuestion,
   Sparkles,
 } from 'lucide-react'
+import { asArray, asOptionalNumber, asRecord } from '../utils/value'
 import { BusinessDataView } from './BusinessDataView'
 import { financeArtifactTitle, isFinanceArtifactType } from './registry'
 import type { ArtifactRecordView } from './types'
@@ -30,25 +31,10 @@ type IntentDeliveryDossierProps = {
   includeTypes?: readonly IntentArtifactType[]
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : []
-}
-
 function text(value: unknown, fallback = '未提供'): string {
   if (typeof value === 'string' && value.trim()) return value.trim()
   if (typeof value === 'number' || typeof value === 'boolean') return String(value)
   return fallback
-}
-
-function numeric(value: unknown): number | null {
-  const parsed = Number(value)
-  return value == null || value === '' || !Number.isFinite(parsed) ? null : parsed
 }
 
 function activeArtifacts(artifacts: Array<Record<string, unknown>>): ArtifactRecordView[] {
@@ -88,9 +74,9 @@ function ScreeningDossier({ artifact }: { artifact: ArtifactRecordView }) {
     <article className="intent-dossier intent-dossier--screening" data-intent-artifact="screening_result">
       <DossierHeader type="screening_result" artifact={artifact} countLabel={`${screened.length} 个核心候选、${watchlist.length} 个观察候选`} />
       <div className="intent-dossier-kpis">
-        <span><small>全部候选</small><strong>{numeric(scorecard.candidate_count) ?? screened.length + watchlist.length}</strong></span>
-        <span><small>通过筛选</small><strong>{numeric(scorecard.eligible_candidate_count) ?? screened.length}</strong></span>
-        <span><small>完成深度核验</small><strong>{numeric(scorecard.deep_checked_count) ?? deepChecked}</strong></span>
+        <span><small>全部候选</small><strong>{asOptionalNumber(scorecard.candidate_count) ?? screened.length + watchlist.length}</strong></span>
+        <span><small>通过筛选</small><strong>{asOptionalNumber(scorecard.eligible_candidate_count) ?? screened.length}</strong></span>
+        <span><small>完成深度核验</small><strong>{asOptionalNumber(scorecard.deep_checked_count) ?? deepChecked}</strong></span>
         <span><small>深度补全标的</small><strong>{asArray(content.enrichment_targets).length}</strong></span>
       </div>
       <section className="intent-dossier-section">
@@ -123,7 +109,7 @@ function SectorDossier({ artifact }: { artifact: ArtifactRecordView }) {
     <article className="intent-dossier intent-dossier--sector" data-intent-artifact="sector_analysis">
       <DossierHeader type="sector_analysis" artifact={artifact} countLabel={`${text(content.sector, '未命名板块')} · ${findings.length} 条来源快照`} />
       <div className="intent-dossier-kpis">
-        <span><small>可用来源</small><strong>{numeric(content.source_count) ?? findings.length}</strong></span>
+        <span><small>可用来源</small><strong>{asOptionalNumber(content.source_count) ?? findings.length}</strong></span>
         <span><small>热力信号</small><strong>{heatmap.length}</strong></span>
         <span><small>成分样本</small><strong>{constituents.length}</strong></span>
         <span><small>政策快照</small><strong>{policy.length}</strong></span>
@@ -168,8 +154,8 @@ function ThesisDossier({ artifact }: { artifact: ArtifactRecordView }) {
       <DossierHeader type="thesis_review" artifact={artifact} countLabel={`复核结论：${text(content.overall_verdict || content.verdict, '证据不足')}`} />
       <div className="intent-dossier-kpis">
         <span><small>目标运行</small><strong>{targetFound ? '已读取' : '未找到'}</strong></span>
-        <span><small>历史产物</small><strong>{numeric(comparison.target_artifact_count) ?? asArray(content.review_target_artifact_ids).length}</strong></span>
-        <span><small>新增证据</small><strong>{numeric(comparison.fresh_evidence_count) ?? 0}</strong></span>
+        <span><small>历史产物</small><strong>{asOptionalNumber(comparison.target_artifact_count) ?? asArray(content.review_target_artifact_ids).length}</strong></span>
+        <span><small>新增证据</small><strong>{asOptionalNumber(comparison.fresh_evidence_count) ?? 0}</strong></span>
         <span><small>总体结论</small><strong>{text(content.overall_verdict || content.verdict, '证据不足')}</strong></span>
       </div>
       <section className="intent-dossier-section">

@@ -36,10 +36,10 @@ package "① 研究与证据主线" as researchLane {
 
 package "② 基金报告策略主线" as strategyLane {
   rectangle "策略草稿与不可变版本\n固定权重 / 阈值 / MA / 费率 / 模型与 UZI Pin" as version
-  rectangle "基金 Assignment\n基金 + fund_only / holdings_portfolio\n生效版本 + 日调度" as assignment
-  rectangle "Point-in-time 日报\n当时已公开基金报告\n+ top 5/10/20 canonical UZI 个股子报告" as report
+  rectangle "基金 Assignment\nfund_only 默认 / 持仓穿透高级\n生效版本 + 日调度" as assignment
+  rectangle "Point-in-time 日报\n当时已公开基金报告\n+ 固定前十 canonical UZI 个股子报告" as report
   rectangle "确定性复合信号\n基金本体 + 持仓 UZI + 结构质量\nALLOW_BUY / WATCH / AVOID / BLOCKED" as signal
-  rectangle "严格版本回测（Hikyuu）\n基金本体 / 持仓组合\n股票 / ETF·LOF / 场外基金 NAV" as backtest
+  rectangle "唯一基金回测主线\n基金本体默认 / 持仓穿透高级\nHikyuu 门控信号 + 确定性账本" as backtest
   rectangle "治理与受控执行\n机器验证 → 人工 Verified → 人工 Promoted\n精确 lineage 才能提交策略模拟单" as governedExecution
 
   version --> assignment
@@ -52,10 +52,8 @@ package "② 基金报告策略主线" as strategyLane {
 package "③ 独立金融工具" as financeLane {
   rectangle "行情聚合\n证券解析 / 报价 / K 线 / 市场快照" as market
   rectangle "通用模拟盘（VeighNa）\n账户 / 市价与限价单 / 冻结资金\n费用 / FIFO / T+1" as paper
-  rectangle "旧单股票技术回测\n/backtests/** 仅内部诊断\n新前端不再调用" as legacy
 
   market --> paper : 服务端取价与撮合
-  market --> legacy : 兼容 K 线输入
 }
 
 api --> agent : /api/v1 研究运行

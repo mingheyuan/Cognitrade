@@ -23,23 +23,15 @@ vi.mock('../CognitradeContext', () => ({
       replay: {
         artifacts: [
           {
-            artifact_type: 'uzi_native_method_result',
+            artifact_type: 'returns_attribution',
             content: {
-              method_id: 'returns_attribution',
               quality_status: 'degraded',
-              results: [
-                {
-                  symbol: 'portfolio',
-                  result: {
-                    observed_weight_coverage: 0.6,
-                    observed_contribution_pct: 6,
-                    total_return_pct: null,
-                    holdings: [
-                      { ticker: '600519', name: '贵州茅台', return_pct: 10, contribution_pct: 6 },
-                      { ticker: '300750', name: '宁德时代', return_pct: null, contribution_pct: null },
-                    ],
-                  },
-                },
+              observed_weight_coverage: 0.6,
+              observed_contribution_pct: 6,
+              total_return_pct: null,
+              holdings: [
+                { ticker: '600519', name: '贵州茅台', return_pct: 10, contribution_pct: 6 },
+                { ticker: '300750', name: '宁德时代', return_pct: null, contribution_pct: null },
               ],
               data_gap: ['return_pct_missing:300750'],
             },
@@ -63,7 +55,7 @@ describe('UziMethods', () => {
     render(<UziMethods onOpenRun={mocks.openRun} />)
 
     expect(screen.getByText('专项研究与组合方法')).toBeInTheDocument()
-    expect(screen.getByText('returns_attribution')).toBeInTheDocument()
+    expect(screen.getByText('60.0%')).toBeInTheDocument()
     expect(screen.getAllByText('贵州茅台').length).toBeGreaterThan(0)
     expect(screen.getByText('1 项数据缺口')).toBeInTheDocument()
   })
@@ -71,7 +63,6 @@ describe('UziMethods', () => {
   it('does not submit an implicit fee model or partial target set', async () => {
     render(<UziMethods onOpenRun={mocks.openRun} />)
     fireEvent.click(screen.getByRole('button', { name: /组合归因与再平衡/ }))
-    fireEvent.change(screen.getByLabelText('组合方法'), { target: { value: 'returns' } })
     fireEvent.change(screen.getByLabelText('持仓 1 代码'), { target: { value: '600519' } })
     fireEvent.change(screen.getByLabelText('持仓 1 权重'), { target: { value: '60' } })
     fireEvent.change(screen.getByLabelText('持仓 1 收益'), { target: { value: '8' } })
@@ -98,7 +89,7 @@ describe('UziMethods', () => {
     fireEvent.click(screen.getByRole('button', { name: '运行 UZI 原生命令 / 方法' }))
 
     await waitFor(() => expect(mocks.createRun).toHaveBeenCalledTimes(1))
-    const [, intent, constraints = {}] = mocks.createRun.mock.calls[0]
+    const [, intent, constraints] = mocks.createRun.mock.calls[0]
     expect(intent).toBe('uzi_ai_readiness')
     expect(constraints).toEqual({ symbol: '600519' })
   })
@@ -115,8 +106,8 @@ describe('UziMethods', () => {
     fireEvent.click(screen.getByRole('button', { name: /组合归因与再平衡/ }))
     const selector = screen.getByLabelText('组合方法')
     expect(selector).toHaveTextContent('收益归因')
-    expect(selector).toHaveTextContent('持仓再平衡')
-    expect(selector).toHaveTextContent('UZI 原生组合批量分析')
+    fireEvent.click(selector)
+    expect(screen.getByRole('option', { name: '持仓再平衡' })).toBeInTheDocument()
   })
 
   it('requires an explicit profile for the complete analyze-stock command', async () => {
@@ -129,27 +120,8 @@ describe('UziMethods', () => {
     fireEvent.click(submit)
 
     await waitFor(() => expect(mocks.createRun).toHaveBeenCalledTimes(1))
-    const [, intent, constraints = {}] = mocks.createRun.mock.calls[0]
+    const [, intent, constraints] = mocks.createRun.mock.calls[0]
     expect(intent).toBe('uzi_analyze_stock')
     expect(constraints).toEqual({ symbol: '600519', research_profile: 'deep' })
-  })
-
-  it('submits the native portfolio batch with optional weights and school lock', async () => {
-    render(<UziMethods onOpenRun={mocks.openRun} />)
-    fireEvent.click(screen.getByRole('button', { name: /组合归因与再平衡/ }))
-    fireEvent.change(screen.getByLabelText('持仓 1 代码'), { target: { value: '600519' } })
-    fireEvent.change(screen.getByLabelText('持仓 2 代码'), { target: { value: '000858' } })
-    fireEvent.change(screen.getByLabelText('研究深度（必须显式选择）'), { target: { value: 'lite' } })
-    fireEvent.change(screen.getByLabelText('评审流派（可选，UZI --school A–I）'), { target: { value: 'A' } })
-    fireEvent.click(screen.getByRole('button', { name: '运行 UZI 组合分析' }))
-
-    await waitFor(() => expect(mocks.createRun).toHaveBeenCalledTimes(1))
-    const [, intent, constraints = {}] = mocks.createRun.mock.calls[0]
-    expect(intent).toBe('uzi_portfolio_batch')
-    expect(constraints).toEqual(expect.objectContaining({ research_profile: 'lite', school: 'A' }))
-    expect(constraints.portfolio_holdings).toEqual([
-      expect.objectContaining({ ticker: '600519', weight: null }),
-      expect.objectContaining({ ticker: '000858', weight: null }),
-    ])
   })
 })

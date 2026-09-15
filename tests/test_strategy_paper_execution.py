@@ -6,7 +6,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from research_system.strategies.contracts import BacktestMode
+from research_system.strategies.contracts import BacktestMode, StrategyDocumentV1
 from research_system.strategies.database import StrategyDatabase
 from research_system.strategies.errors import StrategyConflict, StrategyDomainError
 from research_system.strategies.models import (
@@ -31,6 +31,9 @@ class _MarketData:
             "latest_price": 10.0,
             "refresh": refresh,
         }
+
+    def get_live_quote(self, symbol: str, *, refresh: bool) -> dict:
+        return self.get_quote(symbol, refresh=refresh)
 
 
 class _PaperTrading:
@@ -71,7 +74,7 @@ class StrategyPaperExecutionTests(unittest.TestCase):
             auto_bootstrap=True,
         )
         self.owner = OwnerScope("tenant-a", "user-a", "actor-a")
-        created = self.strategies.create_strategy(self.owner, name="模拟执行策略")
+        created = self.strategies.create_strategy(self.owner, name="模拟执行策略", document=StrategyDocumentV1().model_dump(mode="json"))
         self.strategy_id = created["id"]
         self.version = self.strategies.publish(self.owner, self.strategy_id)
         self.assignment = self.strategies.create_assignment(

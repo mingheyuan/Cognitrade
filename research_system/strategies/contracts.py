@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date, datetime
+from datetime import date
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -126,7 +126,7 @@ class ReportInputs(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     holding_uzi_required: Literal[True] = True
-    research_profile: Literal["deep"] = "deep"
+    research_profile: Literal["lite", "medium", "deep"] = "deep"
     top_n: int = Field(default=10, ge=5, le=20)
     independent_holding_signals_enabled: bool = True
     enabled_backtest_modes: list[BacktestMode] = Field(
@@ -296,6 +296,14 @@ class OtcFundExecutionRules(BaseModel):
     subscription_confirmation_days: int = Field(default=1, ge=1, le=10)
     redemption_confirmation_days: int = Field(default=2, ge=1, le=20)
     require_open_status: bool = True
+    missing_open_status_policy: Literal["assume_open_degraded", "block"] = "assume_open_degraded"
+    # Percentages are expressed as human-facing 0..100 values, matching
+    # ExecutionRules.max_single_stock_pct.  The defaults deliberately preserve
+    # every already-published strategy version's historical all-in behaviour.
+    max_position_pct: float = Field(default=100.0, gt=0.0, le=100.0)
+    entry_tranche_pct: float = Field(default=100.0, gt=0.0, le=100.0)
+    max_entry_tranches: int = Field(default=1, ge=1, le=100)
+    minimum_entry_interval_days: int = Field(default=0, ge=0, le=250)
 
 
 class AssetExecutionRules(BaseModel):
@@ -331,6 +339,92 @@ class StrategyDocumentV1(BaseModel):
     schedule_defaults: ScheduleDefaults = Field(default_factory=ScheduleDefaults)
 
 
+class StrategyMetadataV2(StrategyMetadata):
+    schema_version: Literal["2"] = "2"
+
+
+class ReportConditionRules(BaseModel):
+    """Versioned execution interpretation; the UZI research verdict is immutable."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: Literal["report_conditions_v1"] = "report_conditions_v1"
+    source: Literal["dashboard.battle_plan"] = "dashboard.battle_plan"
+    extractor_version: Literal["uzi-battle-plan-v1"] = "uzi-battle-plan-v1"
+    entry_fraction: Literal[0.5] = 0.5
+    entry_valid_trading_days: Literal[3] = 3
+    evaluation: Literal["daily_close_next_open"] = "daily_close_next_open"
+    position_plan: Literal["lock_on_entry"] = "lock_on_entry"
+    gap_policy: Literal["cancel_outside_stop_target"] = "cancel_outside_stop_target"
+    weight_policy: Literal["original_disclosed_no_normalization"] = "original_disclosed_no_normalization"
+
+
+class ReportExecutionRules(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_single_stock_pct: float = Field(default=20.0, gt=0.0, le=100.0)
+
+
+def _native_report_pins() -> StrategyPins:
+    from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import (
+        UZI_REPORT_VERSION,
+        UZI_SOURCE_COMMIT,
+    )
+
+    return StrategyPins(uzi_methodology_version=UZI_REPORT_VERSION, uzi_source_commit=UZI_SOURCE_COMMIT,
+                        factor_extractor_version="uzi-battle-plan-v1")
+
+
+class StrategyDocumentV2(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    metadata: StrategyMetadataV2 = Field(default_factory=StrategyMetadataV2)
+    pins: StrategyPins = Field(default_factory=_native_report_pins)
+    report_inputs: ReportInputs = Field(default_factory=lambda: ReportInputs(
+        research_profile="medium", enabled_backtest_modes=[BacktestMode.HOLDINGS_PORTFOLIO],
+    ))
+    report_signal: ReportConditionRules = Field(default_factory=ReportConditionRules)
+    quality_gates: QualityGates = Field(default_factory=QualityGates)
+    execution: ReportExecutionRules = Field(default_factory=ReportExecutionRules)
+    asset_execution: AssetExecutionRules = Field(default_factory=AssetExecutionRules)
+    schedule_defaults: ScheduleDefaults = Field(default_factory=ScheduleDefaults)
+
+    @model_validator(mode="after")
+    def holdings_only(self) -> "StrategyDocumentV2":
+        if self.report_inputs.enabled_backtest_modes != [BacktestMode.HOLDINGS_PORTFOLIO]:
+            raise ValueError("原生报告条件回放仅支持持仓组合，不生成自定义基金交易信号")
+        return self
+
+    @property
+    def signal_thresholds(self) -> SignalThresholds:
+        # Compatibility for orchestration scheduling only; never used to score V2.
+        return SignalThresholds(missing_report_carry_days=self.report_signal.entry_valid_trading_days)
+
+
+StrategyDocument = StrategyDocumentV1 | StrategyDocumentV2
+
+
+def parse_strategy_document(document: StrategyDocument | dict[str, Any]) -> StrategyDocument:
+    if isinstance(document, (StrategyDocumentV1, StrategyDocumentV2)):
+        return document
+    version = str((document.get("metadata") or {}).get("schema_version") or "1")
+    return (StrategyDocumentV2 if version == "2" else StrategyDocumentV1).model_validate(document)
+
+
+def is_report_conditions(document: StrategyDocument) -> bool:
+    return isinstance(document, StrategyDocumentV2)
+
+
+REPORT_CONDITIONS_TEMPLATE_KEY = "uzi_report_conditions_v2"
+REPORT_CONDITIONS_TEMPLATE_NAME = "原生 UZI 报告条件回放 V2"
+
+
+def report_conditions_template_document() -> StrategyDocumentV2:
+    return StrategyDocumentV2(metadata=StrategyMetadataV2(
+        description="原生三档正向评级与综合作战计划；披露权重首批 50%，日线收盘触发、次交易日开盘成交。",
+    ))
+
+
 SYSTEM_TEMPLATE_KEY = "equity_fund_report_v1"
 SYSTEM_TEMPLATE_NAME = "权益基金日报复合策略 V1"
 
@@ -345,12 +439,9 @@ def system_template_document() -> StrategyDocumentV1:
     )
 
 
-def canonical_strategy_json(document: StrategyDocumentV1 | dict) -> str:
-    validated = (
-        document
-        if isinstance(document, StrategyDocumentV1)
-        else StrategyDocumentV1.model_validate(document)
-    )
+def canonical_strategy_json(document: StrategyDocument | dict) -> str:
+    # V1 model/serialization are intentionally unchanged: published hashes are immutable.
+    validated = parse_strategy_document(document)
     return json.dumps(
         validated.model_dump(mode="json", exclude_none=False),
         ensure_ascii=False,
@@ -359,7 +450,7 @@ def canonical_strategy_json(document: StrategyDocumentV1 | dict) -> str:
     )
 
 
-def strategy_content_hash(document: StrategyDocumentV1 | dict) -> str:
+def strategy_content_hash(document: StrategyDocument | dict) -> str:
     return hashlib.sha256(canonical_strategy_json(document).encode("utf-8")).hexdigest()
 
 
@@ -367,10 +458,6 @@ def next_weekday(value: date) -> date:
     """Backward-compatible name for the next XSHG trading session."""
 
     return next_trading_day(value)
-
-
-def iso_utc(value: datetime) -> str:
-    return value.isoformat().replace("+00:00", "Z")
 
 
 __all__ = [
@@ -385,10 +472,15 @@ __all__ = [
     "SYSTEM_TEMPLATE_NAME",
     "SignalState",
     "StrategyDocumentV1",
+    "StrategyDocumentV2",
+    "StrategyDocument",
     "StrategyLifecycle",
     "blank_strategy_document",
     "canonical_strategy_json",
     "next_weekday",
+    "parse_strategy_document",
+    "is_report_conditions",
+    "report_conditions_template_document",
     "strategy_content_hash",
     "system_template_document",
 ]

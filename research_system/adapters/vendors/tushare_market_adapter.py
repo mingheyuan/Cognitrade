@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from datetime import date
 from importlib import import_module
 from typing import Any
 
-from research_system.adapters.vendors.akshare_utils import coerce_numeric, normalize_value
+from research_system.adapters.vendors.akshare_utils import (
+    coerce_numeric,
+    normalize_value,
+)
 
 
 class TuShareMarketAdapter:
@@ -29,18 +33,20 @@ class TuShareMarketAdapter:
         if frame is None or frame.empty:
             raise ValueError(f"no market data returned for symbol {symbol}")
         if adjust in {"qfq", "hfq"}:
-            frame = self._apply_adjustment(pro, frame, ts_code, start_date, end_date, adjust)
+            frame = self._apply_adjustment(
+                pro, frame, ts_code, start_date, end_date, adjust
+            )
         bars = [
             {
-                    "date": self._date(row.get("trade_date")),
-                    "open": normalize_value(row.get("open")),
-                    "high": normalize_value(row.get("high")),
-                    "low": normalize_value(row.get("low")),
-                    "close": normalize_value(row.get("close")),
-                    "pre_close": normalize_value(row.get("pre_close")),
-                    "volume": normalize_value(row.get("vol")),
-                    "amount": normalize_value(row.get("amount")),
-                    "pct_change": normalize_value(row.get("pct_chg")),
+                "date": self._date(row.get("trade_date")),
+                "open": normalize_value(row.get("open")),
+                "high": normalize_value(row.get("high")),
+                "low": normalize_value(row.get("low")),
+                "close": normalize_value(row.get("close")),
+                "pre_close": normalize_value(row.get("pre_close")),
+                "volume": normalize_value(row.get("vol")),
+                "amount": normalize_value(row.get("amount")),
+                "pct_change": normalize_value(row.get("pct_chg")),
             }
             for row in frame.sort_values("trade_date").to_dict("records")
         ]
@@ -55,7 +61,13 @@ class TuShareMarketAdapter:
             "bar_count": len(bars),
         }
 
-    def get_market_overview(self, *, symbol: str, latest_bar: dict[str, Any] | None = None) -> dict[str, Any]:
+    def get_market_overview(
+        self,
+        *,
+        symbol: str,
+        latest_bar: dict[str, Any] | None = None,
+        as_of_date: date | None = None,
+    ) -> dict[str, Any]:
         bar = dict(latest_bar or {})
         return {
             "symbol": symbol,
@@ -70,11 +82,17 @@ class TuShareMarketAdapter:
         }
 
     @staticmethod
-    def _apply_adjustment(pro, frame, ts_code: str, start_date: str, end_date: str, adjust: str):
-        factors = pro.adj_factor(ts_code=ts_code, start_date=start_date, end_date=end_date)
+    def _apply_adjustment(
+        pro, frame, ts_code: str, start_date: str, end_date: str, adjust: str
+    ):
+        factors = pro.adj_factor(
+            ts_code=ts_code, start_date=start_date, end_date=end_date
+        )
         if factors is None or factors.empty:
             return frame
-        merged = frame.merge(factors[["trade_date", "adj_factor"]], on="trade_date", how="left")
+        merged = frame.merge(
+            factors[["trade_date", "adj_factor"]], on="trade_date", how="left"
+        )
         anchor = float(merged["adj_factor"].iloc[0 if adjust == "qfq" else -1])
         if not anchor:
             return frame
@@ -92,7 +110,13 @@ class TuShareMarketAdapter:
             if suffix in {"SH", "SZ", "BJ"}:
                 return f"{code[-6:]}.{suffix}"
         code = "".join(char for char in raw if char.isdigit())[-6:]
-        suffix = "BJ" if code.startswith(("4", "8")) else "SH" if code.startswith(("5", "6", "9")) else "SZ"
+        suffix = (
+            "BJ"
+            if code.startswith(("4", "8"))
+            else "SH"
+            if code.startswith(("5", "6", "9"))
+            else "SZ"
+        )
         return f"{code}.{suffix}"
 
     @staticmethod

@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from collections import OrderedDict
 import hashlib
 import importlib
-from pathlib import Path
 import re
+from collections import OrderedDict
+from dataclasses import dataclass, replace
+from datetime import date, datetime
+from pathlib import Path
 from threading import BoundedSemaphore, RLock
 from typing import Any, Iterable
+from zoneinfo import ZoneInfo
 
 from domain_packs.finance_ashare.reporting.uzi_392_exact_report import (
     UziNativeQualityGateError,
@@ -20,7 +22,6 @@ from domain_packs.finance_ashare.subagents.uzi_portfolio_contract import (
     ticker_identity,
 )
 from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import Uzi392FetcherRuntime
-
 
 _PDF_RENDER_SLOTS = BoundedSemaphore(2)
 _PDF_CACHE_LOCK = RLock()
@@ -99,19 +100,21 @@ def render_uzi_native_html(
         raise ReportArtifactMissingError("UZI critical 质量门未通过")
     delivery_type = str(report.get("delivery_type") or "")
     if delivery_type == "uzi_versus_3_9_4":
-        return _render_uzi_versus(
+        rendered = _render_uzi_versus(
             rows,
             native_artifact=native_artifact,
             report=report,
             run_id=run_id,
         )
+        return replace(rendered, html=_historical_report_disclosure(rendered.html, rows, native_artifact))
     if delivery_type == "uzi_portfolio_3_9_4":
-        return _render_uzi_portfolio(
+        rendered = _render_uzi_portfolio(
             rows,
             native_artifact=native_artifact,
             report=report,
             run_id=run_id,
         )
+        return replace(rendered, html=_historical_report_disclosure(rendered.html, rows, native_artifact))
     if delivery_type != "uzi_native_3_9_4":
         raise ReportArtifactMissingError("该运行不是 UZI 3.9.4 原生报告")
     segmental_model, segmental_validation = _validated_segmental(rows)
@@ -123,6 +126,7 @@ def render_uzi_native_html(
         )
     except UziNativeQualityGateError as exc:
         raise ReportArtifactMissingError(str(exc)) from exc
+    html_document = _historical_report_disclosure(html_document, rows, native_artifact)
     safe_symbol = re.sub(r"[^A-Za-z0-9._-]", "-", symbol).strip("-") or "unknown"
     return RenderedUziReport(
         html=html_document,
@@ -134,6 +138,38 @@ def render_uzi_native_html(
             if artifact.get("artifact_id")
         ),
     )
+
+
+def _historical_report_disclosure(html_document: str, rows: list[dict], native: dict) -> str:
+    """Disclose reconstructed dates without changing the pinned UZI verdict/template.
+
+    Use immutable artifact creation time, not the time somebody downloads an
+    old report. A contemporaneously generated report must never be relabelled
+    historical merely because it is exported later.
+    """
+    bundle = _latest(rows, "stock_snapshot_bundle") or {}
+    collection = _record(_record(bundle.get("content")).get("collection"))
+    if collection.get("data_source_mode") != "bundle_only":
+        return html_document
+    try:
+        cutoff = date.fromisoformat(str(collection.get("as_of_date") or ""))
+        created = datetime.fromisoformat(str(native.get("created_at") or "").replace("Z", "+00:00"))
+        if created.tzinfo is None:
+            return html_document
+        generated = created.astimezone(ZoneInfo("Asia/Shanghai")).date()
+    except ValueError:
+        return html_document
+    if generated <= cutoff:
+        return html_document
+    notice = (
+        '<aside id="cognitrade-asof-disclosure" role="note" '
+        'style="max-width:1200px;margin:16px auto;padding:12px 16px;'
+        'border:1px solid #e07a00;background:#fff5e6;color:#27221d;font:14px/1.6 sans-serif">'
+        f'基于截至 {cutoff.isoformat()} 可见资料的回溯生成；实际生成于 {generated.isoformat()}。'
+        '这不是当日实际发布过的报告，报告截止日之后的行情不属于本报告研究输入。'
+        '</aside>'
+    )
+    return re.sub(r"(<body\b[^>]*>)", lambda match: match.group(1) + notice, html_document, count=1, flags=re.I)
 
 
 def _initialize_native_report_imports() -> None:
@@ -322,7 +358,7 @@ def render_uzi_native_pdf(html_document: str) -> bytes:
 
 
 def render_uzi_native_image(html_document: str, *, selector: str) -> bytes:
-    """Apply UZI's native Playwright share-card/war-report screenshot flow."""
+    """Export native server-rendered cards without interactive loading effects."""
 
     if selector not in {"#share-card", "#war-report"}:
         raise ValueError("unsupported UZI report image selector")
@@ -338,17 +374,49 @@ def render_uzi_native_image(html_document: str, *, selector: str) -> bytes:
                 context = browser.new_context(
                     device_scale_factor=2,
                     viewport={"width": 1280, "height": 800},
+                    # The cards are fully server-rendered. Page scripts only
+                    # add interaction/count-up effects; fonts-ready does not
+                    # mean those effects have finished. Keep the original
+                    # values instead of racing timers or reconstructing scores.
+                    java_script_enabled=False,
+                    reduced_motion="reduce",
                 )
                 page = context.new_page()
                 page.set_content(html_document, wait_until="load", timeout=30_000)
                 page.evaluate("document.fonts && document.fonts.ready")
                 page.evaluate(
                     """selector => {
+                        document.getElementById('boot-overlay')?.remove();
                         const element = document.querySelector(selector);
                         if (!element) return false;
-                        element.style.position = 'static';
+                        // Preserve the containing block of the card footer.
+                        element.style.position = 'relative';
                         element.style.left = '0';
                         element.style.top = '0';
+                        // Pinned panel_cards emits different class names
+                        // from the pinned template. Alias only presentation.
+                        element.querySelectorAll('.sc-best-cell').forEach(cell => {
+                            cell.classList.add('sc-bestcell');
+                            cell.querySelector('.name')?.classList.add('n');
+                            cell.querySelector('.score-num')?.classList.add('s');
+                        });
+                        element.querySelectorAll('.sc-vote-row > span:last-child').forEach(count => {
+                            count.classList.add('cnt');
+                            count.style.width = '120px';
+                            count.style.flexShrink = '0';
+                            count.style.whiteSpace = 'nowrap';
+                        });
+                        const footer = element.querySelector('.sc-footer');
+                        if (selector === '#share-card' && footer) {
+                            // Native fixed-height cards overflow with full
+                            // verdicts, both top-three panels and long copy.
+                            // Grow the image; never crop or rewrite its text.
+                            element.style.minHeight = getComputedStyle(element).height;
+                            element.style.height = 'auto';
+                            footer.style.position = 'relative';
+                            footer.style.inset = 'auto';
+                            footer.style.marginTop = '48px';
+                        }
                         return true;
                     }""",
                     selector,
@@ -356,7 +424,7 @@ def render_uzi_native_image(html_document: str, *, selector: str) -> bytes:
                 locator = page.locator(selector)
                 if locator.count() != 1:
                     raise ReportImageUnavailableError(f"UZI 报告缺少 {selector} 元素")
-                payload = locator.screenshot(omit_background=False)
+                payload = locator.screenshot(omit_background=False, animations="disabled")
             finally:
                 browser.close()
     except (PlaywrightError, OSError) as exc:

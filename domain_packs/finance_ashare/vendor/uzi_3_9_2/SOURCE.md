@@ -1,9 +1,9 @@
 # Vendored UZI source
 
 - Repository: `https://github.com/wbh604/UZI-Skill`
-- Analysis commit: `b004d7a988ca53a4805bf36784af091fa1209f22`
+- Analysis commit: `b3665e85b8666477038e11157d8e8feb0e006b76`
 - Analysis version: `3.9.4`
-- Report presentation commit: `b004d7a988ca53a4805bf36784af091fa1209f22`
+- Report presentation commit: `b3665e85b8666477038e11157d8e8feb0e006b76`
 - Report presentation version: `3.9.4`
 - License: MIT; see `LICENSE`
 - Imported capability roots:
@@ -37,10 +37,13 @@ commit separately and runs its test tree against the vendored Python implementat
 UZI collection keeps the upstream route-specific executor semantics. The default
 v3 pipeline runs fetchers in spawned processes with a 120-second per-fetcher hard
 timeout and a 300-second per-wave hard timeout; timed-out workers are terminated.
+Agent OS narrows only the optional `similar_stocks` process job to 30 seconds through
+the pinned scheduler's existing per-job timeout field; the vendored source and every
+core dimension retain their upstream limits.
 The forced/fallback legacy lane still uses thread completion-classification
 windows that cannot force-cancel an already running Python thread. Agent OS keeps
 its context-scoped default timeout for direct and legacy UZI `requests` calls;
-spawned pipeline jobs are instead bounded by the upstream process timeout, and
+spawned pipeline jobs are instead bounded by the upstream process scheduler, and
 peer DomainPack traffic remains unaffected. Cognitrade's request-local Xueqiu
 source gate is explicitly transported into the spawned contest worker.
 

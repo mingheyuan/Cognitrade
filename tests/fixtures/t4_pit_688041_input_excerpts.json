@@ -1,0 +1,152 @@
+{
+  "schema_version": "t4-pit-input-excerpts/v1",
+  "scope": "Exact selected fields from persisted inputs, not a complete snapshot, new collection, or proof of historical target-field completion.",
+  "symbol": "688041.SH",
+  "as_of_date": "2026-09-02",
+  "provenance": {
+    "local_material_path": "workspace/reports/e2e-uzi-repair-20260907-4jhXCa/frozen-manifest-original.json",
+    "material_manifest_id": "01M1WWMPPW80E8YBTR6AA0VPDK",
+    "final_bundle_id": "01M1X3XS9TWEXYDF3ZK5Y8HWYG",
+    "final_bundle_manifest_hash": "22db6fe15c56d7b8dc7a8a1f62383f5d2cd51d28378920706a7654370e370715",
+    "prior_readonly_match_audit": "workspace/reports/uzi-native-alignment-20260908-rYqLft/t4-derivation-readonly-20260911/audit.json",
+    "snapshot_hash_note": "content_hash identifies the original whole snapshot, not this selected excerpt; the prior audit matched these snapshot IDs/hashes to the final bundle. Runtime DB revocation state is not asserted."
+  },
+  "inputs": [
+    {
+      "dimension_id": "1_financials",
+      "snapshot_id": "01M1K7NRQD8CM853GRV8TS5Q80",
+      "content_hash": "c086a43edcf93f612215138550355f4f0a848fbe3df3fee6d8b094fd26cdd46e",
+      "excerpt": {
+        "info": {},
+        "financial_abstract": {
+          "报告期": 2025,
+          "净利润": "25.45亿",
+          "净利润同比增长率": "31.79%",
+          "扣非净利润": "23.05亿",
+          "扣非净利润同比增长率": "26.92%",
+          "营业总收入": "143.77亿",
+          "营业总收入同比增长率": "56.92%",
+          "基本每股收益": "1.1000",
+          "每股净资产": "9.68",
+          "每股资本公积金": "6.37",
+          "每股未分配利润": "2.37",
+          "每股经营现金流": "0.90",
+          "销售净利率": "25.17%",
+          "销售毛利率": "57.83%",
+          "净资产收益率": "11.87%",
+          "净资产收益率-摊薄": "11.31%",
+          "营业周期": "430.24",
+          "存货周转率": "1.02",
+          "存货周转天数": "351.25",
+          "应收账款周转天数": "78.99",
+          "流动比率": "3.02",
+          "速动比率": "1.58",
+          "保守速动比率": "1.56",
+          "产权比率": "0.43",
+          "资产负债率": "27.13%"
+        },
+        "banking_metrics": {
+          "roe": 0.11869999999999999,
+          "asset_liability_ratio": 0.2713,
+          "dividend_payout_ratio": 0.221347933870334,
+          "revenue_yoy": 0.5692,
+          "net_profit_yoy": 0.3179,
+          "sales_net_interest_ratio": 22.6854,
+          "interest_margin_proxy": 22.6854,
+          "interest_income": 100881485.2,
+          "interest_expenses": 33896689.85,
+          "credit_impairment_loss": 2040345.67,
+          "general_risk_preparation": null,
+          "capital_reserve": 15448017217.68,
+          "settle_provision": null,
+          "deposits_and_deposits": null,
+          "customer_loan_advance_net_addition": null,
+          "customer_and_interbank_deposits_addition": null,
+          "receive_interest_fee_and_commission_cash": null,
+          "pay_interest_fee_and_commission_cash": null,
+          "pay_dividends_profits_interest_cash": 563330491.7,
+          "net_interest_spread_proxy": 0.6639949364068244,
+          "loan_to_deposit_proxy": null,
+          "deposit_growth_proxy": null,
+          "provision_coverage_proxy": null,
+          "available_fields": [
+            "asset_liability_ratio",
+            "capital_reserve",
+            "credit_impairment_loss",
+            "dividend_payout_ratio",
+            "interest_expenses",
+            "interest_income",
+            "interest_margin_proxy",
+            "net_interest_spread_proxy",
+            "net_profit_yoy",
+            "pay_dividends_profits_interest_cash",
+            "revenue_yoy",
+            "roe",
+            "sales_net_interest_ratio"
+          ],
+          "is_bank_like": false
+        },
+        "bank_peer_comparison": {}
+      }
+    },
+    {
+      "dimension_id": "7_industry",
+      "snapshot_id": "01M1SR698GK9ACVQVPA78M71XY",
+      "content_hash": "9460e4b30c7f0d3f48dcf4c2d9320594a7353e119c2d40d06a20a22694313493",
+      "excerpt": {
+        "industry": "数字芯片设计",
+        "classification_version": "申银万国行业分类标准@2022-08-02",
+        "resolved_sector": {}
+      }
+    },
+    {
+      "dimension_id": "17_sentiment",
+      "snapshot_id": "01M1K7NS7JEVJBM2VGTP5X3PS1",
+      "content_hash": "bd5048210f11b0ea8cb3f942d366ce58883550143a22612f29ef9fa473ab554a",
+      "excerpt": {
+        "news_samples": [
+          {
+            "关键词": "688041",
+            "新闻标题": "海光信息688041.SH)2026年中报净利润为17.98亿元、较去年同期上涨49.69%",
+            "新闻内容": "2026年8月14日，海光信息688041.SH)发布2026年中报。 公司营业总收入为90.99亿元，较去年同报告期营业总收入增加36.35亿元，实现5年连续上涨，同比较去年同期上涨66.52%。",
+            "发布时间": "2026-08-14 10:10:53",
+            "文章来源": "界面新闻",
+            "新闻链接": "http://finance.eastmoney.com/a/202608143841500252.html"
+          },
+          {
+            "关键词": "688041",
+            "新闻标题": "海光信息688041.SH)：2026年中报净利润为17.98亿元、同比较去年同期上涨49.69%",
+            "新闻内容": "2026年8月14日，海光信息688041.SH)发布2026年中报。 公司营业总收入为90.99亿元，较去年同报告期营业总收入增加36.35亿元，实现5年连续上涨，同比较去年同期上涨66.52%。",
+            "发布时间": "2026-08-14 09:21:53",
+            "文章来源": "界面新闻",
+            "新闻链接": "http://finance.eastmoney.com/a/202608143841314564.html"
+          },
+          {
+            "关键词": "688041",
+            "新闻标题": "强势股追踪 主力资金连续5日净流入147股",
+            "新闻内容": "） 连续5日或以上主力资金净流入个股排名 证券代码 证券简称 主力资金净流入天数 主力资金净流入金额（亿元） 主力资金净流入比例（%） 累计涨跌幅（%） 600183 生益科技 5 41.70 6.93 21.46 688256 寒武纪 5 41.12 7.23 14.77 688041",
+            "发布时间": "2026-08-31 16:40:00",
+            "文章来源": "证券时报网",
+            "新闻链接": "http://finance.eastmoney.com/a/202608313860127110.html"
+          },
+          {
+            "关键词": "688041",
+            "新闻标题": "14只科创板个股主力资金净流入超亿元",
+            "新闻内容": "寒武纪 102743.96 7.82 6.26 1.94 688521 芯原股份 60914.13 14.13 7.15 4.26 688981 中芯国际 48767.69 10.36 2.24 1.86 688627 精智达 30098.82 10.22 6.17 6.19 688041",
+            "发布时间": "2026-08-31 16:40:00",
+            "文章来源": "证券时报网",
+            "新闻链接": "http://finance.eastmoney.com/a/202608313860127380.html"
+          },
+          {
+            "关键词": "688041",
+            "新闻标题": "电子行业今日涨1.97%，主力资金净流入52.57亿元",
+            "新闻内容": "2.42 11.52 44734.22 001309 德明利 1.74 8.10 41408.16 002475 立讯精密 1.80 1.29 39580.60 002463 沪电股份 2.64 2.58 31619.90 601138 工业富联 1.25 0.55 31128.99 688041",
+            "发布时间": "2026-08-31 16:40:00",
+            "文章来源": "证券时报网",
+            "新闻链接": "http://finance.eastmoney.com/a/202608313860148932.html"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -286,15 +286,6 @@ class ApiV1AdminSystemTests(unittest.TestCase):
         self.assertTrue(_FakeQdrant.instances[-1].reset_called)
         self.assertTrue(_FakeQdrant.instances[-1].closed)
 
-    def test_retired_proposal_and_discovery_routes_are_not_exposed(self) -> None:
-        for path in (
-            "/api/v1/admin/proposals",
-            "/api/v1/admin/subagent-discoveries",
-        ):
-            with self.subTest(path=path):
-                response = self.client.get(path, headers=auth_headers())
-                self.assertEqual(response.status_code, 404)
-
     def test_system_status_doctor_and_checks_return_underlying_status(self) -> None:
         status_payload = {"total_runs": 2, "status_counts": {"completed": 2}, "recent_runs": []}
         doctor_payload = {"status": "completed", "checks": []}

@@ -59,6 +59,60 @@ class DynamicApiValidationTests(unittest.TestCase):
         )
         self.assertEqual(request.constraints["investment_cycle"], "short_term")
 
+    def test_formal_report_accepts_only_an_iso_point_in_time_date(self) -> None:
+        request = validate_research_request(
+            RequestEnvelope(
+                intent="stock_check",
+                user_query="回看 600519",
+                constraints={
+                    "research_profile": "lite",
+                    "analysis_as_of_date": "2026-08-20",
+                },
+            )
+        )
+        self.assertEqual(request.constraints["analysis_as_of_date"], "2026-08-20")
+
+        with self.assertRaises(ApiError) as invalid:
+            validate_research_request(
+                RequestEnvelope(
+                    intent="stock_check",
+                    user_query="回看 600519",
+                    constraints={
+                        "research_profile": "lite",
+                        "analysis_as_of_date": "2026-02-30",
+                    },
+                )
+            )
+        self.assertEqual(invalid.exception.code, "invalid_constraint")
+
+    def test_formal_report_accepts_only_a_complete_manifest_pin(self) -> None:
+        request = validate_research_request(
+            RequestEnvelope(
+                intent="stock_check",
+                user_query="使用冻结输入分析 600519",
+                constraints={
+                    "research_profile": "lite",
+                    "report_manifest_id": "01MANIFESTPIN",
+                    "report_manifest_hash": "A" * 64,
+                },
+            )
+        )
+        self.assertEqual(request.constraints["report_manifest_id"], "01MANIFESTPIN")
+        self.assertEqual(request.constraints["report_manifest_hash"], "a" * 64)
+
+        with self.assertRaises(ApiError) as incomplete:
+            validate_research_request(
+                RequestEnvelope(
+                    intent="stock_check",
+                    user_query="使用冻结输入分析 600519",
+                    constraints={
+                        "research_profile": "lite",
+                        "report_manifest_id": "01MANIFESTPIN",
+                    },
+                )
+            )
+        self.assertEqual(incomplete.exception.code, "invalid_constraint")
+
     def test_uzi_portfolio_batch_preserves_native_weight_parsing(self) -> None:
         request = validate_research_request(
             RequestEnvelope(

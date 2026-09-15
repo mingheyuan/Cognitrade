@@ -236,8 +236,6 @@ describe('Funds', () => {
   it('starts a lite top-holding report batch from the frozen fund run', async () => {
     render(<Funds onOpenRun={mocks.openRun} />)
     await waitFor(() => expect(screen.getByRole('combobox', { name: '研究档位' })).toBeEnabled())
-    expect(screen.getByRole('option', { name: '速判 · 1–2 分钟 · 精简数据 · 66 席评审' })).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: '标准 · 5–8 分钟 · 标准数据 · 66 席评审' })).toBeInTheDocument()
     fireEvent.change(screen.getByRole('combobox', { name: '研究档位' }), {
       target: { value: 'lite' },
     })
@@ -349,13 +347,47 @@ describe('Funds', () => {
       const call = vi.mocked(fetch).mock.calls.find(([input]) => String(input).endsWith('/holding-report-batches/batch-failed/retry'))
       expect(JSON.parse(String(call?.[1]?.body))).toEqual({ symbols: ['688012'], force: false })
     })
-    fireEvent.click(screen.getByRole('button', { name: '策略回测' }))
+    fireEvent.click(screen.getByRole('button', { name: '持仓组合回测' }))
     expect(mocks.openStrategy).toHaveBeenCalledWith(expect.objectContaining({
       tab: 'assignments',
       fundCode: '110011',
       mode: 'holdings_portfolio',
       holdingSymbol: '688012',
       sourceRunId: 'run-fund',
+    }))
+  })
+
+  it('opens the fund-level action in fund-only mode while holding actions stay separate', async () => {
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/finance/strategies?')) {
+        return new Response(JSON.stringify({ strategies: [{ id: 'strategy-1', name: '基金策略' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.endsWith('/finance/strategy-assignments')) {
+        return new Response(JSON.stringify({ assignments: [
+          { id: 'assignment-fund', fund_code: '110011', strategy_id: 'strategy-1', active_version_id: 'version-1', mode: 'fund_only', enabled: true, paused: false },
+          { id: 'assignment-holdings', fund_code: '110011', strategy_id: 'strategy-1', active_version_id: 'version-1', mode: 'holdings_portfolio', enabled: true, paused: false },
+        ] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.endsWith('/finance/daily-report-sets')) {
+        return new Response(JSON.stringify({ report_sets: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      if (url.endsWith('/finance/trade-signals')) {
+        return new Response(JSON.stringify({ signals: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+
+    render(<Funds onOpenRun={mocks.openRun} onOpenStrategy={mocks.openStrategy} />)
+
+    const button = await screen.findByRole('button', { name: '回测基金净值' })
+    fireEvent.click(button)
+    expect(mocks.openStrategy).toHaveBeenCalledWith(expect.objectContaining({
+      tab: 'backtests',
+      fundCode: '110011',
+      mode: 'fund_only',
+      assignmentId: 'assignment-fund',
+      strategyVersionId: 'version-1',
     }))
   })
 

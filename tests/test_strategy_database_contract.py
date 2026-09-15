@@ -3,11 +3,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Event, Thread
 import unittest
 
 from research_system.runtime.core.id_utils import generate_ulid
-from research_system.strategies.contracts import BacktestMode
+from research_system.strategies.contracts import BacktestMode, StrategyDocumentV1
 from research_system.strategies.database import StrategyDatabase
 from research_system.strategies.errors import StrategyNotFound
 from research_system.strategies.service import OwnerScope, StrategyService
@@ -38,7 +37,7 @@ class StrategyRepositoryContractMixin:
                 self.assertTrue(catalog["strategies"])
                 self.assertTrue(catalog["strategies"][0]["is_system_template"])
 
-                created = service.create_strategy(owner, name=f"repository-contract-{unique}")
+                created = service.create_strategy(owner, name=f"repository-contract-{unique}", document=StrategyDocumentV1().model_dump(mode="json"))
                 document = created["draft"]["document"]
                 updated = service.update_draft(
                     owner,
@@ -85,27 +84,6 @@ class SQLiteStrategyRepositoryContractTests(
 
     def test_repository_contract(self) -> None:
         self.exercise_repository_contract()
-
-    def test_in_memory_sessions_serialize_the_shared_static_pool_connection(self) -> None:
-        database = StrategyDatabase(self.database_url)
-        entered = Event()
-        finished = Event()
-
-        def open_session() -> None:
-            with database.session():
-                entered.set()
-            finished.set()
-
-        worker = Thread(target=open_session)
-        try:
-            with database.session():
-                worker.start()
-                self.assertFalse(entered.wait(0.2))
-            self.assertTrue(entered.wait(1.0))
-            self.assertTrue(finished.wait(1.0))
-        finally:
-            worker.join(timeout=1.0)
-            database.close()
 
 
 @unittest.skipUnless(

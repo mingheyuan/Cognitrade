@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Event, Semaphore
 from typing import Any, Callable
@@ -49,6 +49,7 @@ class ExecutionNodeContext:
     artifact_board: ArtifactBoard
     cache_root: Path
     cancellation: Event
+    deadline_at: float | None = None
     tool_registry: CoreToolRegistry | None = None
     skill_runtime: Any | None = None
     memory_store: Any | None = None

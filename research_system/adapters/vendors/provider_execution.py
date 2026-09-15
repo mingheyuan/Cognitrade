@@ -47,7 +47,14 @@ def execute_provider_chain(
             facts = dict(loader() or {})
         except Exception as exc:  # provider boundaries must never leak raw transport errors
             last_status = classify_provider_exception(exc)
-            trace.append(_trace(provider, position, last_status, error_type=exc.__class__.__name__))
+            trace.append(
+                _trace(
+                    provider,
+                    position,
+                    last_status,
+                    error_type=safe_provider_error_type(exc),
+                )
+            )
             continue
         if not _has_usable_data(facts):
             last_status = "no_data"
@@ -84,6 +91,34 @@ def classify_provider_exception(exc: Exception) -> DataAvailability:
     ):
         return "parse_failed"
     return "provider_unavailable"
+
+
+def safe_provider_error_type(exc: Exception) -> str:
+    """Return a stable, non-sensitive provider failure category.
+
+    Some SDKs raise a plain ``Exception`` for an entitlement failure.  Keeping
+    only the Python class made the data centre report that case as an opaque
+    source outage.  The categories below deliberately disclose no response
+    body, token or request URL; they only preserve the operational distinction
+    needed to decide whether retrying can help.
+    """
+
+    message = str(exc).lower()
+    if any(
+        token in message
+        for token in (
+            "没有接口",
+            "无权限",
+            "permission denied",
+            "not authorized",
+            "unauthorized",
+            "forbidden",
+        )
+    ):
+        return "PermissionDenied"
+    if any(token in message for token in ("429", "rate limit", "too many requests")):
+        return "RateLimited"
+    return exc.__class__.__name__
 
 
 def failure_facts(status: DataAvailability) -> dict[str, Any]:

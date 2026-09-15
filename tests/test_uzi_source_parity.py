@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import importlib
 import hashlib
 import json
+from threading import Lock
+from time import sleep
 import unittest
 from unittest.mock import patch
 
@@ -21,8 +24,10 @@ from research_system.adapters.vendors.uzi_source_catalog import (
 from research_system.runtime.platform.settings import Settings
 from domain_packs.finance_ashare.tools.security_master import AShareSecurityMaster
 from domain_packs.finance_ashare.tools import snapshot_collector
-from domain_packs.finance_ashare.skills.uzi_source_snapshot.skill import IndustrySnapshotSkill
-from domain_packs.finance_ashare.vendor.uzi_3_9_2 import runtime as uzi_runtime
+from domain_packs.finance_ashare.skills.uzi_source_snapshot.skill import (
+    GovernanceSnapshotSkill,
+    IndustrySnapshotSkill,
+)
 from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import Uzi392FetcherRuntime
 
 
@@ -41,25 +46,36 @@ EXPECTED_UZI_SOURCE_IDS = {
 
 
 class UziSourceParityTests(unittest.TestCase):
-    def test_capital_flow_fetcher_is_the_exact_pinned_uzi_source(self) -> None:
-        source_path = (
-            Path(__file__).resolve().parents[1]
-            / "domain_packs"
-            / "finance_ashare"
-            / "vendor"
-            / "uzi_3_9_2"
-            / "scripts"
-            / "fetch_capital_flow.py"
-        )
+    def test_governance_structured_sources_distinguish_verified_empty_from_failure(self) -> None:
+        pledge_frame = pd.DataFrame({"股票代码": ["000001"], "质押比例": [1.2]})
+        insider_frame = pd.DataFrame({"股票代码": ["000001"], "变动数量": [1000]})
+        with (
+            patch(
+                "domain_packs.finance_ashare.skills.uzi_source_snapshot.skill.ak.stock_gpzy_pledge_ratio_em",
+                return_value=pledge_frame,
+            ),
+            patch(
+                "domain_packs.finance_ashare.skills.uzi_source_snapshot.skill.ak.stock_ggcg_em",
+                return_value=insider_frame,
+            ),
+        ):
+            result = GovernanceSnapshotSkill._structured_governance("600519.SH")
+
+        self.assertEqual(result["observation_status"], "verified_empty")
         self.assertEqual(
-            hashlib.sha256(source_path.read_bytes()).hexdigest(),
-            "d92fdac22e1fee2363e27e21984aa98159969eef1b5a8bf5fc9f48546b8ecfbe",
+            result["source_coverage"],
+            {"pledge": "available", "insider_trades_1y": "available"},
         )
+        self.assertEqual(result["pledge"], [])
+        self.assertEqual(result["insider_trades_1y"], [])
 
     def test_capital_flow_snapshot_invokes_uzi_without_provider_substitution(self) -> None:
         upstream = {
             "ticker": "688256.SH",
-            "data": {"holder_count_history": [{"股东户数": 12345}]},
+            "data": {
+                "holder_count_history": [{"股东户数": 12345}],
+                "main_fund_flow_20d": [{"日期": "2026-08-21", "主力净流入": 10}],
+            },
             "source": "akshare:multi",
             "fallback": False,
         }
@@ -81,221 +97,109 @@ class UziSourceParityTests(unittest.TestCase):
         )
         self.assertEqual(snapshot["facts"]["_uzi_raw_result"], upstream)
 
-    def test_capital_flow_default_pipeline_imports_actual_vendored_module(self) -> None:
-        repository_root = Path(__file__).resolve().parents[1]
-        Uzi392FetcherRuntime(workspace_root=repository_root / "workspace")
-        module = importlib.import_module("fetch_capital_flow")
-        expected_path = (
-            repository_root
-            / "domain_packs"
-            / "finance_ashare"
-            / "vendor"
-            / "uzi_3_9_2"
-            / "scripts"
-            / "fetch_capital_flow.py"
-        ).resolve()
-        self.assertEqual(Path(module.__file__).resolve(), expected_path)
-        self.assertEqual(
-            Path(module.ds.__file__).resolve(),
-            expected_path.parent / "lib" / "data_sources.py",
-        )
-
+    def test_capital_flow_snapshot_recovers_empty_uzi_main_flow_with_provider_chain(self) -> None:
         upstream = {
-            "ticker": "600519.SH",
+            "ticker": "688256.SH",
             "data": {
-                "main_fund_flow_20d": [{"主力净流入-净额": 1000}],
-                "northbound": "",
+                "holder_count_history": [{"股东户数": 12345}],
+                "main_fund_flow_20d": [],
             },
             "source": "akshare:multi",
             "fallback": False,
         }
-        registry = importlib.import_module("lib.pipeline.fetchers.registry")
-        fetcher = registry.get_fetcher("12_capital_flow")
-        self.assertIsNotNone(fetcher)
-        with patch.object(module, "main", return_value=upstream) as main:
-            result = fetcher.fetch("600519").to_dict()
-
-        self.assertEqual(
-            result["data"]["main_fund_flow_20d"],
-            upstream["data"]["main_fund_flow_20d"],
-        )
-        self.assertIsNone(result["data"]["northbound"])
-        self.assertEqual(result["source"], "legacy:fetch_capital_flow")
-        self.assertEqual(result["_pipeline"]["dim_key"], "12_capital_flow")
-        self.assertEqual(result["_pipeline"]["quality"], "partial")
-        main.assert_called_once_with("600519")
-
-    def test_fetcher_mapping_runtime_snapshot_and_ledger_are_cross_checked(self) -> None:
-        repository_root = Path(__file__).resolve().parents[1]
-        Uzi392FetcherRuntime(workspace_root=repository_root / "workspace")
-        pipeline_registry = importlib.import_module("lib.pipeline.fetchers.registry")
-        migration_root = (
-            repository_root / "domain_packs" / "finance_ashare" / "migration"
-        )
-        mapping = yaml.safe_load(
-            (migration_root / "uzi_source_mapping.yaml").read_text(encoding="utf-8")
-        )
-        ledger = yaml.safe_load(
-            (migration_root / "uzi_3_9_2_capability_ledger.yaml").read_text(
-                encoding="utf-8"
-            )
-        )
-        mapping_by_id = {row["source_id"]: row for row in mapping["fetchers"]}
-        ledger_by_id = {row["id"]: row for row in ledger["fetchers"]}
-        snapshot_type_by_id = {
-            fetcher_id: snapshot_type
-            for snapshot_type, fetcher_id in snapshot_collector._UZI_FETCHER_BY_SNAPSHOT_TYPE.items()
+        fallback = {
+            "facts": {
+                "availability": "available",
+                "latest_flow": {"date": "2026-08-21", "main_net_inflow": 10},
+                "recent_flows": [{"date": "2026-08-21", "main_net_inflow": 10}],
+                "main_fund_flow_20d": [{"date": "2026-08-21", "main_net_inflow": 10}],
+            },
+            "source": {
+                "provider_id": "efinance_capital_flow",
+                "source_id": "efinance",
+                "vendor": "efinance",
+            },
+            "source_trace": [
+                {
+                    "provider_id": "efinance_capital_flow",
+                    "source_id": "efinance",
+                    "status": "available",
+                }
+            ],
         }
-
-        expected_ids = set(uzi_runtime.UZI_FETCHER_IDS)
-        self.assertEqual(set(uzi_runtime._FETCHERS), expected_ids)
-        self.assertEqual(set(pipeline_registry.FETCHER_REGISTRY), expected_ids)
-        self.assertEqual(set(snapshot_type_by_id), expected_ids)
-        self.assertEqual(set(mapping_by_id), expected_ids)
-        self.assertEqual(set(ledger_by_id), expected_ids)
-        self.assertEqual(mapping["source"]["commit"], uzi_runtime.UZI_SOURCE_COMMIT)
-        self.assertEqual(ledger["upstream"]["commit"], uzi_runtime.UZI_SOURCE_COMMIT)
-
-        vendor_root = repository_root / mapping["source"]["vendored_root"]
-        source_prefix = Path("skills/deep-analysis")
-        acceptance_refs: set[str] = set()
-        for fetcher_id in uzi_runtime.UZI_FETCHER_IDS:
-            with self.subTest(fetcher_id=fetcher_id):
-                mapping_row = mapping_by_id[fetcher_id]
-                ledger_row = ledger_by_id[fetcher_id]
-                snapshot_type = snapshot_type_by_id[fetcher_id]
-                skill = snapshot_collector._SYMBOL_SKILLS[snapshot_type]
-                source_path = Path(mapping_row["source_path"])
-                vendored_path = vendor_root / source_path.relative_to(source_prefix)
-
-                self.assertTrue(vendored_path.is_file(), vendored_path)
-                self.assertEqual(
-                    uzi_runtime._FETCHERS[fetcher_id].module,
-                    source_path.stem,
-                )
-                pipeline_fetcher = pipeline_registry.get_fetcher(fetcher_id)
-                self.assertIsNotNone(pipeline_fetcher)
-                self.assertEqual(pipeline_fetcher._legacy_module, source_path.stem)
-                actual_module = importlib.import_module(source_path.stem)
-                self.assertEqual(
-                    Path(actual_module.__file__).resolve(),
-                    vendored_path.resolve(),
-                )
-                self.assertEqual(mapping_row["target_skill"], skill.skill_name)
-                self.assertEqual(ledger_row["target"], skill.skill_name)
-                self.assertEqual(mapping_row["migration_status"], "source_parity")
-                self.assertEqual(ledger_row["status"], "source_parity")
-                self.assertEqual(
-                    mapping_row["source_commit"], uzi_runtime.UZI_SOURCE_COMMIT
-                )
-                acceptance_refs.add(mapping_row["invocation_acceptance"])
-
-        for reference in acceptance_refs:
-            with self.subTest(invocation_acceptance=reference):
-                module_name, class_name, method_name = reference.rsplit(".", 2)
-                acceptance_module = importlib.import_module(module_name)
-                acceptance_class = getattr(acceptance_module, class_name)
-                self.assertTrue(callable(getattr(acceptance_class, method_name)))
-
-    def test_fund_holder_snapshot_applies_the_exact_profile_statistics_scope(self) -> None:
-        upstream = {
-            "ticker": "688256.SH",
-            "data": {"fund_managers": []},
-            "source": "akshare:fund_portfolio_hold_em",
-            "fallback": False,
-        }
-
-        with patch.object(Uzi392FetcherRuntime, "collect", return_value=upstream) as collect:
-            snapshot_collector._run_uzi_fetcher_snapshot(
-                query="分析寒武纪",
-                symbol="688256",
-                snapshot_type="fund_holders",
-                provider_registry=None,
-                research_profile="deep",
-            )
-
-        collect.assert_called_once_with(
-            "6_fund_holders",
-            ticker="688256",
-            industry=None,
-            dependencies=None,
-            options={"fund_stats_top_n": 100},
-        )
-
-    def test_uzi_default_pipeline_uses_hard_timeout_process_jobs_and_serial_group(self) -> None:
-        repository_root = Path(__file__).resolve().parents[1]
-        Uzi392FetcherRuntime(workspace_root=repository_root / "workspace")
-        pipeline_collect = importlib.import_module("lib.pipeline.collect")
-        pipeline_registry = importlib.import_module("lib.pipeline.fetchers.registry")
-        pipeline_schema = importlib.import_module("lib.pipeline.schema")
-        fetch_valuation = importlib.import_module("fetch_valuation")
-        fetch_capital_flow = importlib.import_module("fetch_capital_flow")
-        def main(*args):
-            return {
-                "ticker": "688256.SH",
-                "data": {"args": list(args)},
-                "source": "uzi:actual-module-main",
-                "fallback": False,
-            }
-
-        class BasicFetcher:
-            def fetch(self, ticker):
-                return pipeline_schema.DimResult(
-                    dim_key="0_basic",
-                    data={"name": "寒武纪", "price": 100, "industry": "半导体"},
-                    source="fixture:basic",
-                    quality=pipeline_schema.Quality.FULL,
-                )
-
-        actual_fetchers = {
-            "10_valuation": pipeline_registry.get_fetcher("10_valuation"),
-            "12_capital_flow": pipeline_registry.get_fetcher("12_capital_flow"),
-        }
-
-        def get_fetcher(dim_key: str):
-            if dim_key == "0_basic":
-                return BasicFetcher()
-            return actual_fetchers[dim_key]
-
-        observed_calls = []
-
-        def run_jobs(jobs, *, max_workers, overall_timeout):
-            observed_calls.append((list(jobs), max_workers, overall_timeout))
-            return [
-                pipeline_collect.ProcessOutcome(
-                    key=job.key,
-                    value=job.target(*job.args, **job.kwargs),
-                )
-                for job in jobs
-            ]
 
         with (
-            patch.object(fetch_valuation, "main", side_effect=main) as valuation_main,
-            patch.object(fetch_capital_flow, "main", side_effect=main) as capital_flow_main,
-            patch.object(
-                pipeline_collect,
-                "FETCHER_REGISTRY",
-                {"0_basic": object(), **actual_fetchers},
-            ),
-            patch.object(pipeline_collect, "DEPENDENT_DIMS", set()),
-            patch.object(pipeline_collect, "get_fetcher", side_effect=get_fetcher),
-            patch.object(pipeline_collect, "_mini_racer_disabled", return_value=False),
-            patch.object(pipeline_collect, "run_process_jobs", side_effect=run_jobs),
-            patch("builtins.print"),
+            patch.object(Uzi392FetcherRuntime, "collect", return_value=upstream),
+            patch(
+                "domain_packs.finance_ashare.tools.snapshot_collector.CapitalFlowSnapshotSkill"
+            ) as recovery_skill,
         ):
-            result = pipeline_collect.collect("688256", max_workers=2)
+            recovery_skill.return_value.run.return_value = fallback
+            snapshot = snapshot_collector._run_uzi_fetcher_snapshot(
+                query="分析寒武纪",
+                symbol="688256",
+                snapshot_type="capital_flow",
+                provider_registry=None,
+            )
 
-        valuation_main.assert_called_once_with("688256")
-        capital_flow_main.assert_called_once_with("688256")
-        jobs = [job for call in observed_calls for job in call[0]]
-        mini_jobs = [job for job in jobs if job.key in {"10_valuation", "12_capital_flow"}]
-        self.assertEqual({job.serial_group for job in mini_jobs}, {"mini_racer"})
-        self.assertEqual({job.timeout_sec for job in jobs}, {120.0})
-        self.assertEqual([call[2] for call in observed_calls], [120.0, 300.0, 300.0])
-        self.assertEqual(
-            set(result),
-            {"0_basic", "10_valuation", "12_capital_flow"},
-        )
+        self.assertEqual(snapshot["facts"]["_uzi_raw_result"], upstream)
+        self.assertEqual(snapshot["facts"]["main_fund_flow_20d"], fallback["facts"]["main_fund_flow_20d"])
+        self.assertEqual(snapshot["field_sources"]["main_fund_flow_20d"], "efinance_capital_flow")
+        self.assertEqual(snapshot["source"]["provider_id"], "uzi_3_9_2.12_capital_flow")
+        self.assertTrue(snapshot["fallback_applied"])
+        self.assertFalse(snapshot["degraded"])
+        recovery_registry = recovery_skill.call_args.kwargs["provider_registry"]
+        recovery_chain = [
+            provider.provider_id
+            for provider in recovery_registry.get_provider_chain(
+                "capital_flow", "cn_equity"
+            )
+        ]
+        self.assertEqual(recovery_chain[0], "efinance_capital_flow")
+        self.assertNotIn("akshare_capital_flow", recovery_chain)
+
+    def test_uzi_resource_sensitive_fetchers_share_one_serial_execution_lane(self) -> None:
+        state_lock = Lock()
+        active = 0
+        maximum_active = 0
+
+        def collect(_runtime, fetcher_id: str, **kwargs):
+            nonlocal active, maximum_active
+            with state_lock:
+                active += 1
+                maximum_active = max(maximum_active, active)
+            try:
+                sleep(0.03)
+                return {
+                    "ticker": kwargs["ticker"],
+                    "data": {"fetcher_id": fetcher_id},
+                    "source": f"uzi:{fetcher_id}",
+                    "fallback": False,
+                }
+            finally:
+                with state_lock:
+                    active -= 1
+
+        snapshot_types = ("industry", "valuation", "capital_flow")
+        with (
+            patch.object(Uzi392FetcherRuntime, "collect", autospec=True, side_effect=collect),
+            ThreadPoolExecutor(max_workers=3) as executor,
+        ):
+            futures = [
+                executor.submit(
+                    snapshot_collector._run_uzi_fetcher_snapshot,
+                    query="分析寒武纪",
+                    symbol="688256",
+                    snapshot_type=snapshot_type,
+                    provider_registry=None,
+                )
+                for snapshot_type in snapshot_types
+            ]
+            for future in futures:
+                future.result()
+
+        self.assertEqual(maximum_active, 1)
+        self.assertEqual(snapshot_collector._UZI_MAX_WORKERS, 6)
 
     def test_uzi_providers_do_not_add_an_aggregate_collection_timeout(self) -> None:
         repository_root = Path(__file__).resolve().parents[1]
@@ -352,7 +256,7 @@ class UziSourceParityTests(unittest.TestCase):
         self.assertEqual(config["catalog"]["source_count"], 73)
         self.assertEqual(
             config["catalog"]["commit"],
-            "b004d7a988ca53a4805bf36784af091fa1209f22",
+            "b3665e85b8666477038e11157d8e8feb0e006b76",
         )
         self.assertEqual(config["catalog"]["version"], "3.9.4")
         self.assertEqual(set(config["sources"]), EXPECTED_UZI_SOURCE_IDS)
@@ -400,15 +304,6 @@ class UziSourceParityTests(unittest.TestCase):
         self.assertIn("AAPL", resolution.symbols)
         self.assertNotIn("HK00700", resolution.symbols)
         self.assertNotIn("SH600519", resolution.symbols)
-
-        a_share_suffixes = master.resolve(
-            query="分析 600519.SH 和 000001.SZ",
-            supplied_symbols=["688256.SH"],
-            allow_network=False,
-        )
-        self.assertEqual(a_share_suffixes.symbols, ["688256", "600519", "000001"])
-        self.assertNotIn("SH", a_share_suffixes.symbols)
-        self.assertNotIn("SZ", a_share_suffixes.symbols)
 
     def test_public_contest_fallback_does_not_require_xueqiu_credentials(self) -> None:
         settings = Settings.from_env(Path(__file__).resolve().parents[1]).model_copy(

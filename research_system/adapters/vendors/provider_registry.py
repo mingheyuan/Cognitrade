@@ -322,6 +322,17 @@ class VendorProviderRegistry:
                 notes="Primary capital flow snapshot provider.",
             ),
             ProviderSpec(
+                provider_id="efinance_capital_flow",
+                source_id="efinance",
+                vendor_name="efinance",
+                markets=("cn", "cn_equity"),
+                dims=("capital_flow",),
+                access="sdk",
+                dependency="efinance",
+                priority=20,
+                notes="Zero-key EastMoney individual capital-flow fallback.",
+            ),
+            ProviderSpec(
                 provider_id="tushare_capital_flow",
                 source_id="tushare",
                 vendor_name="tushare",
@@ -330,7 +341,7 @@ class VendorProviderRegistry:
                 access="api",
                 requires_key=True,
                 dependency="tushare",
-                priority=20,
+                priority=30,
                 notes="TuShare moneyflow fallback; account points and interface permission apply.",
             ),
             ProviderSpec(

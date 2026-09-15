@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-import hashlib
-import json
+import math
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Callable, Iterable
 
-from research_system.strategies.backtesting.instruments import AssetType, TradableInstrument
+from research_system.strategies.backtesting.instruments import (
+    AssetType,
+    TradableInstrument,
+)
+from research_system.strategies.backtesting.result_store import json_content_hash
 from research_system.strategies.errors import StrategyDomainError
 
 
@@ -32,9 +35,63 @@ SeriesLoader = Callable[[TradableInstrument, date, date, date], Iterable[dict[st
 
 
 class MarketDataGateway:
-    def __init__(self, market_data=None, *, series_loader: SeriesLoader | None = None) -> None:
+    def __init__(self, market_data=None, *, series_loader: SeriesLoader | None = None, database=None) -> None:
         self.market_data = market_data
         self.series_loader = series_loader
+        self.database = database
+
+    def get_frozen_series(
+        self, instrument: TradableInstrument, *, start_date: date, end_date: date, as_of_date: date,
+    ) -> MarketSeries:
+        """V2 uses only already-collected data, never the legacy live fallback."""
+        from research_system.strategies.backtesting.frozen_market_series import (
+            read_frozen_market_rows,
+        )
+
+        if end_date > as_of_date:
+            raise StrategyDomainError("market_data_as_of_violation", "行情结束日期不能晚于 as_of_date")
+        if self.series_loader is not None:
+            rows = list(self.series_loader(instrument, start_date, end_date, as_of_date))
+            source = {"provider": "injected_series_loader", "evidence_mode": "fixture", "adjustment": "raw", "currency": "CNY", "price_unit": "per_share"}
+        else:
+            rows, source = read_frozen_market_rows(
+                self.database, instrument, start_date=start_date, end_date=end_date, as_of_date=as_of_date,
+            )
+        # Missing open must remain missing: a synthetic close-as-open would
+        # manufacture an execution price that the outcome data never contained.
+        normalised = self._normalise_frozen(rows, start_date=start_date, end_date=end_date)
+        if not normalised:
+            raise StrategyDomainError("market_history_missing_in_data_center", "冻结行情区间没有有效收盘价", status_code=409)
+        digest = json_content_hash({"instrument": instrument.payload(), "bars": normalised, "source": source, "as_of_date": as_of_date})
+        missing_open = tuple(f"real_open_missing:{bar['date']}" for bar in normalised if bar["open"] is None)
+        return MarketSeries(instrument, tuple(normalised), digest, source, missing_open)
+
+    @staticmethod
+    def _normalise_frozen(rows: Iterable[dict[str, Any]], *, start_date: date, end_date: date) -> list[dict[str, Any]]:
+        """The legacy normalizer fills prices; replay must preserve real facts."""
+        by_date: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            day = _date(row.get("date") or row.get("datetime") or row.get("as_of") or row.get("日期"))
+            if day is None or not start_date <= day <= end_date:
+                continue
+            close = _finite_positive(row.get("close"), row.get("收盘"))
+            if close is None:
+                raise StrategyDomainError("market_close_unverified", "冻结行情缺少有效真实收盘价", status_code=409, details={"date": day.isoformat()})
+            bar = {
+                "date": day.isoformat(),
+                "open": _finite_positive(row.get("open"), row.get("开盘")),
+                "high": _finite_positive(row.get("high"), row.get("最高")),
+                "low": _finite_positive(row.get("low"), row.get("最低")),
+                "close": close,
+                "volume": _number(row.get("volume"), row.get("成交量")),
+                "amount": _number(row.get("amount"), row.get("成交额")),
+            }
+            if day.isoformat() in by_date and by_date[day.isoformat()] != bar:
+                raise StrategyDomainError("market_duplicate_date_conflict", "冻结行情同一交易日存在冲突价格", status_code=409, details={"date": day.isoformat()})
+            by_date[day.isoformat()] = bar
+        return [by_date[key] for key in sorted(by_date)]
 
     def get_series(
         self,
@@ -61,6 +118,7 @@ class MarketDataGateway:
                 instrument,
                 start_date=start_date,
                 end_date=end_date,
+                as_of_date=as_of_date,
             )
         elif instrument.asset_type == AssetType.INDEX:
             rows, source = self._index_rows(
@@ -71,14 +129,20 @@ class MarketDataGateway:
         else:
             if self.market_data is None:
                 raise StrategyDomainError("market_data_gateway_unavailable", "行情服务不可用", status_code=503)
-            payload = self.market_data.get_market_data(instrument.code, refresh=False)
-            rows = list(payload.get("sections", {}).get("kline", {}).get("bars") or [])
+            payload = self.market_data.get_market_data(
+                instrument.code,
+                refresh=False,
+                as_of_date=as_of_date,
+            )
+            rows = self._kline_rows(payload)
             source = dict(payload.get("sources", {}).get("kline") or {})
         bars = self._normalise(rows, start_date=start_date, end_date=end_date, asset_type=instrument.asset_type)
         if not bars:
             code = "fund_nav_history_unavailable" if instrument.asset_type == AssetType.OTC_FUND else "market_history_unavailable"
             raise StrategyDomainError(code, f"{instrument.name} 在请求区间没有可审计行情", status_code=409)
-        digest = _hash({"instrument": instrument.payload(), "bars": bars, "as_of_date": as_of_date})
+        digest = json_content_hash(
+            {"instrument": instrument.payload(), "bars": bars, "as_of_date": as_of_date}
+        )
         degraded: list[str] = []
         if instrument.asset_type == AssetType.OTC_FUND and any(
             row.get("purchase_open") is None or row.get("redemption_open") is None for row in bars
@@ -189,11 +253,16 @@ class MarketDataGateway:
         *,
         start_date: date,
         end_date: date,
+        as_of_date: date,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         if self.market_data is not None:
             try:
-                payload = self.market_data.get_market_data(instrument.code, refresh=False)
-                rows = list(payload.get("sections", {}).get("kline", {}).get("bars") or [])
+                payload = self.market_data.get_market_data(
+                    instrument.code,
+                    refresh=False,
+                    as_of_date=as_of_date,
+                )
+                rows = self._kline_rows(payload)
                 if rows:
                     return rows, dict(payload.get("sources", {}).get("kline") or {})
             except Exception:
@@ -237,6 +306,22 @@ class MarketDataGateway:
             status_code=409,
             details={"provider_attempts": diagnostics},
         )
+
+    @staticmethod
+    def _kline_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        """Read both legacy ``bars`` and Bundle-native ``ohlcv`` projections."""
+
+        sections = payload.get("sections") if isinstance(payload.get("sections"), dict) else {}
+        kline = sections.get("kline") if isinstance(sections.get("kline"), dict) else {}
+        history = kline.get("history") if isinstance(kline.get("history"), dict) else {}
+        rows = (
+            kline.get("bars")
+            or kline.get("ohlcv")
+            or history.get("bars")
+            or history.get("ohlcv")
+            or []
+        )
+        return [dict(row) for row in rows if isinstance(row, dict)]
 
     @staticmethod
     def _index_rows(
@@ -297,14 +382,6 @@ class MarketDataGateway:
         )
 
 
-def _hash(payload: Any) -> str:
-    return hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode(
-            "utf-8"
-        )
-    ).hexdigest()
-
-
 def _date(value: Any) -> date | None:
     if value is None or value == "":
         return None
@@ -323,6 +400,11 @@ def _number(*values: Any) -> float | None:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _finite_positive(*values: Any) -> float | None:
+    value = _number(*values)
+    return value if value is not None and math.isfinite(value) and value > 0 else None
 
 
 def _open_status(*values: Any) -> bool | None:

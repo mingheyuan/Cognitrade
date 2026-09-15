@@ -967,7 +967,7 @@ python run.py <股票代码> --no-browser      # 强制不打开浏览器
 |---|---|---|
 | `KeyError: 'skip'` | preview_with_mock.py 加 'skip' key + .get() 兜底 | 无 |
 | 失败卡死整条 pipeline | as_completed/result 加 90s timeout，单 fetcher 超时不影响其他 | 不要绕过 timeout 重试 |
-| 中断不能续跑 | stage1 默认 `--resume`，每 3 个 fetcher 增量保存 raw_data.json | 不要手动 `--no-resume` 除非真要重抓 |
+| 中断不能续跑 | stage1 默认 `--resume`，每 3 个 fetcher 增量保存 raw_data.json；建模段可用 `python run.py <ticker> --from-modeling` 从缓存接力 | 不要手动 `--no-resume` 除非真要重抓 |
 | Python 3.9 语法报错 | 所有新文件加 `from __future__ import annotations` | 无 |
 | mini_racer V8 thread crash | 给 fetch_industry/capital_flow/valuation 加共享锁 | 无 |
 | share/war report 渲染失败 | render_*.py 加 main() alias | 无 |

@@ -29,6 +29,34 @@ from research_system.strategies.signals import SignalEngineService, decide_signa
 
 
 class StrategyContractTests(unittest.TestCase):
+    def test_old_otc_contract_defaults_preserve_single_all_in_entry(self) -> None:
+        payload = StrategyDocumentV1().model_dump(mode="json")
+        for key in (
+            "max_position_pct",
+            "entry_tranche_pct",
+            "max_entry_tranches",
+            "minimum_entry_interval_days",
+        ):
+            payload["asset_execution"]["otc_fund"].pop(key)
+
+        restored = StrategyDocumentV1.model_validate(payload)
+        rules = restored.asset_execution.otc_fund
+        self.assertEqual(rules.max_position_pct, 100.0)
+        self.assertEqual(rules.entry_tranche_pct, 100.0)
+        self.assertEqual(rules.max_entry_tranches, 1)
+        self.assertEqual(rules.minimum_entry_interval_days, 0)
+
+    def test_report_analysis_profile_is_versioned_and_selectable(self) -> None:
+        hashes: set[str] = set()
+        for profile in ("lite", "medium", "deep"):
+            payload = StrategyDocumentV1().model_dump(mode="json")
+            payload["report_inputs"]["research_profile"] = profile
+            document = StrategyDocumentV1.model_validate(payload)
+            self.assertEqual(document.report_inputs.research_profile, profile)
+            hashes.add(strategy_content_hash(document))
+
+        self.assertEqual(len(hashes), 3)
+
     def test_canonical_hash_is_order_independent_and_unknown_fields_are_rejected(self) -> None:
         document = StrategyDocumentV1()
         payload = document.model_dump(mode="json")
@@ -136,7 +164,7 @@ class StrategyPersistenceTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def _published_assignment(self) -> tuple[dict, dict, dict]:
-        strategy = self.service.create_strategy(self.owner, name="日报策略")
+        strategy = self.service.create_strategy(self.owner, name="日报策略", document=StrategyDocumentV1().model_dump(mode="json"))
         version = self.service.publish(self.owner, strategy["id"])
         assignment = self.service.create_assignment(
             self.owner,

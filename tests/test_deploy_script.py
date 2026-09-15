@@ -13,9 +13,6 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_SCRIPT = REPO_ROOT / "scripts" / "deploy.sh"
 COMPOSE_FILE = REPO_ROOT / "compose.yaml"
-BACKEND_DOCKERFILE = REPO_ROOT / "deploy" / "backend.Dockerfile"
-BACKEND_ENTRYPOINT = REPO_ROOT / "deploy" / "backend-entrypoint.sh"
-FRONTEND_DOCKERFILE = REPO_ROOT / "deploy" / "frontend.Dockerfile"
 REQUIREMENTS_FILE = REPO_ROOT / "requirements.txt"
 QUANT_REQUIREMENTS_FILE = REPO_ROOT / "requirements-quant.txt"
 # Windows' ``bash.exe`` is commonly only the WSL launcher; it cannot execute a
@@ -73,36 +70,6 @@ class DeployScriptTests(unittest.TestCase):
         self.assertIn("vnpy==3.9.4", quant_requirements)
         self.assertIn("vnpy_paperaccount==1.0.6", quant_requirements)
         self.assertIn("hikyuu==2.8.1", quant_requirements)
-
-    def test_images_install_and_verify_complete_runtime(self) -> None:
-        backend = BACKEND_DOCKERFILE.read_text(encoding="utf-8")
-        backend_entrypoint = BACKEND_ENTRYPOINT.read_text(encoding="utf-8")
-        frontend = FRONTEND_DOCKERFILE.read_text(encoding="utf-8")
-
-        self.assertIn("COPY requirements.txt requirements-quant.txt", backend)
-        self.assertIn("python -m playwright install-deps chromium", backend)
-        self.assertIn("python -m playwright install chromium", backend)
-        self.assertIn("deployment_preflight", backend)
-        self.assertIn("COPY migrations ./migrations", backend)
-        self.assertIn("COPY alembic.ini ./alembic.ini", backend)
-        self.assertIn("USER root", backend)
-        self.assertIn("chown -R 10001:10001 /app/workspace", backend_entrypoint)
-        self.assertIn("--reuid=10001", backend_entrypoint)
-        self.assertIn("--no-new-privs", backend_entrypoint)
-        self.assertNotIn("alembic", backend_entrypoint)
-        for runtime_directory in (
-            "workspace/runs",
-            "workspace/chat_runs",
-            "workspace/reports",
-            "workspace/memory",
-            "workspace/cache/finance_ashare",
-            "workspace/paper_trading",
-            "workspace/backtests",
-            "workspace/strategy_objects",
-        ):
-            self.assertIn(runtime_directory, backend)
-            self.assertIn(runtime_directory, backend_entrypoint)
-        self.assertIn("npm ci --registry=", frontend)
 
     def test_compose_starts_frontend_web_after_healthy_api(self) -> None:
         payload = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))

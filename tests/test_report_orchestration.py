@@ -8,14 +8,20 @@ from tempfile import TemporaryDirectory
 from threading import Lock
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from research_system.strategies.contracts import BacktestMode
-from research_system.strategies.database import StrategyDatabase
-from research_system.strategies.models import CanonicalUziAnalysis, JobAttempt, OrchestrationJob
-from research_system.strategies.errors import StrategyDomainError
-from research_system.strategies.orchestration import ReportOrchestrationService
 from research_system.runtime.core.artifact_board import ArtifactBoard
+from research_system.strategies.contracts import BacktestMode, StrategyDocumentV1
+from research_system.strategies.database import StrategyDatabase
+from research_system.strategies.errors import StrategyConflict, StrategyDomainError
+from research_system.strategies.models import (
+    CanonicalUziAnalysis,
+    JobAttempt,
+    OrchestrationJob,
+    StrategyVersion,
+)
+from research_system.strategies.orchestration import ReportOrchestrationService
 from research_system.strategies.service import OwnerScope, StrategyService
 from research_system.strategies.signals import SignalEngineService
 
@@ -139,6 +145,7 @@ class FakeHoldingReportService:
         self.delay_seconds = 0.0
         self.lock = Lock()
         self.fail_once_symbols: set[str] = set()
+        self.cancelled_batches: list[str] = []
 
     def create_batch(
         self,
@@ -211,6 +218,7 @@ class FakeHoldingReportService:
                 "status": "completed",
                 "source_run_id": source_run_id,
                 "fund_code": fund_code,
+                "profile": _kwargs.get("profile"),
                 "holdings": holdings,
                 "data_gap": [],
             }
@@ -222,6 +230,12 @@ class FakeHoldingReportService:
 
     def retry(self, batch_id: str, **_kwargs) -> dict[str, Any]:
         return self.batches[batch_id]
+
+    def cancel(self, batch_id: str, **_kwargs) -> dict[str, Any]:
+        self.cancelled_batches.append(batch_id)
+        state = self.batches[batch_id]
+        state["status"] = "cancelled"
+        return state
 
 
 class ReportOrchestrationTests(unittest.TestCase):
@@ -236,7 +250,7 @@ class ReportOrchestrationTests(unittest.TestCase):
             auto_bootstrap=True,
         )
         self.owner = OwnerScope("tenant-a", "user-a", "actor-a")
-        strategy = self.strategies.create_strategy(self.owner, name="日报策略")
+        strategy = self.strategies.create_strategy(self.owner, name="日报策略", document=StrategyDocumentV1().model_dump(mode="json"))
         self.version = self.strategies.publish(self.owner, strategy["id"])
         self.strategy_id = strategy["id"]
         self.run_service = FakeRunService()
@@ -256,6 +270,169 @@ class ReportOrchestrationTests(unittest.TestCase):
         self.orchestration.close()
         self.strategies.close()
         self.temporary.cleanup()
+
+    def test_historical_backfill_uses_dedicated_batch_timeout(self) -> None:
+        service = ReportOrchestrationService(
+            self.database,
+            run_service=self.run_service,
+            holding_report_service=self.holding_service,
+            workspace_root=Path(self.temporary.name),
+            start_scheduler=False,
+            historical_backfill_batch_timeout_seconds=28_800,
+        )
+        try:
+            self.assertEqual(
+                service._batch_timeout_seconds({"dates": ["2026-08-14"]}),
+                30 * 60,
+            )
+            self.assertEqual(
+                service._batch_timeout_seconds(
+                    {"dates": ["2026-08-14"]},
+                    profile="lite",
+                ),
+                60 * 60,
+            )
+            self.assertEqual(
+                service._batch_timeout_seconds(
+                    {"dates": ["2026-08-14"]},
+                    profile="deep",
+                ),
+                3 * 60 * 60,
+            )
+            self.assertEqual(
+                service._batch_timeout_seconds(
+                    {"dates": ["2026-08-13", "2026-08-14"]},
+                    profile="deep",
+                ),
+                28_800,
+            )
+        finally:
+            service.close()
+
+    def test_batch_timeout_requests_cascading_cancellation(self) -> None:
+        self.holding_service.batches["batch-timeout"] = {
+            "batch_id": "batch-timeout",
+            "status": "running",
+        }
+
+        with self.assertRaisesRegex(TimeoutError, "cancellation was requested"):
+            self.orchestration._wait_batch(
+                "batch-timeout",
+                self.owner,
+                job_id="unused-because-timeout-is-immediate",
+                timeout_seconds=0,
+            )
+
+        self.assertEqual(self.holding_service.cancelled_batches, ["batch-timeout"])
+
+    def test_source_stage_distinguishes_advisory_preflight_from_input_rejection(self) -> None:
+        advisory = {"can_start_analysis": True, "data_issues": [{"severity": "critical"}], "evidence_gaps": [{"dimension": "3_macro"}]}
+        cases = [
+            ({"input_preflight": advisory}, [], "execution"),
+            ({"input_preflight": {**advisory, "can_start_analysis": False}}, [], "execution"),
+            ({"input_preflight": advisory, "data_gap": ["input_preflight_blocked"]}, [], "input_preflight"),
+            ({"recovery": {"kind": "input_integrity", "stages": ["report_input"]}}, [], "input_preflight"),
+            ({"recovery": {"kind": "version_mismatch", "stages": ["report_input"]}}, [], "input_preflight"),
+            ({"input_preflight": advisory}, [{"artifact_type": "uzi_native_analysis", "content": {"report_allowed": False}}], "native_analysis"),
+            ({"input_preflight": advisory}, [{"artifact_type": "research_report", "content": {"report_allowed": False}}], "final_self_review"),
+        ]
+        for item_fields, artifacts, expected_stage in cases:
+            with self.subTest(item_fields=item_fields, expected_stage=expected_stage), \
+                    patch.object(self.orchestration, "_run_artifacts", return_value=artifacts):
+                source, *_ = self.orchestration._uzi_source(
+                    self.owner,
+                    {"child_run_id": "child-advisory", "symbol": "688012.SH", **item_fields},
+                    previous=None,
+                )
+                self.assertEqual(source["report_stage"], expected_stage)
+                if "input_preflight" in item_fields:
+                    self.assertEqual(source["input_preflight"], item_fields["input_preflight"])
+
+    def test_batch_timeout_waits_for_child_terminal_after_cancel_request(self) -> None:
+        events = []
+        reads = iter([{"status": "running"}, {"status": "cancelling"}, {"status": "cancelled"}])
+
+        def detail(*_args, **_kwargs):
+            state = next(reads)
+            events.append(state["status"])
+            return state
+
+        with patch.object(self.holding_service, "cancel", side_effect=lambda *_args, **_kwargs: events.append("cancel_requested")), \
+                patch.object(self.holding_service, "detail", side_effect=detail), \
+                patch("research_system.strategies.orchestration.time.sleep"):
+            with self.assertRaisesRegex(TimeoutError, "workers exited"):
+                self.orchestration._wait_batch("batch-cancel", self.owner, job_id="test-control", timeout_seconds=0)
+        self.assertEqual(events, ["cancel_requested", "running", "cancelling", "cancelled"])
+
+    def test_parent_control_does_not_return_before_child_cancelled(self) -> None:
+        from research_system.strategies.orchestration import _JobControlRequested
+
+        states = iter([{"status": "running"}, {"status": "cancelled"}])
+        with patch.object(self.orchestration, "_heartbeat", return_value="cancelled"), \
+                patch.object(self.holding_service, "cancel") as cancel, \
+                patch.object(self.holding_service, "detail", side_effect=lambda *_args, **_kwargs: next(states)) as detail, \
+                patch("research_system.strategies.orchestration.time.sleep"):
+            with self.assertRaises(_JobControlRequested):
+                self.orchestration._wait_batch("batch-cancel", self.owner, job_id="test-control", timeout_seconds=30)
+        cancel.assert_called_once()
+        self.assertEqual(detail.call_count, 2)
+
+    def test_batch_observation_failure_cancels_and_waits_before_raising_original(self) -> None:
+        for operation in ("heartbeat", "canonical_heartbeat", "detail", "progress"):
+            with self.subTest(operation=operation):
+                original_error = OSError(f"{operation} storage unavailable")
+                failed = False
+                clock = [0.0]
+                events = []
+                states = iter([
+                    {"status": "running", "holdings": [{"status": "running"}]},
+                    {"status": "cancelled", "holdings": [{"status": "cancelling"}]},
+                    {"status": "cancelled", "holdings": [{"status": "cancelled"}]},
+                ])
+
+                def maybe_fail(name):
+                    nonlocal failed
+                    if name == operation and not failed:
+                        failed = True
+                        events.append("observation_failed")
+                        raise original_error
+
+                def heartbeat(*_args, **_kwargs):
+                    maybe_fail("heartbeat")
+                    return "running"
+
+                def canonical_heartbeat(*_args, **_kwargs):
+                    maybe_fail("canonical_heartbeat")
+
+                def detail(*_args, **_kwargs):
+                    maybe_fail("detail")
+                    state = next(states)
+                    events.append(state["holdings"][0]["status"])
+                    return state
+
+                def progress(*_args, **_kwargs):
+                    maybe_fail("progress")
+
+                def sleep(seconds):
+                    clock[0] += seconds
+                    if clock[0] > 30:
+                        raise KeyboardInterrupt("test wait did not converge")
+
+                with patch.object(self.orchestration, "_heartbeat", side_effect=heartbeat), \
+                        patch.object(self.orchestration, "_heartbeat_canonical", side_effect=canonical_heartbeat), \
+                        patch.object(self.orchestration, "_record_batch_execution_progress", side_effect=progress), \
+                        patch.object(self.holding_service, "cancel", side_effect=lambda *_args, **_kwargs: events.append("cancel_requested")) as cancel, \
+                        patch.object(self.holding_service, "detail", side_effect=detail), \
+                        patch("research_system.strategies.orchestration.time.monotonic", side_effect=lambda: clock[0]), \
+                        patch("research_system.strategies.orchestration.time.sleep", side_effect=sleep):
+                    with self.assertRaises(OSError) as captured:
+                        self.orchestration._wait_batch("batch-observation-error", self.owner, job_id="test-observation", timeout_seconds=30)
+
+                self.assertIs(captured.exception, original_error)
+                cancel.assert_called_once()
+                self.assertLess(events.index("observation_failed"), events.index("cancel_requested"))
+                self.assertLess(events.index("cancel_requested"), events.index("cancelled"))
+                self.assertEqual(events[-2:], ["cancelling", "cancelled"])
 
     def _assignment(self, fund_code: str, mode: BacktestMode = BacktestMode.FUND_ONLY) -> dict:
         return self.strategies.create_assignment(
@@ -278,6 +455,7 @@ class ReportOrchestrationTests(unittest.TestCase):
         strategy = self.strategies.create_strategy(
             self.owner,
             name=f"日报策略-{fund_code}-{top_n}-{prompt_hash or 'default'}",
+            document=StrategyDocumentV1().model_dump(mode="json"),
         )
         document = strategy["draft"]["document"]
         document["report_inputs"]["top_n"] = top_n
@@ -378,6 +556,80 @@ class ReportOrchestrationTests(unittest.TestCase):
         holding_nodes = [node for node in second_report["nodes"] if node["node_type"] == "holding_uzi"]
         self.assertTrue(all(node["source"]["canonical_reused"] for node in holding_nodes))
 
+    def test_manual_explicit_version_job_can_materialize_signals_for_inactive_assignment(self) -> None:
+        assignment = self._assignment("110011")
+        self.strategies.update_assignment(
+            self.owner,
+            assignment["id"],
+            enabled=False,
+            paused=True,
+        )
+
+        with self.assertRaisesRegex(StrategyConflict, "已禁用或暂停"):
+            self.orchestration.create_job(
+                self.owner,
+                assignment_id=assignment["id"],
+                start_date=date(2026, 8, 3),
+                end_date=date(2026, 8, 3),
+                source_run_id="source-a",
+            )
+
+        job = self.orchestration.create_job(
+            self.owner,
+            assignment_id=assignment["id"],
+            strategy_version_id=self.version["id"],
+            start_date=date(2026, 8, 3),
+            end_date=date(2026, 8, 3),
+            source_run_id="source-a",
+            manual=True,
+        )
+        completed = self._wait_job(job["id"])
+
+        self.assertEqual(completed["status"], "completed")
+        self.assertEqual(completed["request"]["strategy_version_id"], self.version["id"])
+        self.assertTrue(
+            self.signals.list_signals(
+                self.owner,
+                assignment_id=assignment["id"],
+            )["signals"]
+        )
+
+    def test_backfill_uses_explicit_selected_strategy_version(self) -> None:
+        assignment = self._assignment("110011")
+        with self.database.session() as session:
+            original = session.get(StrategyVersion, self.version["id"])
+            document = dict(original.document_json)
+            document["report_inputs"] = dict(document["report_inputs"])
+            document["report_inputs"]["research_profile"] = "lite"
+        self.strategies.update_draft(
+            self.owner,
+            self.strategy_id,
+            expected_revision=0,
+            document=document,
+        )
+        selected = self.strategies.publish(self.owner, self.strategy_id)
+
+        job = self.orchestration.create_job(
+            self.owner,
+            assignment_id=assignment["id"],
+            strategy_version_id=selected["id"],
+            start_date=date(2026, 8, 3),
+            end_date=date(2026, 8, 3),
+            source_run_id="source-a",
+        )
+        completed = self._wait_job(job["id"])
+
+        self.assertEqual(completed["request"]["strategy_version_id"], selected["id"])
+        self.assertEqual(completed["progress"]["complete_report_days"], 1)
+        self.assertEqual(completed["progress"]["partial_report_days"], 0)
+        self.assertEqual(self.holding_service.batches["batch-1"]["profile"], "lite")
+        signals = self.signals.list_signals(
+            self.owner,
+            assignment_id=assignment["id"],
+        )["signals"]
+        self.assertTrue(signals)
+        self.assertTrue(all(row["strategy_version_id"] == selected["id"] for row in signals))
+
     def test_unverified_historical_evidence_is_blocked_without_current_substitution(self) -> None:
         assignment = self._assignment("161725")
         job = self._run_job(assignment["id"], "source-unverified")
@@ -465,14 +717,32 @@ class ReportOrchestrationTests(unittest.TestCase):
         self.assertEqual(first_report["status"], "final_partial")
         self.assertEqual(self.holding_service.model_calls, 10)
 
+        with self.database.session() as session:
+            stored_job = session.get(OrchestrationJob, first["id"])
+            self.assertIsNotNone(stored_job)
+            progress = dict(stored_job.progress_json or {})
+            progress["errors"] = [
+                {
+                    "as_of_date": "2026-08-03",
+                    "type": "TimeoutError",
+                    "message": "old attempt timed out",
+                }
+            ]
+            stored_job.progress_json = progress
+            stored_job.error_summary = "old attempt timed out"
+
         retried = self.orchestration.retry(
             self.owner,
             first["id"],
             symbols=["600003"],
         )
+        self.assertIsNone(retried["error_summary"])
+        self.assertIsNone(retried["completed_at"])
         second = self._wait_job(retried["id"])
         self.assertEqual(second["status"], "completed")
         self.assertEqual(second["progress"]["failed_symbols"], [])
+        self.assertEqual(second["progress"]["errors"], [])
+        self.assertIsNone(second["error_summary"])
         self.assertEqual(self.holding_service.model_calls, 11)
         self.assertEqual(len(second["attempts"]), 2)
         self.assertEqual(second["attempts"][1]["selected_nodes"], ["600003"])
@@ -490,9 +760,57 @@ class ReportOrchestrationTests(unittest.TestCase):
         self.assertEqual(len(canonical), 10)
         self.assertTrue(all(row.status == "completed" for row in canonical))
 
+    def test_input_revision_is_fixed_before_queue_and_keeps_node_retry_scope(self) -> None:
+        assignment = self._assignment("110011")
+        self.holding_service.fail_once_symbols.add("600003")
+        first = self._run_job(assignment["id"], "source-a")
+        calls = []
+        reference = {"manifest_id": "revised-manifest", "manifest_hash": "b" * 64}
+
+        def revise(batch_id, *, symbols, **scope):
+            calls.append(("freeze", batch_id, symbols))
+            return dict(reference)
+
+        def load(saved, **kwargs):
+            self.assertEqual(saved, reference)
+            calls.append(("load", saved))
+            return {"manifest_id": saved["manifest_id"], "manifest_hash": saved["manifest_hash"], "items": []}
+
+        self.holding_service.revise_report_inputs = revise
+        self.holding_service.load_revised_report_inputs = load
+        with self.assertRaises(StrategyConflict) as exc:
+            self.orchestration.retry(self.owner, first["id"], refresh_inputs=True)
+        self.assertEqual(exc.exception.code, "input_revision_confirmation_required")
+        with patch.object(self.orchestration, "_submit"):
+            queued = self.orchestration.retry(self.owner, first["id"], refresh_inputs=True, confirmed=True)
+        self.assertEqual(calls, [("freeze", first["progress"]["batches"]["2026-08-03"], ["600003"])])
+        self.assertEqual(queued["request"]["input_revisions"], {"2026-08-03": reference})
+        self.assertEqual(queued["request"]["retry_symbols"], ["600003"])
+        with self.assertRaises(StrategyConflict):
+            self.orchestration.retry(self.owner, first["id"], refresh_inputs=True, confirmed=True)
+        attempt_id = queued["attempts"][-1]["id"]
+        self.orchestration._execute_job(first["id"], attempt_id)
+        finished = self.orchestration.get_job(self.owner, first["id"])
+        self.assertEqual(finished["status"], "completed")
+        self.assertEqual(self.holding_service.model_calls, 11)
+        self.assertEqual([row[0] for row in calls], ["freeze", "load"])
+        self.assertFalse(self.orchestration.repair_plan(self.owner, first["id"])["automatic_collection"])
+
     def test_full_rerun_requires_confirmation_and_reuses_canonical_uzi(self) -> None:
         assignment = self._assignment("110011")
         first = self._run_job(assignment["id"], "source-a")
+        manifest_calls: list[str] = []
+
+        def frozen_report_manifest(_batch_id: str, **_scope):
+            manifest_calls.append("frozen")
+            return None
+
+        def freeze_report_inputs(_symbols, **_kwargs):
+            manifest_calls.append("freeze")
+            return None
+
+        self.holding_service.frozen_report_manifest = frozen_report_manifest
+        self.holding_service.freeze_report_inputs = freeze_report_inputs
         with self.assertRaises(StrategyDomainError) as captured:
             self.orchestration.retry(
                 self.owner,
@@ -510,6 +828,7 @@ class ReportOrchestrationTests(unittest.TestCase):
         )
         completed = self._wait_job(rerun["id"])
         self.assertEqual(completed["status"], "completed")
+        self.assertEqual(manifest_calls, ["freeze"])
         self.assertEqual(self.holding_service.model_calls, 10)
         self.assertEqual(len(completed["attempts"]), 2)
         latest = self.orchestration.get_report_set(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Iterable
+from datetime import date
 from typing import Any
 
 from research_system.api.errors import ApiError
@@ -132,7 +133,17 @@ _UZI_PROFILE_INTENTS = frozenset({
 })
 _INVESTMENT_CYCLE_INTENTS = frozenset({"fund_research", "stock_screen"})
 
-_COMMON_REQUEST_FIELDS = {"planning_context_hints", "background"}
+_COMMON_REQUEST_FIELDS = {
+    "planning_context_hints",
+    "background",
+    # A formal PIT report may explicitly pin the logical trading day.  The
+    # report preflight will resolve only a published Bundle for this date.
+    "analysis_as_of_date",
+    # A data-center handoff may pin one already-frozen manifest.  The report
+    # preflight reloads it from the database and never trusts client snapshots.
+    "report_manifest_id",
+    "report_manifest_hash",
+}
 _STOCK_FIELDS = {
     "symbol",
     "snapshot_types",
@@ -358,6 +369,25 @@ def _validate_common_constraints(
         _invalid_constraint("planning_context_hints", "must be an object")
     if "background" in constraints and not isinstance(constraints["background"], bool):
         _invalid_constraint("background", "must be a boolean")
+    if "analysis_as_of_date" in constraints:
+        try:
+            constraints["analysis_as_of_date"] = date.fromisoformat(
+                str(constraints["analysis_as_of_date"] or "")
+            ).isoformat()
+        except ValueError:
+            _invalid_constraint("analysis_as_of_date", "must be an ISO date (YYYY-MM-DD)")
+    manifest_id = str(constraints.get("report_manifest_id") or "").strip()
+    manifest_hash = str(constraints.get("report_manifest_hash") or "").strip().lower()
+    if manifest_id or manifest_hash:
+        if not manifest_id:
+            _invalid_constraint("report_manifest_id", "is required with report_manifest_hash")
+        if not manifest_hash:
+            _invalid_constraint("report_manifest_hash", "is required with report_manifest_id")
+        safe_identifier(manifest_id, field_name="report_manifest_id")
+        if re.fullmatch(r"[0-9a-f]{64}", manifest_hash) is None:
+            _invalid_constraint("report_manifest_hash", "must be a 64-character lowercase hex digest")
+        constraints["report_manifest_id"] = manifest_id
+        constraints["report_manifest_hash"] = manifest_hash
 
     if "investment_cycle" in constraints:
         _require_enum(constraints["investment_cycle"], field_name="investment_cycle", allowed=_INVESTMENT_CYCLES)

@@ -7,6 +7,21 @@ from pathlib import Path
 from typing import Any
 
 
+def canonical_json_bytes(payload: Any) -> bytes:
+    """Serialize backtest inputs and results with the repository's hash contract."""
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+
+
+def json_content_hash(payload: Any) -> str:
+    return hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+
+
 @dataclass(frozen=True)
 class StoredObject:
     uri: str
@@ -20,13 +35,7 @@ class ContentAddressedResultStore:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def put_json(self, payload: dict[str, Any]) -> StoredObject:
-        content = json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
+        content = canonical_json_bytes(payload)
         digest = hashlib.sha256(content).hexdigest()
         parent = self.root / digest[:2]
         parent.mkdir(parents=True, exist_ok=True)
@@ -47,4 +56,9 @@ class ContentAddressedResultStore:
         return json.loads(path.read_text(encoding="utf-8"))
 
 
-__all__ = ["ContentAddressedResultStore", "StoredObject"]
+__all__ = [
+    "ContentAddressedResultStore",
+    "StoredObject",
+    "canonical_json_bytes",
+    "json_content_hash",
+]

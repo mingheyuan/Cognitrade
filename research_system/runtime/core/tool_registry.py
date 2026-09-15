@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -1234,11 +1235,57 @@ def _redact_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
     for key, value in arguments.items():
         if re.search(r"token|secret|password|api[_-]?key", str(key), re.IGNORECASE):
             redacted[key] = "<redacted>"
-        elif isinstance(value, str) and len(value) > 2_000:
-            redacted[key] = f"{value[:2_000]}…"
         else:
-            redacted[key] = value
+            sanitized = _redact_event_value(value)
+            encoded = json.dumps(
+                sanitized,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            if len(encoded) > 32 * 1024:
+                redacted[key] = {
+                    "_event_payload_omitted": True,
+                    "kind": type(value).__name__,
+                    "size_bytes": len(encoded),
+                    "sha256": hashlib.sha256(encoded).hexdigest(),
+                    **(
+                        {"keys": sorted(str(item) for item in value)[:100]}
+                        if isinstance(value, dict)
+                        else {"item_count": len(value)}
+                        if isinstance(value, (list, tuple))
+                        else {}
+                    ),
+                }
+            else:
+                redacted[key] = _truncate_event_strings(sanitized)
     return redacted
+
+
+def _redact_event_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): (
+                "<redacted>"
+                if re.search(r"token|secret|password|api[_-]?key", str(key), re.IGNORECASE)
+                else _redact_event_value(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact_event_value(item) for item in value]
+    return value
+
+
+def _truncate_event_strings(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _truncate_event_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_truncate_event_strings(item) for item in value]
+    if isinstance(value, str) and len(value) > 2_000:
+        return f"{value[:2_000]}…"
+    return value
 
 
 __all__ = [

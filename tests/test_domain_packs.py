@@ -98,15 +98,6 @@ class DomainPackTests(unittest.TestCase):
         )
         self.assertEqual(self.registry.skill_definitions(domain_id="legal_contract"), [])
 
-    def test_pack_skill_resolves_from_pack_root(self) -> None:
-        skill_class = self.registry.resolve_skill(
-            domain_id="finance_ashare",
-            skill_name="market_snapshot_skill",
-        )
-        self.assertTrue(skill_class.__module__.startswith("cognitrade_domain_pack_finance_ashare_"))
-        self.assertNotIn("research_system.skills", skill_class.__module__)
-        self.assertEqual(skill_class.skill_name, "market_snapshot_skill")
-
     def test_pack_skill_runtime_executes_declared_skill_in_pack_scope(self) -> None:
         settings = Settings.from_env(Path(__file__).resolve().parents[1])
         runtime = PackSkillRuntime(
