@@ -48,6 +48,34 @@ class _FallbackCapitalFlowAdapter:
 
 
 class FinanceProviderExecutionTests(unittest.TestCase):
+    def test_degraded_bundle_handles_absent_or_empty_reason_lists(self) -> None:
+        settings = Settings.from_env(Path(__file__).resolve().parents[1])
+        for fields, expected in (
+            ({}, "snapshot_degraded"),
+            ({"degrade_reasons": []}, "snapshot_degraded"),
+            ({"degrade_reasons": None}, "snapshot_degraded"),
+            ({"degrade_reasons": ["source_timeout"]}, "source_timeout"),
+            ({"degrade_reason": "primary_reason", "degrade_reasons": ["secondary_reason"]}, "primary_reason"),
+        ):
+            with self.subTest(fields=fields), patch(
+                "socket.socket.connect", side_effect=AssertionError("bundle summary must remain offline")
+            ):
+                result = snapshot_collector._bundle_result(
+                    snapshots=[{
+                        "snapshot_type": "market", "symbol": "600001",
+                        "quality_status": "degraded", "facts": {}, **fields,
+                    }],
+                    symbols=["600001"], requested=["market"], universe_rows=[],
+                    universe_source="supplied_symbols", enrichment_targets=[],
+                    query="离线降级汇总回归", research_profile="workspace_market_data",
+                    settings=settings,
+                )
+                collection = result["collection"]
+                self.assertEqual(collection["quality_status"], "degraded")
+                self.assertTrue(collection["degraded"])
+                self.assertEqual(collection["degrade_reasons"], [expected])
+                self.assertEqual(collection["quality_counts"], {"degraded": 1})
+
     def _registry(self, *, tushare_token: str | None = None) -> VendorProviderRegistry:
         settings = Settings.from_env(Path(__file__).resolve().parents[1]).model_copy(
             update={"tushare_token": tushare_token}

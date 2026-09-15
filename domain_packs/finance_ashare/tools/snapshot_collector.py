@@ -4339,7 +4339,7 @@ def _bundle_result(
                 dict.fromkeys(
                     str(
                         snapshot.get("degrade_reason")
-                        or snapshot.get("degrade_reasons", [None])[0]
+                        or (snapshot.get("degrade_reasons") or [None])[0]
                         or "snapshot_degraded"
                     )
                     for snapshot in degraded_rows
