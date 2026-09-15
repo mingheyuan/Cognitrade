@@ -3,6 +3,9 @@
 Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研究 Web
 应用。当前产品入口是 Web 与版本化 HTTP API；历史 CLI 和旧编排系统已删除。
 
+当前已知问题与后续验收见 [待办清单](./docs/TODO.md)；最新真实报告重跑为 8/10 份生成，
+仍有证据归因与正文超时问题，详见 [2026-09-15 重跑记录](./docs/uzi-report-rerun-20260915.md)。
+
 ## 功能
 
 - 自然语言研究入口：个股体检、多股比较、股票筛选、行业研究与 Thesis Review。
