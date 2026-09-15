@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import date, datetime, timezone
 from typing import Any
 
+from research_system.market_data.company_profile_dependencies import (
+    check_company_profile_dependencies,
+)
 from research_system.market_data.contracts import (
     BundleStatus,
     CoverageResult,
@@ -10,6 +14,7 @@ from research_system.market_data.contracts import (
     MaterializedBundle,
     SnapshotStatus,
     canonical_hash,
+    canonical_json,
     cutoff_at_for_date,
     is_supported_uzi_contract_version,
     require_aware_utc,
@@ -18,12 +23,24 @@ from research_system.market_data.dimension_contracts import (
     DEFAULT_DIMENSION_REGISTRY,
     DimensionRegistry,
 )
+from research_system.market_data.evidence_bindings import load_bound_evidence
 from research_system.market_data.historical import is_safe_degradation_manifest
 from research_system.market_data.ingestion import (
     snapshot_content_hash,
     validate_persisted_snapshot_contract,
 )
 from research_system.market_data.models import MarketDataBundle, MarketDataBundleItem
+from research_system.market_data.native_projection import (
+    PROJECTION_VERSION,
+    V2_PROJECTION_VERSION,
+    V3_PROJECTION_VERSION,
+    V4_PROJECTION_VERSION,
+    V5_PROJECTION_VERSION,
+    V6_PROJECTION_VERSION,
+    V7_PROJECTION_VERSION,
+    project_native_result,
+    stored_native_payload,
+)
 from research_system.market_data.repository import MarketDataRepository
 from research_system.market_data.resolver import (
     SnapshotResolver,
@@ -64,6 +81,73 @@ class IncompleteBundleError(BundlePublicationError):
 
 class BundleIntegrityError(RuntimeError):
     pass
+
+
+class CompanyProfileDependencyError(BundleIntegrityError):
+    """Independent fixed-input consistency failure, not a native critical."""
+
+    def __init__(self, state: dict[str, Any]) -> None:
+        self.company_profile_dependencies = state
+        details = "; ".join(f"{row['dimension']}: {row['reason']}" for row in state["issues"])
+        super().__init__(f"company profile dependencies {state['status']}; {details}")
+
+
+def _require_company_profile_dependencies(selected_snapshots) -> None:
+    state = check_company_profile_dependencies(selected_snapshots)
+    if not state["can_freeze"]:
+        raise CompanyProfileDependencyError(state)
+
+
+def native_transport_facts(snapshot, *, evidence, cutoff_at, projection_version=PROJECTION_VERSION):
+    """Expose native roots, and only bonus observations fixed before cutoff.
+
+    No default None/[] is manufactured for old snapshots or late historical
+    reconstruction. The immutable transport proof can follow a later fact
+    revision without pretending the revision itself was observed in the past.
+    """
+    if projection_version not in {V3_PROJECTION_VERSION, V4_PROJECTION_VERSION, V5_PROJECTION_VERSION, V6_PROJECTION_VERSION, V7_PROJECTION_VERSION, PROJECTION_VERSION}:
+        return {}
+    result = {"_uzi_bonus_projection": projection_version} if projection_version in {V5_PROJECTION_VERSION, V6_PROJECTION_VERSION, V7_PROJECTION_VERSION, PROJECTION_VERSION} else {}
+    payload = stored_native_payload(snapshot, version=projection_version)
+    marker = (snapshot.query_manifest_json or {}).get("native_symbol_transport") or {}
+    if marker.get("version") != "native-symbol-transport-v1":
+        return result
+    transport = {key: deepcopy(payload[key]) for key in ("_uzi_root_fields", "_uzi_top_level_fields") if isinstance(payload.get(key), dict)}
+    digest = canonical_hash(transport)
+    if digest != marker.get("content_hash"):
+        raise BundleIntegrityError("native symbol transport hash mismatch")
+    result.update({key: value for key, value in transport.items() if key == "_uzi_root_fields"})
+    proof = False
+    for row in evidence:
+        metadata = getattr(row, "metadata_json", None)
+        if not isinstance(metadata, dict):
+            metadata = getattr(row, "metadata", {})
+        if (
+            row.source_kind == "native_symbol_transport"
+            and isinstance(metadata, dict)
+            and metadata.get("transport_version") == "native-symbol-transport-v1"
+            and row.content_hash == digest
+            # Older proofs duplicated the full JSON. New hash-only proofs
+            # bind the same immutable payload and actual observation time.
+            and (
+                row.inline_content is None and metadata.get("content_storage") == "immutable_snapshot_payload"
+                or row.inline_content == canonical_json(transport)
+            )
+            and row.grade in {EvidenceGrade.A.value, EvidenceGrade.B.value}
+            and not row.is_manual and row.immutable_proof
+            and _database_utc(row.observed_at) <= cutoff_at
+            and _database_utc(row.published_at) <= cutoff_at
+        ):
+            proof = True
+            break
+    if proof and "_uzi_top_level_fields" in transport:
+        result["_uzi_top_level_fields"] = transport["_uzi_top_level_fields"]
+    elif "_uzi_top_level_fields" in transport:
+        result["_uzi_transport_limitations"] = {
+            "bonus_status": "not_fixed_historical",
+            "reason": "no_bound_pre_cutoff_symbol_transport_observation",
+        }
+    return result
 
 
 def _manifest_payload(
@@ -355,10 +439,12 @@ class BundlePublisher:
             now=publication_time,
         )
         pit_errors: list[str] = []
+        selected_snapshots = []
         for item in coverage.dimensions:
             if item.snapshot_id is None:
                 continue
             snapshot = self.repository.require_snapshot(item.snapshot_id)
+            selected_snapshots.append(snapshot)
             pit_errors.extend(
                 f"{item.dimension}: {error}"
                 for error in _snapshot_pit_visibility_errors(
@@ -372,6 +458,7 @@ class BundlePublisher:
                 "publication candidate crosses the PIT cutoff; "
                 + "; ".join(dict.fromkeys(pit_errors))
             )
+        _require_company_profile_dependencies(selected_snapshots)
         uses_uzi_gate = is_supported_uzi_contract_version(
             self.registry.contract_version
         )
@@ -422,7 +509,10 @@ class BundleMaterializer:
         self.repository = repository
         self.registry = registry
 
-    def materialize(self, bundle_id: str) -> MaterializedBundle:
+    def materialize(
+        self, bundle_id: str, *, projection_version: str = PROJECTION_VERSION,
+        evidence_bindings: list[dict[str, Any]] | None = None,
+    ) -> MaterializedBundle:
         bundle = self.repository.require_bundle(bundle_id)
         if (
             bundle.status != BundleStatus.PUBLISHED.value
@@ -504,7 +594,14 @@ class BundleMaterializer:
                     f"snapshot hash drift detected for {item.dimension}"
                 )
             series = self.repository.list_snapshot_series_points(snapshot.id)
-            evidence = self.repository.list_snapshot_evidence(snapshot.id)
+            try:
+                evidence = (
+                    self.repository.list_snapshot_evidence(snapshot.id)
+                    if evidence_bindings is None
+                    else load_bound_evidence(self.repository, snapshot.id, evidence_bindings)
+                )
+            except ValueError as exc:
+                raise BundleIntegrityError(str(exc)) from exc
             pit_errors = _snapshot_pit_visibility_errors(
                 self.repository,
                 snapshot,
@@ -618,6 +715,15 @@ class BundleMaterializer:
                     + "; ".join(exc.errors)
                 ) from exc
             refs: list[dict[str, Any]] = []
+            text_bindings = (snapshot.query_manifest_json or {}).get("research_archive", {}).get("text_extractions", [])
+            if not isinstance(text_bindings, list) or any(
+                not isinstance(binding, dict) or not isinstance(binding.get("evidence_key"), str)
+                or not isinstance(binding.get("binding"), dict) for binding in text_bindings
+            ):
+                raise BundleIntegrityError("research text binding set is invalid")
+            expected_text = {binding["evidence_key"]: binding["binding"] for binding in text_bindings}
+            if len(expected_text) != len(text_bindings) or not set(expected_text).issubset({proof.evidence_key for proof in evidence}):
+                raise BundleIntegrityError("research text binding evidence is missing or duplicated")
             for proof in evidence:
                 if (
                     not uses_uzi_gate
@@ -640,6 +746,35 @@ class BundleMaterializer:
                     "grade": proof.grade,
                     "published_at": _database_utc(proof.published_at).isoformat(),
                 }
+                if proof.source_kind == "research_document":
+                    from research_system.market_data.research_archive import (
+                        research_publication_projection,
+                    )
+
+                    ref.update(research_publication_projection(proof))
+                if projection_version in {V2_PROJECTION_VERSION, V3_PROJECTION_VERSION, V4_PROJECTION_VERSION, V5_PROJECTION_VERSION, V6_PROJECTION_VERSION, V7_PROJECTION_VERSION, PROJECTION_VERSION} and proof.source_kind == "research_document":
+                    # The report receives the frozen excerpt, never an external
+                    # URL to dereference during analysis. Raw bytes stay in the
+                    # content-addressed archive for verification and re-extraction.
+                    ref.update({
+                        "title": proof.title,
+                        "content": proof.inline_content,
+                        "content_ref": proof.content_ref,
+                        "observed_at": _database_utc(proof.observed_at).isoformat(),
+                        "evidence_mode": (proof.metadata_json or {}).get("evidence_mode"),
+                        "proof_basis": (proof.metadata_json or {}).get("proof_basis"),
+                        "source_kind": "research_document",
+                    })
+                    if proof.evidence_key in expected_text:
+                        from research_system.market_data.research_archive_text import (
+                            ResearchTextError,
+                            verified_text_projection,
+                        )
+
+                        try:
+                            ref.update(verified_text_projection(proof, expected_text[proof.evidence_key]))
+                        except ResearchTextError as exc:
+                            raise BundleIntegrityError(exc.code) from None
                 refs.append(ref)
                 if proof.id not in seen_evidence:
                     seen_evidence.add(proof.id)
@@ -647,70 +782,9 @@ class BundleMaterializer:
 
             stored_payload = dict(snapshot.payload_json or {})
             if uses_uzi_gate:
-                raw = native_payload(snapshot)
+                raw = native_payload(snapshot, version=projection_version)
                 quality = native_quality(snapshot)
-                stored_native_result = stored_payload.get("_uzi_raw_result")
-                native_result = (
-                    dict(stored_native_result)
-                    if isinstance(stored_native_result, dict)
-                    else {}
-                )
-                native_result["data"] = raw
-                native_result.setdefault(
-                    "source", snapshot.source_version or "database"
-                )
-                native_result.setdefault(
-                    "fallback",
-                    quality
-                    in {
-                        "assumption_only",
-                        "data_gap",
-                        "error",
-                        "failed",
-                        "missing",
-                        "missing_result",
-                        "no_data",
-                        "parse_failed",
-                        "provider_unavailable",
-                        "rate_limited",
-                        "timeout",
-                    },
-                )
-                native_result.setdefault(
-                    "_pipeline",
-                    {
-                        "dim_key": contract.dimension,
-                        "quality": (
-                            "partial"
-                            if quality in {"degraded", "partial"}
-                            else "missing"
-                            if quality
-                            in {
-                                "assumption_only",
-                                "data_gap",
-                                "missing",
-                                "missing_result",
-                                "no_data",
-                            }
-                            else "error"
-                            if quality
-                            in {
-                                "error",
-                                "failed",
-                                "parse_failed",
-                                "provider_unavailable",
-                                "rate_limited",
-                                "timeout",
-                            }
-                            else "full"
-                        ),
-                        "data_gaps": list(
-                            (snapshot.query_manifest_json or {}).get("missing_fields")
-                            or []
-                        ),
-                        "error": None,
-                    },
-                )
+                native_result = project_native_result(snapshot, version=projection_version)
                 facts = {
                     **raw,
                     "availability": quality,
@@ -721,6 +795,10 @@ class BundleMaterializer:
                         "validation": dict(snapshot.validation_json or {}),
                     },
                 }
+                facts.update(native_transport_facts(
+                    snapshot, evidence=evidence, cutoff_at=_database_utc(bundle.cutoff_at),
+                    projection_version=projection_version,
+                ))
             else:
                 facts = stored_payload
             if series:
@@ -788,6 +866,7 @@ class BundleMaterializer:
         )
         if calculated_hash != bundle.manifest_hash:
             raise BundleIntegrityError("bundle manifest hash verification failed")
+        _require_company_profile_dependencies(resolved_snapshots)
         return MaterializedBundle(
             bundle_id=bundle.id,
             symbol=bundle.symbol,
@@ -806,6 +885,7 @@ __all__ = [
     "BundleMaterializer",
     "BundlePublicationError",
     "BundlePublisher",
+    "CompanyProfileDependencyError",
     "IncompleteBundleError",
     "bundle_manifest_hash",
 ]

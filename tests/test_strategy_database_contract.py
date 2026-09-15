@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from research_system.runtime.core.id_utils import generate_ulid
-from research_system.strategies.contracts import BacktestMode
+from research_system.strategies.contracts import BacktestMode, StrategyDocumentV1
 from research_system.strategies.database import StrategyDatabase
 from research_system.strategies.errors import StrategyNotFound
 from research_system.strategies.service import OwnerScope, StrategyService
@@ -37,7 +37,7 @@ class StrategyRepositoryContractMixin:
                 self.assertTrue(catalog["strategies"])
                 self.assertTrue(catalog["strategies"][0]["is_system_template"])
 
-                created = service.create_strategy(owner, name=f"repository-contract-{unique}")
+                created = service.create_strategy(owner, name=f"repository-contract-{unique}", document=StrategyDocumentV1().model_dump(mode="json"))
                 document = created["draft"]["document"]
                 updated = service.update_draft(
                     owner,

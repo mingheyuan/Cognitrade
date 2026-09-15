@@ -22,7 +22,7 @@ class AgentOSTests(unittest.TestCase):
                 "runs_root": root / "runs",
                 "memory_root": root / "memory",
                 "domain_packs_root": repository_root / "domain_packs",
-                "openai_api_key": None,
+                "codex_enabled": False,
                 "openai_base_url": None,
             }
         )

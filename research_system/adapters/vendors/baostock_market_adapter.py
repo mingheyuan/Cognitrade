@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from importlib import import_module
 from typing import Any
 
 from research_system.adapters.vendors.akshare_utils import (
@@ -9,7 +8,7 @@ from research_system.adapters.vendors.akshare_utils import (
     normalize_value,
 )
 from research_system.adapters.vendors.baostock_socket_safety import (
-    install_baostock_socket_safety,
+    baostock_session,
 )
 
 
@@ -26,13 +25,8 @@ class BaoStockMarketAdapter:
         end_date: str,
         adjust: str = "",
     ) -> dict[str, Any]:
-        install_baostock_socket_safety()
-        bs = import_module("baostock")
-        login = bs.login()
-        if str(getattr(login, "error_code", "0")) != "0":
-            raise ConnectionError("baostock login failed")
         code = self._code(symbol)
-        try:
+        with baostock_session() as bs:
             result = bs.query_history_k_data_plus(
                 code,
                 "date,code,open,high,low,close,preclose,volume,amount,adjustflag",
@@ -48,8 +42,6 @@ class BaoStockMarketAdapter:
             while result.next():
                 row = dict(zip(fields, result.get_row_data()))
                 bars.append({key: normalize_value(value) for key, value in row.items()})
-        finally:
-            bs.logout()
         if not bars:
             raise ValueError(f"no market data returned for symbol {symbol}")
         return {

@@ -19,7 +19,7 @@ from research_system.strategies.backtesting.portfolio_ledger import (
     run_otc_single_asset,
 )
 from research_system.strategies.backtesting.service import StrategyBacktestService
-from research_system.strategies.contracts import BacktestMode
+from research_system.strategies.contracts import BacktestMode, StrategyDocumentV1
 from research_system.strategies.database import StrategyDatabase
 from research_system.strategies.errors import StrategyConflict, StrategyDomainError
 from research_system.strategies.models import (
@@ -101,7 +101,7 @@ class StrategyBacktestTests(unittest.TestCase):
             auto_bootstrap=True,
         )
         self.owner = OwnerScope("tenant-a", "user-a", "actor-a")
-        strategy = self.strategy_service.create_strategy(self.owner, name="回测策略")
+        strategy = self.strategy_service.create_strategy(self.owner, name="回测策略", document=StrategyDocumentV1().model_dump(mode="json"))
         self.version = self.strategy_service.publish(self.owner, strategy["id"])
         self.strategy_id = strategy["id"]
         self.fund_assignment = self.strategy_service.create_assignment(
@@ -746,6 +746,52 @@ class OTCFundLedgerTests(unittest.TestCase):
         )
         self.assertEqual([trade["side"] for trade in result["trades"]], ["buy"])
         self.assertGreater(result["ending_positions"]["600000"], 0)
+
+    def test_zero_coverage_blocked_report_replays_as_cash_only(self) -> None:
+        from research_system.strategies.contracts import blank_strategy_document
+
+        result = run_holdings_portfolio(
+            instruments={},
+            bars_by_symbol={},
+            events_by_symbol={},
+            stock_signals={},
+            fund_signals=[
+                {
+                    "id": "fund-blocked",
+                    "state": "BLOCKED",
+                    "effective_from": "2026-08-03",
+                    "expires_after": "2026-08-05",
+                    "source_report_set_id": "report-partial",
+                }
+            ],
+            report_schedule=[
+                {
+                    "id": "report-partial",
+                    "effective_date": "2026-08-03",
+                    "revision": 1,
+                    "target_weights": {},
+                }
+            ],
+            adapter=ExchangeExecutionAdapter.stock(blank_strategy_document()),
+            initial_cash=100_000,
+            start_date=date(2026, 8, 3),
+            end_date=date(2026, 8, 5),
+            max_single_stock_pct=20,
+            drift_pct_points=2,
+            fallback_trading_days=[
+                date(2026, 8, 3),
+                date(2026, 8, 4),
+                date(2026, 8, 5),
+            ],
+        )
+
+        self.assertEqual(result["metrics"]["trade_count"], 0)
+        self.assertEqual(result["metrics"]["final_equity"], 100_000)
+        self.assertEqual(
+            [row["date"] for row in result["equity_curve"]],
+            ["2026-08-03", "2026-08-04", "2026-08-05"],
+        )
+        self.assertTrue(all(row["cash"] == 100_000 for row in result["equity_curve"]))
 
     def test_missing_open_status_is_audited_as_degraded_estimate_and_confirmation_rules_are_applied(self) -> None:
         instrument = InstrumentResolver.resolve_fund(

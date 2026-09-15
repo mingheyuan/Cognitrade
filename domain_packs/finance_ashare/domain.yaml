@@ -421,6 +421,8 @@ capabilities:
     cache_scope: global
   - subagent_type: stock_snapshot_collector
     capability: finance.ashare.snapshot.collect
+    capability_version: "2"
+    policy_version: "frozen-evidence-transport-v2"
     implementation: subagents.runtime:collect_snapshot
     consumes:
       - artifact_type: normalized_query
@@ -525,11 +527,14 @@ capabilities:
     tags: [intent:quick_scan]
   - subagent_type: uzi_native_analyze_stock
     capability: finance.uzi.native.analyze_stock
-    capability_version: "1"
+    capability_version: "2"
     methodology_version: "3.9.4-source-parity"
     implementation: subagents.runtime:execute_uzi_native_full_analysis
     consumes:
       - *finance_snapshot_input
+      - artifact_type: user_request
+        required: false
+        multiple: false
       - artifact_type: normalized_query
         required: false
         multiple: false

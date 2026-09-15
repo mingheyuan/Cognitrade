@@ -4,6 +4,7 @@ import type {
   CollectionJob,
   CollectionJobInput,
   CollectionRetryInput,
+  CompanyProfileDependencies,
   CoverageQuery,
   ExpandedFundHolding,
   InstrumentIdentity,
@@ -129,6 +130,23 @@ export function normalizeMarketDataContract(payload: unknown): MarketDataContrac
   }
 }
 
+function normalizeCompanyProfileDependencies(payload: unknown): CompanyProfileDependencies | undefined {
+  const source = asRecord(payload)
+  if (!Object.keys(source).length) return undefined
+  const dimensions = (value: unknown) => Array.isArray(value) ? value.map(String) : []
+  return {
+    version: stringValue(source.version), status: stringValue(source.status),
+    can_freeze: source.can_freeze === true,
+    input_basic_snapshot_id: stringValue(source.input_basic_snapshot_id) || null,
+    input_basic_snapshot_hash: stringValue(source.input_basic_snapshot_hash) || null,
+    dependency_fingerprint: stringValue(source.dependency_fingerprint) || null,
+    required_dimensions: dimensions(source.required_dimensions),
+    direct_dimensions: dimensions(source.direct_dimensions), review_dimensions: dimensions(source.review_dimensions),
+    pending_dimensions: dimensions(source.pending_dimensions),
+    issues: records(source.issues).map((item) => ({ dimension: stringValue(item.dimension), reason: stringValue(item.reason) })),
+  }
+}
+
 export function normalizeMarketDataCoverage(payload: unknown): MarketDataCoverage {
   const source = asRecord(payload)
   const rawCounts = asRecord(source.counts)
@@ -194,6 +212,7 @@ export function normalizeMarketDataCoverage(payload: unknown): MarketDataCoverag
     structurally_complete: Boolean(source.structurally_complete),
     report_ready: Boolean(source.report_ready),
     report_generatable: Boolean(source.report_generatable ?? source.report_ready),
+    company_profile_dependencies: normalizeCompanyProfileDependencies(source.company_profile_dependencies),
     resolved_dimension_count: numberValue(
       source.resolved_dimension_count,
       dimensions.filter((item) => item.snapshot_id).length,
@@ -343,6 +362,18 @@ function normalizePortfolioSummary(payload: unknown) {
     retryable_slots: numberValue(source.retryable_slots),
     blocked_slots: numberValue(source.blocked_slots),
     active_slots: numberValue(source.active_slots),
+    unassessed_slots: source.unassessed_slots == null ? undefined : numberValue(source.unassessed_slots),
+    degraded_slots: source.degraded_slots == null ? undefined : numberValue(source.degraded_slots),
+    by_holding: Array.isArray(source.by_holding) ? source.by_holding.map((item) => {
+      const row = asRecord(item)
+      return {
+        symbol: stringValue(row.symbol), total_slots: numberValue(row.total_slots, 22),
+        ready_slots: numberValue(row.ready_slots), missing_slots: numberValue(row.missing_slots),
+        active_slots: numberValue(row.active_slots), unassessed_slots: numberValue(row.unassessed_slots),
+        degraded_slots: numberValue(row.degraded_slots), retryable_slots: numberValue(row.retryable_slots),
+        blocked_slots: numberValue(row.blocked_slots),
+      }
+    }) : undefined,
     attempt: numberValue(source.attempt),
     current_child_job_ids: Array.isArray(source.current_child_job_ids) ? source.current_child_job_ids.map(String) : [],
     by_error_code: normalizeDiagnosticBuckets(source.by_error_code),
@@ -377,9 +408,18 @@ function qualityGateValue(value: unknown) {
 function normalizeJob(payload: unknown): CollectionJob {
   const source = asRecord(payload)
   const rawProgress = asRecord(source.progress)
+  const rawPostfetch = asRecord(rawProgress.native_postfetch)
+  const rawArchive = asRecord(source.research_archive ?? rawProgress.research_archive)
+  const archiveActive = asRecord(rawArchive.active)
+  const researchArchive = Object.keys(rawArchive).length ? {
+    status: stringValue(rawArchive.status), total: numberValue(rawArchive.total), completed: numberValue(rawArchive.completed),
+    persisted_snapshot_count: numberValue(rawArchive.persisted_snapshot_count),
+    active: Object.keys(archiveActive).length ? { symbol: stringValue(archiveActive.symbol), dimension: stringValue(archiveActive.dimension), as_of_date: stringValue(archiveActive.as_of_date ?? archiveActive.asof) } : null,
+  } : undefined
   const byStatus = asRecord(rawProgress.by_status)
   const rawProviderProgress = asRecord(rawProgress.provider)
   const checkpoint = asRecord(source.checkpoint)
+  const dependencies = normalizeCompanyProfileDependencies(source.company_profile_dependencies ?? asRecord(checkpoint.publication).company_profile_dependencies)
   const rawChildJobIds = source.child_collection_job_ids ?? checkpoint.child_job_ids
   const total = numberValue(rawProgress.total)
   const assetFamily = stringValue(source.asset_family).toLowerCase() === 'fund' ? 'fund' : 'equity'
@@ -416,7 +456,7 @@ function normalizeJob(payload: unknown): CollectionJob {
       : rawFreezeStatus
   const validFreezeStatuses = new Set(['collecting', 'awaiting_recovery', 'awaiting_confirmation', 'frozen', 'not_ready'])
   const jobStatus = stringValue(source.status, 'unknown').toLowerCase()
-  const active = ['queued', 'pending', 'running', 'processing', 'leased'].includes(jobStatus)
+  const active = ['queued', 'pending', 'running', 'processing', 'leased', 'cancelling'].includes(jobStatus)
   const terminalSuccess = ['completed', 'succeeded', 'published'].includes(jobStatus)
   const hasFrozenReceipt = Boolean(
     parentBundleId
@@ -449,16 +489,26 @@ function normalizeJob(payload: unknown): CollectionJob {
     end_date: stringValue(source.end_date),
     max_concurrency: numberValue(source.max_concurrency, 5),
     publish_when_complete: Boolean(source.publish_when_complete),
-    freeze_status: freezeStatus as CollectionJob['freeze_status'],
-    can_confirm_freeze: source.can_confirm_freeze == null ? false : Boolean(source.can_confirm_freeze),
+    freeze_status: (dependencies?.can_freeze === false && freezeStatus !== 'frozen' ? 'not_ready' : freezeStatus) as CollectionJob['freeze_status'],
+    can_confirm_freeze: dependencies?.can_freeze !== false && Boolean(source.can_confirm_freeze),
+    company_profile_dependencies: dependencies,
     publication_candidate: publicationCandidate,
     agent_recovery: agentRecovery,
+    research_archive: researchArchive,
     scoped_retry_supported: Boolean(source.scoped_retry_supported),
     progress: {
+      native_postfetch: Object.keys(rawPostfetch).length ? {
+        status: stringValue(rawPostfetch.status), attempted: numberValue(rawPostfetch.attempted),
+        succeeded: numberValue(rawPostfetch.succeeded), failed: numberValue(rawPostfetch.failed),
+        persisted_snapshot_count: numberValue(rawPostfetch.persisted_snapshot_count),
+        reason_code: stringValue(rawPostfetch.reason_code) || undefined,
+      } : undefined,
       total,
       queued: numberValue(rawProgress.queued ?? byStatus.queued),
       running: numberValue(rawProgress.running ?? byStatus.running),
+      cancelling: numberValue(rawProgress.cancelling ?? byStatus.cancelling),
       completed: numberValue(rawProgress.succeeded ?? byStatus.succeeded ?? byStatus.completed ?? (Object.keys(byStatus).length ? 0 : rawProgress.completed)),
+      partial: numberValue(rawProgress.partial ?? byStatus.partial),
       failed: numberValue(rawProgress.failed ?? byStatus.failed),
       skipped: numberValue(rawProgress.skipped ?? byStatus.skipped ?? byStatus.cancelled),
       child_complete: rawProgress.child_complete == null ? undefined : numberValue(rawProgress.child_complete),

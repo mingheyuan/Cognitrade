@@ -26,6 +26,7 @@ from research_system.market_data.dimension_contracts import DEFAULT_DIMENSION_RE
 from research_system.market_data.fund_holding_collection import (
     FUND_HOLDING_JOB_TYPE,
     FundHoldingCollectionCoordinator,
+    _bundle_proposal_requires_degraded_ack,
 )
 from research_system.market_data.fund_holdings_adapter import (
     FundTopHoldingsSnapshotAdapter,
@@ -52,6 +53,26 @@ from research_system.market_data.repository import MarketDataRepository
 from research_system.strategies.database import StrategyDatabase
 
 HOLDING_SYMBOLS = [f"600{index:03d}.SH" for index in range(1, 11)]
+
+
+def test_degraded_freeze_ack_tracks_quality_and_disclosed_gaps() -> None:
+    assert not _bundle_proposal_requires_degraded_ack(
+        {"degraded": False, "quality": "strict", "missing_dimensions": []}
+    )
+    assert _bundle_proposal_requires_degraded_ack(
+        {
+            "degraded": False,
+            "quality": "degraded",
+            "missing_dimensions": ["3_macro"],
+        }
+    )
+    assert _bundle_proposal_requires_degraded_ack(
+        {
+            "degraded": False,
+            "quality": "strict",
+            "missing_dimensions": ["19_contests"],
+        }
+    )
 
 
 class _FundSkill:
@@ -331,7 +352,13 @@ class _TrackingEquityCollection:
 
     def __init__(self, database: StrategyDatabase) -> None:
         self.database = database
-        self.delegate = MarketDataCollectionCoordinator(database, max_background_jobs=1)
+
+        def unexpected_provider(**kwargs):
+            raise AssertionError("fund fixture must not invoke a live provider")
+
+        self.delegate = MarketDataCollectionCoordinator(
+            database, collector=unexpected_provider, max_background_jobs=1
+        )
         self.available: dict[str, set[str]] = defaultdict(set)
         self.blocked_symbols: set[str] = set()
         self.run_calls: list[str] = []
@@ -340,6 +367,9 @@ class _TrackingEquityCollection:
 
     def create_job(self, **kwargs):
         return self.delegate.create_job(**kwargs)
+
+    def dimensions_needing_collection(self, **kwargs):
+        return self.delegate.dimensions_needing_collection(**kwargs)
 
     def run_job_now(self, job_id: str) -> None:
         self.run_calls.append(job_id)
@@ -656,6 +686,28 @@ def _wait_for_parent_recovery(coordinator, job_id: str) -> dict:
             return payload
         Event().wait(0.01)
     raise AssertionError("parent Agent recovery did not reach a durable terminal state")
+
+
+def test_parent_completion_and_candidate_are_committed_together(harness, monkeypatch):
+    _database, _skill, _adapter, _equity, coordinator = harness
+    parent = _create_parent(coordinator, as_of_date=coordinator._local_today())
+    original = coordinator._complete_parent
+    observations = []
+
+    def complete(*args, **kwargs):
+        result = original(*args, **kwargs)
+        state = coordinator.get_job(parent["id"], tenant_id="tenant", user_id="user")
+        observations.append(state)
+        # Observe immediately after the terminal transaction, before the
+        # worker can execute any following publication/cleanup statement.
+        assert state["status"] == "succeeded"
+        assert state["publication_candidate"] is not None
+        assert state["can_confirm_freeze"]
+        return result
+
+    monkeypatch.setattr(coordinator, "_complete_parent", complete)
+    coordinator.run_job_now(parent["id"])
+    assert len(observations) == 1
 
 
 def _seed_real_equity_snapshots(database, symbols: list[str]) -> tuple[datetime, date]:
@@ -1719,6 +1771,96 @@ def test_retry_reuses_parent_and_collects_only_the_remaining_child_gap(harness) 
         assert retry_child.symbols_json == [HOLDING_SYMBOLS[-1]]
         assert len(retry_child.dimensions_json) == 22
         assert retry_child.parent_job_id == parent["id"]
+
+
+def test_report_ready_parent_retries_only_candidate_data_gaps(harness) -> None:
+    database, skill, _adapter, _equity, coordinator = harness
+    parent = _create_parent(coordinator, as_of_date=coordinator._local_today())
+    coordinator.run_job_now(parent["id"])
+    completed = coordinator.get_job(parent["id"], tenant_id="tenant", user_id="user")
+    assert completed["status"] == "succeeded"
+    assert len(skill.calls) == 1
+
+    selected_symbol = HOLDING_SYMBOLS[0]
+    selected_dimension = "12_capital_flow"
+    audit_only_dimension = "11_governance"
+    with database.session() as session:
+        row = session.get(MarketDataCollectionJob, parent["id"])
+        assert row is not None
+        checkpoint = dict(row.checkpoint_json or {})
+        checkpoint["publication_candidate"] = {
+            "bundles": [
+                {
+                    "asset_role": "holding",
+                    "symbol": symbol,
+                    "missing_dimensions": [selected_dimension] if symbol == selected_symbol else [],
+                }
+                for symbol in HOLDING_SYMBOLS
+            ],
+            "missing_dimensions": [f"{selected_symbol}:{selected_dimension}"],
+        }
+        checkpoint["publication"] = {
+            "status": "pending_confirmation",
+            "proposal_hash": "a" * 64,
+        }
+        row.checkpoint_json = checkpoint
+        child_ids = list(checkpoint["child_job_ids"])
+        selected_task = session.scalar(
+            select(MarketDataCollectionTask).where(
+                MarketDataCollectionTask.job_id.in_(child_ids),
+                MarketDataCollectionTask.symbol == selected_symbol,
+                MarketDataCollectionTask.dimension == selected_dimension,
+            )
+        )
+        audit_only_task = session.scalar(
+            select(MarketDataCollectionTask).where(
+                MarketDataCollectionTask.job_id.in_(child_ids),
+                MarketDataCollectionTask.symbol == selected_symbol,
+                MarketDataCollectionTask.dimension == audit_only_dimension,
+            )
+        )
+        assert selected_task is not None and audit_only_task is not None
+        selected_task.status = CollectionStatus.FAILED.value
+        selected_task.retryable = True
+        selected_task.attempt_count = 1
+        selected_task.last_error_code = "historical_provider_failure"
+        audit_only_task.status = CollectionStatus.PARTIAL.value
+        audit_only_task.retryable = True
+        audit_only_task.attempt_count = 1
+        audit_only_task.last_error_code = "historical_partial"
+
+    detail = coordinator.get_job(parent["id"], tenant_id="tenant", user_id="user")
+    assert detail["portfolio_summary"]["total_slots"] == 220
+    assert detail["portfolio_summary"]["ready_slots"] == 219
+    assert detail["portfolio_summary"]["missing_slots"] == 1
+    assert detail["portfolio_summary"]["retryable_slots"] == 1
+    assert detail["portfolio_summary"]["blocked_slots"] == 0
+
+    queued = coordinator.retry_failed(
+        parent["id"],
+        tenant_id="tenant",
+        user_id="user",
+        actor_id="actor",
+        submit=False,
+    )
+    assert queued["status"] == "queued"
+    assert queued["checkpoint"]["retry_scope_by_symbol"] == {
+        selected_symbol: [selected_dimension]
+    }
+    assert queued["checkpoint"]["publication"]["status"] == "blocked"
+    assert "publication_candidate" not in queued["checkpoint"]
+
+    coordinator.run_job_now(parent["id"])
+    retried = coordinator.get_job(parent["id"], tenant_id="tenant", user_id="user")
+    assert retried["status"] == "succeeded"
+    assert len(skill.calls) == 1
+    retry_child_id = retried["child_collection_job_ids"][-1]
+    with database.session() as session:
+        retry_child = session.get(MarketDataCollectionJob, retry_child_id)
+        assert retry_child is not None
+        assert retry_child.mode == "force_all"
+        assert retry_child.symbols_json == [selected_symbol]
+        assert retry_child.dimensions_json == [selected_dimension]
 
 
 def test_retry_of_the_same_full_gap_uses_a_new_persisted_generation(harness) -> None:

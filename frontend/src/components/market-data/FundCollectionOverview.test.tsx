@@ -77,6 +77,19 @@ const childJob: CollectionJob = {
 afterEach(cleanup)
 
 describe('FundCollectionOverview', () => {
+  it('does not mark unscheduled holdings or absent portfolio assessments ready', () => {
+    const job = { ...parentJob, portfolio_summary: undefined, child_collection_job_ids: [] }
+    render(<>
+      <FundCollectionProgress job={job} />
+      <FundCollectionOverview job={job} childJobs={[]} jobDetails={{}} actionLoading={false} onLoadDetail={vi.fn()} onRetry={vi.fn()} />
+    </>)
+    expect(screen.getByText('严格可用 0/220 槽')).toBeInTheDocument()
+    expect(screen.getByText('未评估 220 槽')).toBeInTheDocument()
+    expect(screen.getAllByText('未评估')).toHaveLength(10)
+    expect(screen.queryByText('已就绪')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('uses live child progress instead of showing a false blocked warning', () => {
     render(<>
       <FundCollectionProgress job={parentJob} childJobs={[childJob]} />
@@ -91,9 +104,30 @@ describe('FundCollectionOverview', () => {
     </>)
 
     expect(screen.getByText('220 个槽正在处理')).toBeInTheDocument()
-    expect(screen.getByText('合格 0/220 槽')).toBeInTheDocument()
+    expect(screen.getByText('严格可用 0/220 槽')).toBeInTheDocument()
     expect(screen.getAllByText('采集中')).toHaveLength(10)
     expect(screen.queryByText('当前缺口不能靠重复采集解决')).not.toBeInTheDocument()
+  })
+
+  it.each([
+    { status: 'running', cancelling: 0, active: 0 },
+    { status: 'cancelling', cancelling: 10, active: 10 },
+  ])('does not infer activity from legacy gaps or deduct existing gaps twice ($status)', ({ status, cancelling, active }) => {
+    const parent = {
+      ...parentJob,
+      portfolio_summary: { ...parentJob.portfolio_summary!, ready_slots: 130, missing_slots: 90, retryable_slots: 60, blocked_slots: 30 },
+    }
+    const child = {
+      ...childJob, status, task_summary: undefined,
+      progress: { total: 220, queued: 0, running: 0, cancelling, completed: 0, failed: 0, skipped: 0 },
+    }
+    render(<>
+      <FundCollectionProgress job={parent} childJobs={[child]} />
+      <FundCollectionOverview job={parent} childJobs={[child]} jobDetails={{}} actionLoading={false} onLoadDetail={vi.fn()} onRetry={vi.fn()} />
+    </>)
+    expect(screen.getByText('严格可用 130/220 槽')).toBeInTheDocument()
+    if (active) expect(screen.getByText(`${active} 个槽正在处理`)).toBeInTheDocument()
+    else expect(screen.queryByText(/个槽正在处理/)).not.toBeInTheDocument()
   })
 
   it('expands one holding and retries only its retryable dimensions', async () => {
@@ -124,21 +158,38 @@ describe('FundCollectionOverview', () => {
         active: 0,
         retryable_failed: 1,
       },
-      tasks: [{
-        task_id: 'task-basic',
-        symbol: holdings[0].symbol,
-        dimension_id: '0_basic',
-        status: 'failed',
-        attempt: 1,
-        max_attempts: 3,
-        retryable: true,
-        error_code: 'provider_data_gap',
-        error_message: 'provider returned no usable result',
-        failure_kind: 'source_unavailable',
-        failure_stage: 'acquisition',
-        failure_label: '数据源未返回',
-        raw_data_present: false,
-      }],
+      tasks: [
+        {
+          task_id: 'task-basic',
+          symbol: holdings[0].symbol,
+          dimension_id: '0_basic',
+          status: 'failed',
+          attempt: 1,
+          max_attempts: 3,
+          retryable: true,
+          error_code: 'provider_data_gap',
+          error_message: 'provider returned no usable result',
+          failure_kind: 'source_unavailable',
+          failure_stage: 'acquisition',
+          failure_label: '数据源未返回',
+          raw_data_present: false,
+        },
+        {
+          task_id: 'task-governance-audit',
+          symbol: holdings[0].symbol,
+          dimension_id: '11_governance',
+          status: 'partial',
+          attempt: 1,
+          max_attempts: 3,
+          retryable: true,
+          error_code: 'historical_partial',
+          error_message: 'optional governance fields are incomplete',
+          failure_kind: 'audit_only',
+          failure_stage: 'audit',
+          failure_label: 'UZI 可用 · 扩展审计提示',
+          raw_data_present: true,
+        },
+      ],
     }
 
     render(<FundCollectionOverview
@@ -168,6 +219,8 @@ describe('FundCollectionOverview', () => {
     expect(screen.getByText('数据源未返回')).toBeInTheDocument()
     expect(screen.getByText('本次查询没有拿到可用原始记录，可在数据源恢复后重试。')).toBeInTheDocument()
     expect(screen.getByText('provider returned no usable result')).toBeInTheDocument()
+    expect(screen.getByText('该槽保留原生数据检查结果；研究缺口仅作 Agent 输入提示，PIT 与冻结数据安全校验独立执行，不代表最终报告自审通过。')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: `重试 ${holdings[0].symbol} 11_governance` })).not.toBeInTheDocument()
   })
 
   it('reloads task detail when a child retry reaches a terminal state', async () => {
@@ -240,7 +293,62 @@ describe('FundCollectionOverview', () => {
     expect(await screen.findByText('eFinance / 东财连接被上游中断；Tushare 账户没有 moneyflow 接口权限。')).toBeInTheDocument()
   })
 
+  it('does not treat a saved error response as usable UZI data', async () => {
+    const failedMacroChild: CollectionJob = {
+      ...childJob,
+      status: 'partial',
+      tasks: [{
+        task_id: 'macro-task',
+        symbol: holdings[0].symbol,
+        dimension_id: '3_macro',
+        status: 'failed',
+        attempt: 1,
+        max_attempts: 3,
+        retryable: true,
+        error_code: 'historical_provider_failure',
+        error_message: 'em_push2: provider_unavailable (ConnectionError)',
+        collection_outcome: 'retryable_failure',
+        failure_kind: 'source_unavailable',
+        failure_stage: 'acquisition',
+        failure_label: '数据源未返回',
+        raw_data_present: true,
+      }],
+    }
+    render(<FundCollectionOverview
+      job={parentJob}
+      childJobs={[failedMacroChild]}
+      jobDetails={{ 'equity-child': failedMacroChild }}
+      actionLoading={false}
+      onLoadDetail={vi.fn().mockResolvedValue(failedMacroChild)}
+      onRetry={vi.fn()}
+    />)
+
+    screen.getAllByRole('button', { name: /查看 22 维/ })[0].click()
+    expect(await screen.findByText('本次上游请求失败，没有把失败误判为历史不可恢复；可定向重试。')).toBeInTheDocument()
+    expect(screen.queryByText('UZI 可用 · 字段审计提示')).not.toBeInTheDocument()
+    expect(screen.queryByText(/字段缺口作为提示交给完整 Agent/)).not.toBeInTheDocument()
+    expect(screen.getByText('em_push2: provider_unavailable (ConnectionError)')).toBeInTheDocument()
+  })
+
   it('distinguishes partial, verified-empty, retryable and unavailable historical outcomes', async () => {
+    const outcomeParent: CollectionJob = {
+      ...parentJob,
+      status: 'partial',
+      expanded_holdings: holdings.map((holding, index) => ({
+        ...holding,
+        missing_dimensions: index === 0
+          ? ['12_capital_flow', '19_contests']
+          : [],
+      })),
+      portfolio_summary: {
+        ...parentJob.portfolio_summary!,
+        ready_holdings: 9,
+        ready_slots: 218,
+        missing_slots: 2,
+        retryable_slots: 1,
+        blocked_slots: 1,
+      },
+    }
     const outcomeChild: CollectionJob = {
       ...childJob,
       status: 'partial',
@@ -291,7 +399,7 @@ describe('FundCollectionOverview', () => {
     }
 
     render(<FundCollectionOverview
-      job={parentJob}
+      job={outcomeParent}
       childJobs={[outcomeChild]}
       jobDetails={{ 'equity-child': outcomeChild }}
       actionLoading={false}
@@ -305,6 +413,7 @@ describe('FundCollectionOverview', () => {
     expect(screen.getByText('查证为空')).toBeInTheDocument()
     expect(screen.getByText('数据源失败')).toBeInTheDocument()
     expect(screen.getByText('无历史档案')).toBeInTheDocument()
+    expect(screen.getByText('该字段没有可证明的历史归档；不以当前值回填历史，保留缺口披露，评分按 UZI 原生结果。')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: `重试 ${holdings[0].symbol} 12_capital_flow` })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: `重试 ${holdings[0].symbol} 19_contests` })).not.toBeInTheDocument()
   })

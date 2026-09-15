@@ -28,6 +28,8 @@ import type {
   DailyReportSet,
   PaperStrategyBinding,
   ReportJob,
+  ReportRepairPlan,
+  ReportEvidenceCollection,
   StrategyAssignment,
   StrategyBacktest,
   StrategyDocument,
@@ -469,7 +471,7 @@ export class CognitradeApiClient {
     return this.financeCommand('/finance/report-backfills/estimate', 'POST', payload)
   }
 
-  createReportJob(payload: { assignment_id: string; strategy_version_id?: string; as_of_date?: string; start_date?: string; end_date?: string; source_run_id?: string }, backfill = false): Promise<ReportJob> {
+  createReportJob(payload: { assignment_id: string; strategy_version_id?: string; as_of_date?: string; start_date?: string; end_date?: string; source_run_id?: string; fund_bundle_id?: string }, backfill = false): Promise<ReportJob> {
     return this.financeCommand(`/finance/${backfill ? 'report-backfills' : 'report-jobs'}`, 'POST', payload)
   }
 
@@ -481,8 +483,26 @@ export class CognitradeApiClient {
     return this.financeRequest(`/finance/report-jobs/${encodeURIComponent(jobId)}`)
   }
 
-  retryReportJob(jobId: string, payload: { symbols?: string[]; full_rerun?: boolean; confirmed?: boolean }): Promise<ReportJob> {
+  retryReportJob(jobId: string, payload: { symbols?: string[]; full_rerun?: boolean; confirmed?: boolean; refresh_inputs?: boolean }): Promise<ReportJob> {
     return this.financeCommand(`/finance/report-jobs/${encodeURIComponent(jobId)}/retry`, 'POST', payload)
+  }
+
+  getReportRepairPlan(jobId: string): Promise<ReportRepairPlan> {
+    return this.financeRequest(`/finance/report-jobs/${encodeURIComponent(jobId)}/repair-plan`)
+  }
+
+  collectReportEvidence(payload: NonNullable<ReportRepairPlan['items'][number]['collection_request']>): Promise<ReportEvidenceCollection> {
+    return this.financeCommand('/finance/market-data/collection-jobs', 'POST', payload)
+  }
+
+  getReportEvidenceCollection(jobId: string): Promise<ReportEvidenceCollection> {
+    return this.financeRequest(`/finance/market-data/collection-jobs/${encodeURIComponent(jobId)}`)
+  }
+
+  confirmReportEvidenceCollection(jobId: string, proposalHash: string, acknowledgeDegraded: boolean): Promise<unknown> {
+    return this.financeCommand(`/finance/market-data/collection-jobs/${encodeURIComponent(jobId)}/confirm-freeze`, 'POST', {
+      proposal_hash: proposalHash, acknowledge_degraded: acknowledgeDegraded,
+    })
   }
 
   setReportJobPaused(jobId: string, paused: boolean): Promise<ReportJob> {
@@ -500,7 +520,7 @@ export class CognitradeApiClient {
     return this.financeCommand('/finance/signal-previews', 'POST', payload)
   }
 
-  recomputeTradeSignals(payload: { assignment_id: string; report_set_id: string }): Promise<{ fund_signal: TradeSignal; holding_signals: TradeSignal[]; strategy_version_id: string; report_set_id: string }> {
+  recomputeTradeSignals(payload: { assignment_id: string; report_set_id: string }): Promise<{ fund_signal: TradeSignal | null; holding_signals: TradeSignal[]; strategy_version_id: string; report_set_id: string }> {
     return this.financeCommand('/finance/trade-signals/recompute', 'POST', payload)
   }
 
@@ -513,11 +533,11 @@ export class CognitradeApiClient {
     }))
   }
 
-  preflightStrategyBacktest(payload: { strategy_version_id: string; fund_code: string; mode: BacktestMode; start_date: string; end_date: string }): Promise<BacktestPreflight> {
+  preflightStrategyBacktest(payload: { strategy_version_id: string; fund_code: string; mode: BacktestMode; start_date: string; end_date: string; market_data_manifest_hash?: string }): Promise<BacktestPreflight> {
     return this.financeCommand('/finance/strategy-backtests/preflight', 'POST', payload)
   }
 
-  createStrategyBacktest(payload: { strategy_version_id: string; fund_code: string; mode: BacktestMode; start_date: string; end_date: string; initial_cash: number; benchmark: Record<string, unknown>; report_policy: 'existing_only' | 'require_complete' }): Promise<StrategyBacktest> {
+  createStrategyBacktest(payload: { strategy_version_id: string; fund_code: string; mode: BacktestMode; start_date: string; end_date: string; initial_cash: number; benchmark: Record<string, unknown>; report_policy: 'existing_only' | 'require_complete'; market_data_manifest_hash?: string }): Promise<StrategyBacktest> {
     return this.financeCommand('/finance/strategy-backtests', 'POST', payload)
   }
 

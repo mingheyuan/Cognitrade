@@ -165,6 +165,7 @@ class UziFinancePackTests(unittest.TestCase):
             "finance.sector.research": {"snapshot", "stock_snapshot_bundle"},
             "finance.uzi.native.analyze_stock": {
                 "snapshot",
+                "user_request",
                 "normalized_query",
                 "stock_snapshot_bundle",
             },
@@ -179,6 +180,10 @@ class UziFinancePackTests(unittest.TestCase):
                 self.assertFalse(by_type["stock_snapshot_bundle"].required)
                 if "normalized_query" in by_type:
                     self.assertFalse(by_type["normalized_query"].required)
+                if "user_request" in by_type:
+                    # Carries the immutable report Manifest / auxiliary recording.
+                    self.assertFalse(by_type["user_request"].required)
+                    self.assertFalse(by_type["user_request"].multiple)
 
     def test_main_agent_synthesis_contract_accepts_full_artifact_lineage(self) -> None:
         schema = json.loads(
@@ -968,7 +973,7 @@ class UziFinancePackTests(unittest.TestCase):
                     "domain_packs_root": repository_root / "domain_packs",
                     # This case asserts partial delivery when synthesis is
                     # unavailable; keep the provider state deterministic.
-                    "openai_api_key": None,
+                    "codex_enabled": False,
                 }
             )
             with TestClient(
@@ -1068,7 +1073,7 @@ class UziFinancePackTests(unittest.TestCase):
                     # The test validates graph/artifact materialization rather
                     # than an external model response. Keep it deterministic
                     # even when the developer machine has a real API key.
-                    "openai_api_key": None,
+                    "codex_enabled": False,
                 }
             )
             with TestClient(

@@ -190,6 +190,49 @@ class MarketDataServiceBoundaryTests(unittest.TestCase):
         self.database.close()
         self.temp_dir.cleanup()
 
+    def test_report_manifest_gateway_uses_the_deployed_service_settings(self) -> None:
+        # A data-center Manifest must pin the same model configuration that
+        # the formal report executor will check, not the gateway defaults.
+        self.assertTrue(
+            self.service.report_gateway.runtime_settings is self.settings,
+            "The data-center report gateway must retain the deployed settings identity",
+        )
+
+    def test_evidence_detail_does_not_label_observation_as_publication(self) -> None:
+        request = self._manual_request()
+        request["evidence"][0].update({
+            "source_kind": "research_document",
+            "published_at": self.published_at,
+            "observed_at": self.published_at,
+            "metadata": {
+                "publication_time_basis": "observed_upper_bound",
+                "publisher_published_at": None,
+            },
+        })
+        snapshot = self.service.create_manual_snapshot(
+            tenant_id="tenant", user_id="user", actor_id="actor",
+            request=request,
+        )
+        detail = self.service.get_snapshot(snapshot["snapshot_id"])
+        item = detail["evidence"][0]
+        self.assertIsNone(item["published_at"])
+        self.assertIsNone(item["publisher_published_at"])
+        self.assertEqual(item["visible_by"], self.published_at.isoformat())
+        self.assertEqual(item["publication_time_basis"], "observed_upper_bound")
+        self.assertIn("不得当作发布日", item["publication_time_note"])
+        self.assertEqual(detail["content_hash"], snapshot["content_hash"])
+        self.assertEqual(detail["published_at"], self.published_at.isoformat())
+
+    def test_existing_evidence_publication_detail_stays_unchanged(self) -> None:
+        snapshot = self.service.create_manual_snapshot(
+            tenant_id="tenant", user_id="user", actor_id="actor",
+            request=self._manual_request(),
+        )
+        item = self.service.get_snapshot(snapshot["snapshot_id"])["evidence"][0]
+        self.assertEqual(item["published_at"], self.published_at.isoformat())
+        self.assertNotIn("publication_time_basis", item)
+        self.assertNotIn("visible_by", item)
+
     def _manual_request(
         self,
         *,
@@ -411,7 +454,8 @@ class MarketDataServiceBoundaryTests(unittest.TestCase):
         parent_payload = page["items"][0]
         self.assertEqual(parent_payload["tasks"], [])
         self.assertEqual(parent_payload["task_summary"]["retryable_failed"], 1)
-        self.assertEqual(parent_payload["portfolio_summary"]["ready_slots"], 219)
+        self.assertEqual(parent_payload["portfolio_summary"]["ready_slots"], 0)
+        self.assertEqual(parent_payload["portfolio_summary"]["unassessed_slots"], 219)
         self.assertEqual(parent_payload["portfolio_summary"]["retryable_slots"], 1)
         self.assertEqual(parent_payload["agent_recovery"]["status"], "running")
         self.assertEqual(parent_payload["freeze_status"], "awaiting_recovery")

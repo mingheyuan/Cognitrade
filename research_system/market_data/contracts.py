@@ -171,6 +171,9 @@ class EvidenceInput(BaseModel):
         )
 
     def evidence_key(self) -> str:
+        from research_system.market_data.research_archive_text import text_binding_identity
+
+        text_identity = text_binding_identity(self.metadata) if self.source_kind == "research_document" else None
         return canonical_hash(
             {
                 "provider": self.provider,
@@ -180,6 +183,7 @@ class EvidenceInput(BaseModel):
                 "grade": self.grade,
                 "immutable_proof": self.immutable_proof,
                 "is_manual": self.is_manual,
+                **({"research_text_binding": text_identity} if text_identity is not None else {}),
             }
         )
 

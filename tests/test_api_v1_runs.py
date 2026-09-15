@@ -7,8 +7,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
-
 from api_test_support import (
     API_TOKEN,
     INVOCATION_ID,
@@ -21,12 +19,13 @@ from api_test_support import (
     auth_headers,
     completed_response,
 )
+from fastapi.testclient import TestClient
+from test_uzi_native_report import sample_uzi_artifacts
+
 from research_system.api.app import create_app
 from research_system.api.config import ApiConfig
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.schemas.protocol import RequestEnvelope
-from test_uzi_native_report import sample_uzi_artifacts
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -276,6 +275,7 @@ class ApiV1RunsTests(unittest.TestCase):
         self.assertIn("FloatFu-true", html_response.text)
         self.assertIn("uzi-report-600519", html_response.headers["content-disposition"])
         self.assertEqual(html_response.headers["x-cognitrade-source-artifact-count"], "2")
+        self.assertRegex(html_response.headers["server-timing"], r"^uzi_html_render;dur=\d+\.\d{3}$")
         self.assertIn("default-src 'none'", html_response.headers["content-security-policy"])
 
         with patch(

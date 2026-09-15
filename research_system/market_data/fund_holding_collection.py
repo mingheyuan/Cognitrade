@@ -37,13 +37,23 @@ from research_system.market_data.contracts import (
 )
 from research_system.market_data.dimension_contracts import DimensionRegistry
 from research_system.market_data.ingestion import SnapshotIngestionService
+from research_system.market_data.job_diagnostics import (
+    fund_gap_dimensions,
+    fund_retryable_scope,
+    project_fund_parent_status,
+    summarize_fund_portfolio,
+)
 from research_system.market_data.models import (
     MarketDataCollectionJob,
     MarketDataCollectionTask,
     MarketDataCollectionTaskResult,
+    MarketDataSnapshot,
     MarketDataSubscription,
 )
 from research_system.market_data.repository import MarketDataRepository
+from research_system.market_data.research_collection import (
+    research_archive_gap_dimensions,
+)
 from research_system.market_data.resolver import SnapshotResolver
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.strategies.database import StrategyDatabase
@@ -59,6 +69,22 @@ _FUND_DURABLE_SIGNAL_POLL_SECONDS = 0.25
 
 FundSnapshotLoader = Callable[..., Mapping[str, Any]]
 Clock = Callable[[], datetime]
+
+
+def _bundle_proposal_requires_degraded_ack(proposal: Mapping[str, Any]) -> bool:
+    """Keep report readiness separate from strict data completeness.
+
+    ``BundlePublisher.propose().degraded`` means the report gate itself did
+    not pass.  A UZI-safe historical Bundle can still pass that gate while
+    carrying disclosed data gaps and ``quality=degraded``.  The parent fund
+    freeze must surface those gaps and require an explicit acknowledgement.
+    """
+
+    return (
+        bool(proposal.get("degraded"))
+        or str(proposal.get("quality") or "").strip().lower() == "degraded"
+        or bool(proposal.get("missing_dimensions"))
+    )
 
 
 class _FundExpansionFailure(RuntimeError):
@@ -529,97 +555,84 @@ class FundHoldingCollectionCoordinator:
                     "组合 Agent 补采尚未结束，不能同时重试采集槽",
                     status_code=409,
                 )
+            if job.status in {
+                CollectionStatus.QUEUED.value,
+                CollectionStatus.RUNNING.value,
+            }:
+                raise CollectionJobError(
+                    "collection_retry_unavailable",
+                    "基金持仓扩展任务正在运行，不能重复提交重试",
+                    status_code=409,
+                )
             if job.status not in {
+                CollectionStatus.SUCCEEDED.value,
                 CollectionStatus.FAILED.value,
                 CollectionStatus.PARTIAL.value,
             }:
                 raise CollectionJobError(
                     "collection_retry_unavailable",
-                    "基金持仓扩展任务当前没有可重试缺口",
+                    "基金持仓扩展任务当前状态不允许重试",
                     status_code=409,
                 )
             task = self._parent_task(session, job.id)
-            if not scoped and (
-                not task.retryable or task.attempt_count >= task.max_attempts
-            ):
+            holdings = {
+                str(holding.get("symbol") or "").upper()
+                for holding in list(checkpoint.get("holdings") or [])
+                if str(holding.get("symbol") or "").strip()
+            }
+            selected_symbols = set(requested_symbols) if requested_symbols else holdings
+            unknown_symbols = selected_symbols.difference(holdings)
+            if unknown_symbols:
                 raise CollectionJobError(
-                    "collection_retry_unavailable",
-                    "没有可重试的实时采集缺口；历史 PIT 不允许 live 回填",
-                    status_code=409,
+                    "collection_retry_scope_invalid",
+                    "重试范围包含非本基金持仓股票："
+                    + "、".join(sorted(unknown_symbols)),
+                    status_code=422,
                 )
-            if scoped:
-                holdings = {
-                    str(holding.get("symbol") or "").upper()
-                    for holding in list(checkpoint.get("holdings") or [])
-                    if str(holding.get("symbol") or "").strip()
-                }
-                selected_symbols = (
-                    set(requested_symbols) if requested_symbols else holdings
-                )
-                unknown_symbols = selected_symbols.difference(holdings)
-                if unknown_symbols:
-                    raise CollectionJobError(
-                        "collection_retry_scope_invalid",
-                        "重试范围包含非本基金持仓股票："
-                        + "、".join(sorted(unknown_symbols)),
-                        status_code=422,
+            child_ids = list(
+                session.scalars(
+                    select(MarketDataCollectionJob.id).where(
+                        MarketDataCollectionJob.parent_job_id == job.id,
+                        MarketDataCollectionJob.job_type.in_(
+                            EQUITY_COLLECTION_JOB_TYPES
+                        ),
                     )
-                child_ids = [
-                    str(child_id)
-                    for child_id in list(checkpoint.get("child_job_ids") or [])
-                    if str(child_id).strip()
-                ]
-                child_tasks = (
-                    list(
-                        session.scalars(
-                            select(MarketDataCollectionTask).where(
-                                MarketDataCollectionTask.job_id.in_(child_ids),
-                                MarketDataCollectionTask.symbol.in_(selected_symbols),
-                            )
+                )
+            )
+            child_tasks = (
+                list(
+                    session.scalars(
+                        select(MarketDataCollectionTask).where(
+                            MarketDataCollectionTask.job_id.in_(child_ids)
                         )
                     )
-                    if child_ids
-                    else []
                 )
-                child_order = {
-                    child_id: index for index, child_id in enumerate(child_ids)
-                }
-                latest_tasks: dict[tuple[str, str], MarketDataCollectionTask] = {}
-                for child_task in child_tasks:
-                    slot = (child_task.symbol, child_task.dimension)
-                    current = latest_tasks.get(slot)
-                    if current is None or child_order.get(
-                        child_task.job_id, -1
-                    ) > child_order.get(current.job_id, -1):
-                        latest_tasks[slot] = child_task
-                dimension_scope = set(requested_dimensions)
-                retry_scope: dict[str, list[str]] = defaultdict(list)
-                for child_task in latest_tasks.values():
-                    if dimension_scope and child_task.dimension not in dimension_scope:
-                        continue
-                    if child_task.status not in {
-                        CollectionStatus.FAILED.value,
-                        CollectionStatus.PARTIAL.value,
-                    }:
-                        continue
-                    if (
-                        not child_task.retryable
-                        or child_task.attempt_count >= child_task.max_attempts
-                    ):
-                        continue
-                    retry_scope[child_task.symbol].append(child_task.dimension)
-                if not retry_scope:
-                    raise CollectionJobError(
-                        "collection_retry_unavailable",
-                        "所选股票当前没有可手动重试的失败维度",
-                        status_code=409,
-                    )
-                checkpoint["retry_scope_by_symbol"] = {
-                    symbol: sorted(set(retry_scope[symbol]))
-                    for symbol in sorted(retry_scope)
-                }
-            else:
-                checkpoint.pop("retry_scope_by_symbol", None)
+                if child_ids
+                else []
+            )
+            checkpoint = self.project_profile_dependency_gaps(session, job, checkpoint,
+                                                               registry=self.equity_collection.registry)
+            retry_scope = fund_retryable_scope(
+                checkpoint=checkpoint,
+                child_tasks=child_tasks,
+                symbols=selected_symbols,
+                dimensions=requested_dimensions,
+            )
+            if not retry_scope:
+                raise CollectionJobError(
+                    "collection_retry_unavailable",
+                    (
+                        "所选股票当前没有可手动重试的 UZI 数据缺口"
+                        if scoped
+                        else "基金持仓扩展任务当前没有可重试的 UZI 数据缺口"
+                    ),
+                    status_code=409,
+                )
+            # A scoped retry is an acquisition range, not the whole remaining
+            # gap set. Preserve the last exact projection while its candidate
+            # is invalidated, including slots that cannot be retried.
+            checkpoint["child_missing_by_symbol"] = fund_gap_dimensions(checkpoint, child_tasks=child_tasks)
+            checkpoint["retry_scope_by_symbol"] = retry_scope
             checkpoint.pop("publication_candidate", None)
             previous_recovery = dict(checkpoint.get("agent_recovery") or {})
             if previous_recovery:
@@ -1809,8 +1822,8 @@ class FundHoldingCollectionCoordinator:
                         started_at=job.started_at,
                         completed_at=completed_at,
                     )
-            if not cancellation.is_set():
-                self._refresh_publication_candidate(job_id)
+                if not cancellation.is_set():
+                    self._recompute_publication_candidate(session, job)
         except _FundAgentRecoveryLeaseLost:
             # A newer process reclaimed the expired lease.  This obsolete
             # worker must exit silently and, crucially, must not overwrite the
@@ -2324,8 +2337,18 @@ class FundHoldingCollectionCoordinator:
                 )
                 if not completed:
                     raise _FundExpansionLeaseLost()
-            candidate = self._refresh_publication_candidate(claimed["job_id"])
-            if claimed["publish_when_complete"] and candidate is not None:
+            # Completion commits its candidate atomically. Do not publish a
+            # terminal status and then leave readers observing retry_pending.
+            candidate = None
+            if claimed["publish_when_complete"]:
+                with self.database.session() as session:
+                    finished = session.get(MarketDataCollectionJob, claimed["job_id"])
+                    candidate = (
+                        dict(finished.checkpoint_json or {}).get("publication_candidate")
+                        if finished
+                        else None
+                    )
+            if candidate is not None:
                 try:
                     self._confirm_freeze_job(
                         claimed["job_id"],
@@ -2791,6 +2814,10 @@ class FundHoldingCollectionCoordinator:
 
         groups: dict[tuple[str, ...], list[str]] = defaultdict(list)
         retry_scope = dict(claimed.get("retry_scope_by_symbol") or {})
+        archive_requested = bool(
+            claimed["origin"] == "manual"
+            and getattr(self.equity_collection, "research_archive_enabled", False)
+        )
         for holding in holdings:
             symbol = str(holding["symbol"])
             if retry_scope and symbol not in retry_scope:
@@ -2806,13 +2833,32 @@ class FundHoldingCollectionCoordinator:
             )
             missing = tuple(
                 requested_dimensions
-                if claimed["mode"] == "force_all"
+                if retry_scope or claimed["mode"] == "force_all"
                 else self._missing_equity_dimensions(
                     symbol,
                     claimed["as_of_date"],
                     requested_dimensions,
                 )
             )
+            if archive_requested and not retry_scope:
+                # A full explicit fund job includes research documents even
+                # when all structured rows already exist. The child reuses
+                # those rows and only acquires their still-missing evidence.
+                with self.database.session() as session:
+                    research_missing = research_archive_gap_dimensions(
+                        MarketDataRepository(session),
+                        registry=self.equity_collection.registry,
+                        symbol=symbol,
+                        market=market_scope(symbol)[0],
+                        as_of_date=claimed["as_of_date"],
+                        dimensions=requested_dimensions,
+                    )
+                missing_set = {*missing, *research_missing}
+                missing = tuple(
+                    dimension
+                    for dimension in requested_dimensions
+                    if dimension in missing_set
+                )
             if missing:
                 groups[missing].append(symbol)
 
@@ -2836,7 +2882,7 @@ class FundHoldingCollectionCoordinator:
                 start_date=claimed["as_of_date"],
                 end_date=claimed["as_of_date"],
                 dimensions=list(dimensions),
-                mode=claimed["mode"],
+                mode="force_all" if retry_scope else claimed["mode"],
                 max_concurrency=claimed["max_concurrency"],
                 publish_when_complete=bool(claimed["publish_when_complete"]),
                 idempotency_key=idempotency_key,
@@ -2844,6 +2890,7 @@ class FundHoldingCollectionCoordinator:
                 subscription_id=claimed["subscription_id"],
                 parent_job_id=claimed["job_id"],
                 submit=False,
+                include_research_archive=archive_requested,
             )
             run = {
                 "job_id": child["id"],
@@ -3233,27 +3280,15 @@ class FundHoldingCollectionCoordinator:
         requested_dimensions: list[str],
     ) -> list[str]:
         now = self._now()
-        with self.database.session() as session:
-            coverage = SnapshotResolver(
-                MarketDataRepository(session),
-                registry=self.equity_collection.registry,
-            ).coverage(
-                symbol,
-                "CN_EQUITY",
-                as_of_date,
-                now if as_of_date == self._local_today() else None,
-                exchange_timezone=FUND_EXCHANGE_TIMEZONE,
-                now=now,
-            )
-        by_dimension = {item.dimension: item for item in coverage.dimensions}
-        return [
-            dimension
-            for dimension in requested_dimensions
-            if dimension not in by_dimension
-            or not (
-                by_dimension[dimension].eligible or by_dimension[dimension].degraded
-            )
-        ]
+        return self.equity_collection.dimensions_needing_collection(
+            symbol=symbol,
+            market="CN_EQUITY",
+            as_of_date=as_of_date,
+            dimensions=requested_dimensions,
+            exchange_timezone=FUND_EXCHANGE_TIMEZONE,
+            now=now,
+            cutoff_at=now if as_of_date == self._local_today() else None,
+        )
 
     def _ensure_equity_bundle(self, symbol: str, as_of_date: date):
         """Return a verified stock Bundle, publishing from complete DB data if needed."""
@@ -3422,6 +3457,7 @@ class FundHoldingCollectionCoordinator:
                 started_at=job.started_at,
                 completed_at=now,
             )
+            self._recompute_publication_candidate(session, job)
             return True
 
     def _fail_parent(
@@ -3775,38 +3811,35 @@ class FundHoldingCollectionCoordinator:
             job = self._lock_fund_job(session, job_id)
             if job is None:
                 return None
-            checkpoint = dict(job.checkpoint_json or {})
-            try:
-                candidate = self._publication_candidate(
-                    session,
-                    job,
-                    baseline=checkpoint.get("publication_candidate"),
-                )
-            except (
-                CollectionJobError,
-                IncompleteBundleError,
-                BundleIntegrityError,
-                ValueError,
-            ) as exc:
-                checkpoint.pop("publication_candidate", None)
-                checkpoint["publication"] = {
-                    "status": "blocked",
-                    "error_code": "collection_freeze_candidate_incomplete",
-                    "error_message": str(exc),
-                    "updated_at": iso(self._now()),
-                }
-                job.checkpoint_json = checkpoint
-                return None
-            checkpoint["publication_candidate"] = candidate
-            publication = dict(checkpoint.get("publication") or {})
-            if publication.get("status") != "published":
-                checkpoint["publication"] = {
-                    "status": "pending_confirmation",
-                    "proposal_hash": candidate["proposal_hash"],
-                    "updated_at": iso(self._now()),
-                }
+            return self._recompute_publication_candidate(session, job)
+
+    def _recompute_publication_candidate(self, session, job) -> dict[str, Any] | None:
+        """Persist readiness in the caller's transaction, without acquisition."""
+        checkpoint = dict(job.checkpoint_json or {})
+        try:
+            candidate = self._publication_candidate(
+                session, job, baseline=checkpoint.get("publication_candidate"),
+            )
+        except (CollectionJobError, IncompleteBundleError, BundleIntegrityError, ValueError) as exc:
+            checkpoint.pop("publication_candidate", None)
+            checkpoint["publication"] = {
+                "status": "blocked",
+                "error_code": "collection_freeze_candidate_incomplete",
+                "error_message": str(exc),
+                "updated_at": iso(self._now()),
+            }
             job.checkpoint_json = checkpoint
-            return candidate
+            return None
+        checkpoint["publication_candidate"] = candidate
+        publication = dict(checkpoint.get("publication") or {})
+        if publication.get("status") != "published":
+            checkpoint["publication"] = {
+                "status": "pending_confirmation",
+                "proposal_hash": candidate["proposal_hash"],
+                "updated_at": iso(self._now()),
+            }
+        job.checkpoint_json = checkpoint
+        return candidate
 
     def _publication_candidate(
         self,
@@ -3915,7 +3948,7 @@ class FundHoldingCollectionCoordinator:
                 for dimension in list(bundle.get("missing_dimensions") or [])
             }
         )
-        degraded = any(bool(item["degraded"]) for item in bundles)
+        degraded = any(_bundle_proposal_requires_degraded_ack(item) for item in bundles)
         return {
             **proposal_payload,
             "proposal_hash": canonical_hash(proposal_payload),
@@ -4167,9 +4200,89 @@ class FundHoldingCollectionCoordinator:
             "publication_candidate": None,
         }
 
+    @staticmethod
+    def project_profile_dependency_gaps(session, job, checkpoint, *, registry, scope_cache=None):
+        """Project unfrozen, candidate-less dependencies from the actual rows.
+
+        An existing candidate owns its fixed inputs; a newer stock revision
+        cannot silently alter it. No DB write or source request occurs here.
+        """
+        value = dict(checkpoint)
+        value.pop("profile_dependency_gaps", None)
+        if value.get("publication_candidate") or (value.get("publication") or {}).get("status") == "published":
+            return value
+        gaps = {}
+        symbols = {str(holding.get("symbol") or "").strip().upper() for holding in value.get("holdings") or []}
+        symbols.discard("")
+        # The normal/legacy polling path must not resolve 220 full payloads.
+        # Read only symbol strings first; JSON string extraction works on both
+        # SQLite and PostgreSQL, including a JSON-null/missing marker.
+        marked = set(session.scalars(select(MarketDataSnapshot.symbol).where(
+            MarketDataSnapshot.symbol.in_(symbols), MarketDataSnapshot.dimension == "0_basic",
+            MarketDataSnapshot.as_of_date == job.start_date,
+            MarketDataSnapshot.query_manifest_json["company_profile_revision"].as_string().is_not(None),
+        ).distinct())) if symbols else set()
+        cache = scope_cache if scope_cache is not None else {}
+        repository = MarketDataRepository(session)
+        resolver = SnapshotResolver(repository, registry=registry)
+        for holding in value.get("holdings") or []:
+            symbol = str(holding.get("symbol") or "").strip().upper()
+            if symbol not in marked:
+                continue
+            market, zone = market_scope(symbol)
+            scope = (symbol, market, zone, job.start_date, registry.contract_version)
+            if scope not in cache:
+                coverage = resolver.coverage(symbol, market, job.start_date, exchange_timezone=zone)
+                cache[scope] = MarketDataCollectionCoordinator._profile_dependencies_pending(session, coverage)
+            pending = cache[scope]
+            if pending:
+                gaps[symbol] = [key for key in registry.dimension_ids if key in pending]
+        value["profile_dependency_gaps"] = gaps
+        return value
+
     def _job_payload(self, session, job: MarketDataCollectionJob) -> dict[str, Any]:
         task = self._parent_task(session, job.id)
-        checkpoint = dict(job.checkpoint_json or {})
+        checkpoint = self.project_profile_dependency_gaps(session, job, dict(job.checkpoint_json or {}),
+                                                           registry=self.equity_collection.registry)
+        # Detail/create/retry responses must use the same slot projection as
+        # list polling. Omitting it hides retryable gaps from API consumers.
+        child_tasks = list(
+            session.scalars(
+                select(MarketDataCollectionTask)
+                .join(
+                    MarketDataCollectionJob,
+                    MarketDataCollectionTask.job_id == MarketDataCollectionJob.id,
+                )
+                .where(
+                    MarketDataCollectionJob.parent_job_id == job.id,
+                    MarketDataCollectionJob.tenant_id == job.tenant_id,
+                    MarketDataCollectionJob.user_id == job.user_id,
+                )
+            )
+        )
+        child_results = list(session.scalars(
+            select(MarketDataCollectionTaskResult).where(
+                MarketDataCollectionTaskResult.task_id.in_([row.id for row in child_tasks])
+            )
+        )) if child_tasks else []
+        portfolio_summary = summarize_fund_portfolio(
+            checkpoint=checkpoint,
+            child_tasks=child_tasks,
+            child_results=child_results,
+            dimensions_per_holding=len(self.equity_collection.registry.dimension_ids),
+            dimension_ids=self.equity_collection.registry.dimension_ids,
+            top_n=10,
+        )
+        strict_missing = fund_gap_dimensions(checkpoint, child_tasks=child_tasks)
+        expanded_holdings = [
+            {
+                **holding,
+                "missing_dimensions": list(
+                    strict_missing.get(str(holding.get("symbol") or "").upper(), [])
+                ),
+            }
+            for holding in list(checkpoint.get("holdings") or [])
+        ]
         return {
             "id": job.id,
             "job_id": job.id,
@@ -4178,7 +4291,11 @@ class FundHoldingCollectionCoordinator:
             "origin": job.origin,
             "subscription_id": job.subscription_id,
             "mode": job.mode,
-            "status": job.status,
+            "status": project_fund_parent_status(
+                status=job.status,
+                checkpoint=checkpoint,
+                child_tasks=child_tasks,
+            ),
             "asset_family": "fund",
             "top_n": 10,
             "symbols": list(job.symbols_json or []),
@@ -4191,10 +4308,11 @@ class FundHoldingCollectionCoordinator:
             ),
             "publish_when_complete": job.publish_when_complete,
             "progress": dict(job.progress_json or {}),
+            "portfolio_summary": portfolio_summary,
             "checkpoint": checkpoint,
             "agent_recovery": checkpoint.get("agent_recovery"),
             **self._publication_fields(job, checkpoint),
-            "expanded_holdings": list(checkpoint.get("holdings") or []),
+            "expanded_holdings": expanded_holdings,
             "child_collection_job_ids": list(checkpoint.get("child_job_ids") or []),
             "cancel_requested": job.cancel_requested,
             "error_summary": job.error_summary,

@@ -47,6 +47,7 @@ class AgentOSRunService:
         self._chat_completion_callback = None
         self._fund_holding_reports = None
         self._report_inputs = None
+        self._deferred_report_recovery = False
         self._lease_seconds = max(
             float(getattr(agent_os.settings, "run_timeout_seconds", 300.0)) * 2.0,
             60.0,
@@ -67,6 +68,13 @@ class AgentOSRunService:
         binder = getattr(self.agent_os, "bind_resolved_request_preflight", None)
         if callable(binder):
             binder(service.freeze_request)
+        continuation_binder = getattr(self.agent_os, "bind_continuation_preflight", None)
+        validator = getattr(service, "validate_continuation_request", None)
+        if callable(continuation_binder) and callable(validator):
+            continuation_binder(validator)
+        if getattr(self, "_deferred_report_recovery", False):
+            self._deferred_report_recovery = False
+            self._recover_pending_runs()
         recover = getattr(self._fund_holding_reports, "recover_pending_batches", None)
         if callable(recover):
             # FundHoldingReportService is constructed before the strategy DB in
@@ -105,13 +113,23 @@ class AgentOSRunService:
 
     def submit_background(self, request: RequestEnvelope) -> ResponseEnvelope:
         request = self._freeze_report_inputs(request)
-        run_id = generate_ulid()
-        self.agent_os.prepare_run(
-            request,
-            run_id=run_id,
-            intent=request.intent or "agent_os.pending",
-        )
-        self._submit_background_worker(run_id, request)
+        # Reserve once before starting a worker. Otherwise concurrent repeated
+        # POSTs create orphan reservations even if execution later deduplicates.
+        with self._background_lock:
+            existing_run_id = self.agent_os.run_store.find_run_by_idempotency_key(
+                request.idempotency_key or "",
+                tenant_id=request.tenant_id,
+                user_id=request.user_id,
+            )
+            if existing_run_id:
+                return self.agent_os.handle_request(request)
+            run_id = generate_ulid()
+            self.agent_os.prepare_run(
+                request,
+                run_id=run_id,
+                intent=request.intent or "agent_os.pending",
+            )
+            self._submit_background_worker(run_id, request)
         return ResponseEnvelope(
             request_id=request.request_id,
             run_id=run_id,
@@ -172,6 +190,15 @@ class AgentOSRunService:
             if isinstance(constraints, dict) and constraints.get("fund_holding_report_child") is True:
                 # The dedicated holding-report coordinator owns recovery and its
                 # independent concurrency limit for these child Runs.
+                continue
+            slots = request_payload.get("slots") if isinstance(request_payload, dict) else None
+            if self._report_inputs is None and (
+                (isinstance(slots, dict) and slots.get("report_data_manifest"))
+                or (isinstance(constraints, dict) and constraints.get("data_source_mode") == "bundle_only")
+            ):
+                # API construction precedes the report-input binding. Do not
+                # race cached report execution against its safety boundary.
+                self._deferred_report_recovery = True
                 continue
             request_payload: dict[str, Any] = {}
             try:
@@ -796,6 +823,8 @@ class AgentOSRunService:
                         "progress_percent": live_node_progress[node.node_id].get("progress_percent"),
                         "stage_index": live_node_progress[node.node_id].get("stage_index"),
                         "stage_total": live_node_progress[node.node_id].get("stage_total"),
+                        "completed_stages": live_node_progress[node.node_id].get("completed_stages"),
+                        "stage_phase": live_node_progress[node.node_id].get("stage_phase"),
                     }
                     if node.node_id in live_node_progress
                     else {}

@@ -207,7 +207,7 @@ const partialFundJob = {
   }],
 }
 
-function installFundApi(options: { job?: typeof completedFundJob | typeof partialFundJob } = {}) {
+function installFundApi(options: { job?: Record<string, unknown>; childJobs?: unknown[] } = {}) {
   const requests: Array<{ url: string; init?: RequestInit }> = []
   const responseJob = options.job || completedFundJob
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -227,7 +227,7 @@ function installFundApi(options: { job?: typeof completedFundJob | typeof partia
     })
     if (url.endsWith('/retry-failed') && init?.method === 'POST') return json({ ...responseJob, status: 'queued' })
     if (url.endsWith('/market-data/collection-jobs') && init?.method === 'POST') return json({ ...completedFundJob, status: 'queued', progress: { total: 1, completed: 0, by_status: { queued: 1 } } })
-    if (url.includes('/market-data/collection-jobs')) return json({ items: [responseJob], total_count: 1, limit: 50, offset: 0 })
+    if (url.includes('/market-data/collection-jobs')) return json({ items: [responseJob, ...(options.childJobs || [])], total_count: 1, limit: 50, offset: 0 })
     if (url.endsWith('/market-data/report-manifests') && init?.method === 'POST') return json({ manifest_id: 'fund-manifest-1', manifest_hash: 'b'.repeat(64), status: 'frozen' })
     if (url.includes('/market-data/bundles/fund-bundle-1')) return json({
       id: 'fund-bundle-1', symbol: '020464', market: 'CN_FUND', as_of_date: '2026-08-20', cutoff_at: '2026-08-20T15:59:59Z',
@@ -298,6 +298,48 @@ describe('MarketDataCenter', () => {
     const label = within(submit).getByText('解析并读取')
     expect(submit).toHaveClass('mdc-toolbar-submit')
     expect(label).toHaveClass('mdc-toolbar-submit-label')
+  })
+
+  it('shows research archive work after structural slots reach completion', async () => {
+    const archiveJob = {
+      ...pollingJob, status: 'running',
+      progress: { total: 3, completed: 3, by_status: { succeeded: 3 }, research_archive: {
+        status: 'running', total: 6, completed: 2, persisted_snapshot_count: 2,
+        active: { symbol: '600519.SH', dimension: '3_macro', as_of_date: '2026-08-20' },
+      } },
+    }
+    window.history.replaceState({}, '', '/market-data?symbol=600519.SH&as_of_date=2026-08-20&cutoff=eod&tab=jobs')
+    installApi({ jobResponses: [[archiveJob]] })
+    renderPage()
+    expect(await screen.findByText('研究原文归档 2/6 · 运行中')).toBeInTheDocument()
+    expect(screen.getByText(/结构化槽位完成后，继续获取可引用原文/)).toBeInTheDocument()
+    expect(screen.getByText('当前 600519.SH · 3_macro · 2026-08-20')).toBeInTheDocument()
+  })
+
+  it('shows fund child archive progress without treating partial structural slots as active or complete', async () => {
+    const fundJob = {
+      ...partialFundJob, status: 'running',
+      progress: { total: 1, completed: 0, by_status: { running: 1 } },
+      portfolio_summary: { ...partialFundJob.portfolio_summary, ready_slots: 130, missing_slots: 90, retryable_slots: 60, blocked_slots: 30 },
+    }
+    const archiveChild = {
+      id: 'child-job-b', parent_job_id: 'fund-job-1', asset_family: 'equity', status: 'running',
+      symbols: expandedHoldings.map((holding) => holding.symbol), dimensions: equityDimensions,
+      progress: { total: 220, completed: 220, by_status: { succeeded: 130, partial: 90 }, research_archive: {
+        status: 'running', total: 70, completed: 46, persisted_snapshot_count: 13,
+        active: { symbol: '688041.SH', dimension: '9_futures', as_of_date: '2026-08-20' },
+      } },
+    }
+    window.history.replaceState({}, '', '/market-data?symbol=020464&asset_family=fund&as_of_date=2026-08-20&cutoff=eod&tab=jobs')
+    installFundApi({ job: fundJob, childJobs: [archiveChild] })
+    renderPage()
+
+    expect(await screen.findByText('研究原文归档 46/70 · 运行中')).toBeInTheDocument()
+    expect(screen.getByText('严格可用 130/220 槽')).toBeInTheDocument()
+    expect(screen.getByText('220/220 已结算')).toBeInTheDocument()
+    expect(screen.getByText('部分完成 90')).toBeInTheDocument()
+    expect(screen.queryByText('严格可用 220/220 槽')).not.toBeInTheDocument()
+    expect(screen.queryByText(/个槽正在处理/)).not.toBeInTheDocument()
   })
 
   it('restores URL state and exposes verified-empty evidence without treating it as a timeout', async () => {
@@ -411,7 +453,7 @@ describe('MarketDataCenter', () => {
     await screen.findByRole('heading', { name: '采集槽完整度' })
 
     fireEvent.click(screen.getByRole('button', { name: '创建报告 Manifest' }))
-    expect(screen.getByRole('dialog')).toHaveTextContent('报告阶段外部数据调用数必须为 0')
+    expect(screen.getByRole('dialog')).toHaveTextContent('报告阶段不联网补数，LLM 推理仍会调用外部模型')
     fireEvent.click(screen.getByRole('radio', { name: /Deep/ }))
     fireEvent.click(screen.getByRole('button', { name: '创建 DEEP Manifest' }))
 
@@ -508,15 +550,32 @@ describe('MarketDataCenter', () => {
     renderPage()
 
     expect(await screen.findByRole('heading', { name: '前十大持仓采集链路' })).toBeInTheDocument()
-    expect(screen.getByText('0/10 只就绪')).toBeInTheDocument()
+    expect(screen.getByText('0/10 只严格完整')).toBeInTheDocument()
     expect(screen.getAllByText('缺 22 槽')).toHaveLength(8)
-    expect(screen.getByText('134 个槽可恢复，63 个槽需修复')).toBeInTheDocument()
-    expect(screen.getByText(/合格 23\/220 槽/)).toBeInTheDocument()
+    expect(screen.getByText('134 个槽可重试，63 个槽不可重试/已降级')).toBeInTheDocument()
+    expect(screen.getByText(/严格可用 23\/220 槽/)).toBeInTheDocument()
     expect(screen.getByText('strict_contract_gap')).toBeInTheDocument()
     const retry = screen.getByRole('button', { name: /重试 134 个可重试槽/ })
     fireEvent.click(retry)
 
     await waitFor(() => expect(requests.some((request) => request.url.endsWith('/collection-jobs/fund-job-1/retry-failed') && request.init?.method === 'POST')).toBe(true))
+  })
+
+  it('does not promise report self-review success or change native weights when data can freeze', async () => {
+    window.history.replaceState({}, '', '/market-data?symbol=020464&asset_family=fund&as_of_date=2026-08-20&cutoff=eod&tab=jobs')
+    const freezeReadyJob = {
+      ...partialFundJob,
+      freeze_status: 'ready',
+      can_confirm_freeze: true,
+      portfolio_summary: { ...partialFundJob.portfolio_summary, retryable_slots: 0, blocked_slots: 197 },
+    }
+    installFundApi({ job: freezeReadyJob })
+    renderPage()
+
+    expect(await screen.findByText('数据可冻结 · 197 槽缺口披露')).toBeInTheDocument()
+    expect(screen.getByText(/冻结时披露缺口，不调整 UZI 原生评分权重/)).toHaveTextContent('研究缺口仅作 Agent 输入提示，冻结安全校验与原生最终自审独立执行')
+    expect(screen.queryByText(/报告可生成 ·/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/按 UZI 口径排除/)).not.toBeInTheDocument()
   })
 
   it('freezes a fund report as the backend-derived ten-stock portfolio', async () => {
@@ -527,6 +586,8 @@ describe('MarketDataCenter', () => {
 
     const freeze = await screen.findByRole('button', { name: '创建十大持仓 Manifest' })
     await waitFor(() => expect(freeze).toBeEnabled())
+    expect(screen.getByText(/数据与研究引用缺口作为提示交给完整 Agent/)).toHaveTextContent('不单独禁止报告启动')
+    expect(screen.getByText(/数据与研究引用缺口作为提示交给完整 Agent/)).toHaveTextContent('冻结 hash、来源权限和 PIT 安全校验独立执行')
     fireEvent.click(freeze)
     expect(screen.getByRole('dialog')).toHaveTextContent('基金代码不会被当成股票分析')
     expect(screen.getByRole('dialog')).toHaveTextContent('10 只股票')

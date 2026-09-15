@@ -260,7 +260,7 @@ class StrategyDeploymentPreflightTests(unittest.TestCase):
                     connection.execute(
                         "SELECT version_num FROM alembic_version"
                     ).fetchone()[0],
-                    "20260820_0005",
+                    "20260906_0006",
                 )
 
     def test_sqlite_0005_repairs_legacy_cutoff_scoped_bundle_revisions(self) -> None:

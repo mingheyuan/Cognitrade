@@ -12,13 +12,28 @@ invalid Bundle is a hard preflight failure.
 """
 
 import re
+from copy import deepcopy
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import date, datetime, timezone
 from threading import RLock
 from typing import Any, Protocol, runtime_checkable
 from zoneinfo import ZoneInfo
 
+from research_system.market_data.commodity_pit import commodity_empty_query_errors, commodity_fact_date_errors
 from research_system.market_data.contracts import is_supported_uzi_contract_version
+from research_system.market_data.evidence_bindings import freeze_evidence_bindings
+from research_system.market_data.native_projection import (
+    LEGACY_PROJECTION_VERSION,
+    PROJECTION_VERSIONS,
+    pin_native_workflow,
+)
+from research_system.market_data.quant_auxiliary import (
+    VERSION as QUANT_AUXILIARY_VERSION,
+    find_quant_auxiliary_binding,
+    load_quant_auxiliary_recording,
+    raw_quant_inputs,
+)
+from research_system.market_data.research_readiness import report_input_readiness
 from research_system.schemas.protocol import RequestEnvelope
 
 FORMAL_REPORT_INTENTS = frozenset(
@@ -60,6 +75,32 @@ _PROFILE_REQUIRED_INTENTS = frozenset(
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 _CODE = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 _PASSING_STATUSES = frozenset({"available", "verified_empty"})
+
+
+def _materialize_quant_auxiliary(repository, item, *, bundle, projection_version, freeze):
+    """Keep only the binding in the hashed context; recording is artifact input.
+
+    The existing artifact-backed report_data_manifest transport writes this
+    independent recording once, not into raw data, model prompts or graph
+    snapshots. Loading an old manifest never selects newer responses.
+    """
+    snapshots = [repository.require_snapshot(row.snapshot_id)
+                 for row in repository.list_bundle_items(bundle.id) if row.snapshot_id]
+    raw = raw_quant_inputs(repository, symbol=bundle.symbol, snapshots=snapshots,
+                           projection_version=projection_version,
+                           cutoff_at=_aware_utc(bundle.cutoff_at),
+                           evidence_bindings=item["context"].get("evidence_bindings"))
+    if freeze:
+        binding = find_quant_auxiliary_binding(repository, raw=raw,
+            as_of_date=bundle.as_of_date, cutoff_at=_aware_utc(bundle.cutoff_at))
+        item["context"]["native_quant_auxiliary"] = binding
+    else:
+        binding = item["context"].get("native_quant_auxiliary")
+        if not isinstance(binding, Mapping):
+            raise ReportInputError("native_quant_binding_missing", "冻结辅助输入绑定缺失")
+    item["native_quant_auxiliary_recording"] = load_quant_auxiliary_recording(
+        repository, binding=binding, raw=raw, cutoff_at=_aware_utc(bundle.cutoff_at),
+    )
 
 
 class ReportInputError(ValueError):
@@ -112,6 +153,7 @@ class DatabaseReportInputGateway:
         default_market: str = "CN_EQUITY",
         default_exchange_timezone: str = "Asia/Shanghai",
         clock: Callable[[], datetime] | None = None,
+        runtime_settings: Any | None = None,
     ) -> None:
         self.database = database
         self.default_market = str(default_market).strip().upper() or "CN_EQUITY"
@@ -120,6 +162,7 @@ class DatabaseReportInputGateway:
         )
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self._freeze_lock = RLock()
+        self.runtime_settings = runtime_settings
 
     def freeze_report_manifest(
         self,
@@ -282,6 +325,27 @@ class DatabaseReportInputGateway:
             # open while the ten stock Bundles are materialised.
             return bundle, payload, items[0]
 
+    def resolve_fund_report_parent(
+        self, *, fund_code: str, as_of_date: date,
+        fund_bundle_id: str | None = None,
+        tenant_id: str | None = None, user_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Return the validated public market-data parent, without acquisition.
+
+        Market-data Bundles are shared facts; ownership is enforced on the
+        report Manifest created from them, exactly as in the existing gateway.
+        """
+        bundle, payload, item = self._resolve_fund_report_parent(
+            fund_code=fund_code, as_of_date=_parse_date(as_of_date),
+            fund_bundle_id=fund_bundle_id,
+        )
+        return {
+            "fund_bundle_id": bundle.id,
+            "bundle_manifest_hash": bundle.manifest_hash,
+            "snapshot_id": item.snapshot_id,
+            "payload": payload.model_dump(mode="json"),
+        }
+
     def load_frozen_report_manifest(
         self,
         *,
@@ -333,6 +397,7 @@ class DatabaseReportInputGateway:
         tenant_id: str | None,
         user_id: str | None,
         symbols: Sequence[str] | None,
+        reference_only: bool = False,
     ) -> Mapping[str, Any]:
         """Re-materialise a pinned report input from the database only.
 
@@ -430,6 +495,7 @@ class DatabaseReportInputGateway:
                 repository=repository,
                 manifest=manifest,
                 stock_items=manifest_items,
+                reference_only=reference_only,
             )
 
             hash_payload = {
@@ -476,11 +542,50 @@ class DatabaseReportInputGateway:
                     "report_manifest_item_missing",
                     "冻结 manifest 中没有所选标的",
                 )
+            if reference_only:
+                from research_system.market_data.reference_validation import (
+                    validate_bundle_reference,
+                )
+
+                for _, bundle, row in stored_rows:
+                    validate_bundle_reference(repository, bundle,
+                        evidence_bindings=row["context"].get("evidence_bindings"), known_at=manifest.frozen_at)
+                    if (manifest.workflow_pins_json or {}).get("native_quant_auxiliary_version"):
+                        _materialize_quant_auxiliary(
+                            repository, dict(row), bundle=bundle,
+                            projection_version=(manifest.workflow_pins_json or {}).get("snapshot_projection_version"),
+                            freeze=False,
+                        )
+                return {
+                    "manifest_id": manifest.id, "manifest_hash": manifest.manifest_hash,
+                    "report_kind": manifest.report_kind, "contract_version": manifest.contract_version,
+                    "status": manifest.status, "as_of_date": manifest.as_of_date.isoformat(),
+                    "items": manifest_items, "dependencies": frozen_dependencies,
+                    "validation_mode": "immutable_reference",
+                }
             materializer = BundleMaterializer(repository)
             frozen_items: list[dict[str, Any]] = []
+            legacy_evidence_membership = False
+            projection_version = str((manifest.workflow_pins_json or {}).get(
+                "snapshot_projection_version") or LEGACY_PROJECTION_VERSION)
+            if projection_version not in PROJECTION_VERSIONS:
+                raise ReportInputError("snapshot_projection_unsupported", "冻结输入的投影版本不可用")
             for item, bundle, manifest_item in selected_rows:
-                materialized = materializer.materialize(bundle.id)
                 bundle_items = repository.list_bundle_items(bundle.id)
+                bindings = manifest_item["context"].get("evidence_bindings")
+                if bindings is None:
+                    legacy_evidence_membership = True
+                    if projection_version != LEGACY_PROJECTION_VERSION:
+                        raise ReportInputError("report_evidence_bindings_missing", "冻结输入缺少证据关系版本")
+                    # Old records did not pin the relationship set. Bound the
+                    # append-only links to the original freeze time; never
+                    # import evidence associated by subsequent collection.
+                    bindings = freeze_evidence_bindings(repository,
+                        (row.snapshot_id for row in bundle_items), known_at=manifest.frozen_at)
+                materialized = materializer.materialize(
+                    bundle.id, projection_version=projection_version,
+                    evidence_bindings=bindings,
+                )
                 bundle_coverage = dict(bundle.coverage_json or {})
                 frozen_items.append(
                     {
@@ -532,6 +637,11 @@ class DatabaseReportInputGateway:
                         "contract_version": bundle.contract_version,
                     }
                 )
+                if (manifest.workflow_pins_json or {}).get("native_quant_auxiliary_version"):
+                    _materialize_quant_auxiliary(
+                        repository, frozen_items[-1], bundle=bundle,
+                        projection_version=projection_version, freeze=False,
+                    )
             return {
                 "manifest_id": manifest.id,
                 "manifest_hash": manifest.manifest_hash,
@@ -543,12 +653,79 @@ class DatabaseReportInputGateway:
                 "as_of_date": manifest.as_of_date.isoformat(),
                 "workflow_pins": dict(manifest.workflow_pins_json or {}),
                 "items": frozen_items,
+                "input_preflight": report_input_readiness(frozen_items, {
+                    **(manifest.workflow_pins_json or {}),
+                    "snapshot_projection_version": projection_version,
+                }),
+                **({"reproducibility": {
+                    "evidence_binding_mode": "legacy_time_bounded",
+                    "exact_evidence_membership": False,
+                    "limitation": "旧 Manifest 未固定证据关系集合；按原冻结时间约束读取，不导入后来关联，但不能证明与最初物化输入逐字节相同。",
+                }} if legacy_evidence_membership else {}),
                 **(
                     {"dependencies": frozen_dependencies}
                     if frozen_dependencies
                     else {}
                 ),
             }
+
+    def validate_fund_report_manifest_reference(
+        self, *, manifest_id: str, manifest_hash: str, fund_code: str,
+        expected_symbols: Sequence[str], tenant_id: str | None, user_id: str | None,
+    ) -> Mapping[str, Any]:
+        """Recheck a delivered report's live revocation state without rendering inputs.
+
+        Initial report consumption still uses full materialization/content hashes.
+        This read-only status check does not replace that trust boundary.
+        """
+        trusted = self._load_frozen_report_manifest(
+            manifest_id=manifest_id, manifest_hash=manifest_hash,
+            tenant_id=tenant_id, user_id=user_id, symbols=None, reference_only=True,
+        )
+        trusted = normalize_manifest(trusted, expected_symbols=_unique_symbols(expected_symbols))
+        _validate_fund_report_manifest(trusted, fund_code=fund_code)
+        return trusted
+
+    def revise_report_manifest(
+        self, *, manifest_id: str, manifest_hash: str, symbols: Sequence[str],
+        tenant_id: str | None, user_id: str | None,
+    ) -> Mapping[str, Any]:
+        """Explicitly replace selected inputs; never acquire or edit old data.
+
+        The caller gets a newly persisted Manifest before it queues analysis.
+        Unselected stocks retain their exact evidence membership, even when
+        newer Bundles or evidence have appeared since the original freeze.
+        """
+        from research_system.market_data.repository import MarketDataRepository
+        from research_system.strategies.runtime_pins import deployed_workflow_pins
+
+        with self._freeze_lock:
+            original = self.load_frozen_report_manifest(
+                manifest_id=manifest_id, manifest_hash=manifest_hash,
+                tenant_id=tenant_id, user_id=user_id,
+            )
+            selected = {_symbol_key(symbol) for symbol in _unique_symbols(symbols)}
+            members = {_symbol_key(row["symbol"]) for row in original["items"]}
+            if not selected or not selected.issubset(members):
+                raise ReportInputError("report_revision_scope_invalid", "输入修订必须指定原报告中的股票")
+            pins = dict(original["workflow_pins"])
+            if any(pins.get(key) != value for key, value in deployed_workflow_pins(self.runtime_settings).items()):
+                raise ReportInputError("published_workflow_changed", "原报告运行版本已变化，请发布新策略版本并创建报告；不能把新版执行伪装成旧版局部恢复")
+            if any("evidence_bindings" not in row["context"] for row in original["items"]):
+                raise ReportInputError("legacy_manifest_revision_unsupported", "旧 Manifest 没有固定证据集合，不能精确修订；请创建新报告")
+            with self.database.session() as session:
+                stored = MarketDataRepository(session).get_report_manifest(manifest_id)
+                context = deepcopy(stored.input_context_json or {})
+            context["input_revision"] = {
+                "manifest_id": manifest_id, "manifest_hash": manifest_hash,
+                "symbols": sorted(selected),
+            }
+            return self._freeze_report_manifest(
+                symbols=[row["symbol"] for row in original["items"]],
+                as_of_date=_parse_date(original["as_of_date"]),
+                tenant_id=tenant_id, user_id=user_id, workflow_pins=pins,
+                context=context, _base_manifest=original, _refresh_symbols=selected,
+            )
 
     def _freeze_report_manifest(
         self,
@@ -559,6 +736,8 @@ class DatabaseReportInputGateway:
         user_id: str | None,
         workflow_pins: Mapping[str, Any],
         context: Mapping[str, Any],
+        _base_manifest: Mapping[str, Any] | None = None,
+        _refresh_symbols: set[str] | None = None,
     ) -> Mapping[str, Any]:
         # Delayed imports keep the report boundary independently unit-testable
         # and avoid a persistence import cycle during shared metadata bootstrap.
@@ -577,6 +756,21 @@ class DatabaseReportInputGateway:
 
         owner_tenant = str(tenant_id or "local")
         owner_user = str(user_id or "local_development")
+        from research_system.strategies.runtime_pins import deployed_workflow_pins
+
+        actual_runtime = deployed_workflow_pins(self.runtime_settings)
+        supplied_pins = dict(workflow_pins)
+        # Keep explicit identities visible rather than silently relabelling
+        # them. The deployed identities are pinned separately when they differ.
+        mismatches = sorted(key for key, value in actual_runtime.items()
+            if key in supplied_pins and supplied_pins[key] != value)
+        workflow_pins = pin_native_workflow({**actual_runtime, **supplied_pins})
+        # This new nested input contract applies only to newly created
+        # manifests; persisted legacy pins and hashes are never rewritten.
+        workflow_pins["native_quant_auxiliary_version"] = QUANT_AUXILIARY_VERSION
+        workflow_pins["runtime_actual"] = actual_runtime
+        if mismatches:
+            workflow_pins["runtime_pin_mismatches"] = mismatches
         normalized_symbols = _unique_symbols(symbols)
         current_time = _aware_utc(self.clock())
         requested_evaluation_at = _optional_context_datetime(
@@ -594,6 +788,13 @@ class DatabaseReportInputGateway:
             frozen_items: list[dict[str, Any]] = []
             evaluation_times: list[datetime] = []
             for ordinal, symbol in enumerate(normalized_symbols):
+                if _base_manifest is not None and _symbol_key(symbol) not in (_refresh_symbols or set()):
+                    preserved = deepcopy(next(row for row in _base_manifest["items"]
+                                              if _symbol_key(row["symbol"]) == _symbol_key(symbol)))
+                    preserved["ordinal"] = ordinal
+                    frozen_items.append(preserved)
+                    evaluation_times.append(_aware_utc(datetime.fromisoformat(preserved["bundle"]["cutoff_at"])))
+                    continue
                 market = _market_for_symbol(
                     symbol,
                     context=context,
@@ -639,7 +840,14 @@ class DatabaseReportInputGateway:
                         "bundle_after_report_evaluation",
                         f"{symbol} Bundle cutoff 晚于请求的 evaluation_at，存在未来数据风险",
                     )
-                materialized = materializer.materialize(bundle.id)
+                bundle_items = repository.list_bundle_items(bundle.id)
+                bindings = freeze_evidence_bindings(repository,
+                    (row.snapshot_id for row in bundle_items))
+                materialized = materializer.materialize(
+                    bundle.id,
+                    projection_version=str(workflow_pins["snapshot_projection_version"]),
+                    evidence_bindings=bindings,
+                )
                 if materialized.manifest_hash != bundle.manifest_hash:
                     raise ReportInputError(
                         "bundle_materialization_hash_mismatch",
@@ -661,7 +869,10 @@ class DatabaseReportInputGateway:
                         "bundle_id": bundle.id,
                         "bundle_manifest_hash": bundle.manifest_hash,
                         "weight": _weight_for_symbol(symbol, context),
-                        "context": _item_context(symbol, context),
+                        "context": {
+                            **_item_context(symbol, context),
+                            "evidence_bindings": bindings,
+                        },
                         "bundle": {
                             "bundle_id": bundle.id,
                             "symbol": bundle.symbol,
@@ -708,6 +919,10 @@ class DatabaseReportInputGateway:
                         "source_refs": [dict(row) for row in materialized.source_refs],
                     }
                 )
+                _materialize_quant_auxiliary(
+                    repository, frozen_items[-1], bundle=bundle,
+                    projection_version=str(workflow_pins["snapshot_projection_version"]), freeze=True,
+                )
             frozen_dependencies = _freeze_manifest_dependencies(
                 repository=repository,
                 requested=list(context.get("bundle_dependencies") or []),
@@ -716,6 +931,16 @@ class DatabaseReportInputGateway:
                 current_time=current_time,
                 stock_items=frozen_items,
             )
+            if _base_manifest is not None:
+                if [_dependency_hash_row(row) for row in frozen_dependencies] != [
+                    _dependency_hash_row(row) for row in _base_manifest.get("dependencies", [])
+                ]:
+                    raise ReportInputError("report_revision_dependency_changed", "股票输入修订不能改变原基金持仓")
+                old_inputs = {row["symbol"]: (row["bundle_manifest_hash"], row["context"])
+                              for row in _base_manifest["items"]}
+                if all(old_inputs[row["symbol"]] == (row["bundle_manifest_hash"], row["context"])
+                       for row in frozen_items):
+                    raise ReportInputError("report_revision_inputs_unchanged", "选定股票没有新的已冻结数据或证据；请先在数据中心补采并确认冻结，或使用原输入重试分析")
             evaluation_times.extend(
                 _aware_utc(datetime.fromisoformat(item["cutoff_at"]))
                 for item in frozen_dependencies
@@ -815,6 +1040,7 @@ class DatabaseReportInputGateway:
                 "as_of_date": as_of_date.isoformat(),
                 "workflow_pins": dict(workflow_pins),
                 "items": frozen_items,
+                "input_preflight": report_input_readiness(frozen_items, workflow_pins),
                 **(
                     {"dependencies": frozen_dependencies}
                     if frozen_dependencies
@@ -828,6 +1054,97 @@ class ReportInputService:
 
     def __init__(self, gateway: ReportInputGateway) -> None:
         self.gateway = gateway
+
+    def load_manifest_reference(self, *, manifest_id: str, manifest_hash: str,
+                                tenant_id: str | None, user_id: str | None) -> dict[str, Any]:
+        return normalize_manifest(self.gateway.load_frozen_report_manifest(
+            manifest_id=manifest_id, manifest_hash=manifest_hash,
+            tenant_id=tenant_id, user_id=user_id,
+        ))
+
+    def revise_manifest(self, *, manifest_id: str, manifest_hash: str,
+                        symbols: Sequence[str], tenant_id: str | None,
+                        user_id: str | None) -> dict[str, Any]:
+        revise = getattr(self.gateway, "revise_report_manifest", None)
+        if not callable(revise):
+            raise ReportInputError("report_input_revision_unsupported", "当前输入存储不支持局部修订")
+        return normalize_manifest(revise(
+            manifest_id=manifest_id, manifest_hash=manifest_hash, symbols=symbols,
+            tenant_id=tenant_id, user_id=user_id,
+        ))
+
+    def validate_continuation_request(self, request: RequestEnvelope) -> None:
+        """Admit new execution from its original frozen inputs, without rebinding.
+
+        This is intentionally not ``freeze_request``: no newer Bundle/evidence
+        may be selected and no saved request or historical report is rewritten.
+        Initial consumption remains responsible for full DB/hash validation.
+        """
+        slots = request.slots or {}
+        manifest = slots.get("report_data_manifest")
+        if not isinstance(manifest, Mapping):
+            if (request.constraints or {}).get("data_source_mode") == "bundle_only":
+                raise ReportInputError("report_manifest_missing", "恢复报告缺少固定 Manifest，不能继续执行")
+            return
+        pins = dict(manifest.get("workflow_pins") or {})
+        if all(pins.get(key) for key in ("workflow_commit", "model_id", "prompt_hash")):
+            from research_system.strategies.runtime_pins import deployed_workflow_pins
+
+            actual = deployed_workflow_pins(getattr(self.gateway, "runtime_settings", None))
+            mismatches = [key for key, value in actual.items() if key in pins and pins[key] != value]
+            profile = _research_profile(request)
+            if profile and pins.get("research_profile") and pins["research_profile"] != profile:
+                mismatches.append("research_profile")
+            if mismatches:
+                raise ReportInputError(
+                    "report_workflow_version_mismatch",
+                    "冻结报告执行版本与当前部署不一致（" + "、".join(mismatches)
+                    + "）；旧报告仍可读取，继续执行须使用原运行环境或创建修订。",
+                )
+
+        def validate_rows(rows, as_of):
+            for row in rows:
+                if not isinstance(row, Mapping):
+                    continue
+                errors = commodity_fact_date_errors(
+                    row.get("facts") or {},
+                    dimension=str(row.get("dimension_id") or row.get("dimension") or row.get("snapshot_type") or ""),
+                    as_of_date=as_of,
+                )
+                if errors:
+                    raise ReportInputError(
+                        "bundle_snapshot_future_price_fact",
+                        "固定输入存在截止日之后的商品价格事实，必须补采并创建修订，不能恢复旧缓存：" + errors[0],
+                    )
+                if commodity_empty_query_errors(
+                    row.get("query_manifest") or {},
+                    dimension=str(row.get("dimension_id") or row.get("dimension") or row.get("snapshot_type") or ""),
+                    as_of_date=as_of,
+                ):
+                    raise ReportInputError(
+                        "bundle_snapshot_unproven_empty_result",
+                        "固定历史商品空结果缺少实际合约查询证明，需补采并创建修订，不能恢复旧缓存。",
+                    )
+
+        as_of = _parse_date(manifest.get("as_of_date"))
+        for item in manifest.get("items") or []:
+            bundle = item.get("bundle") or {}
+            item_date = _parse_date(bundle.get("as_of_date") or as_of)
+            validate_rows(item.get("snapshots") or [], min(item_date, as_of))
+        # Legacy requests can keep actual frozen rows outside the compact
+        # Manifest. Check that fixed slot as well, never live repository rows.
+        validate_rows(slots.get("snapshots") or [], as_of)
+
+    def resolve_fund_report_parent(
+        self, *, fund_code: str, as_of_date: date | str,
+        fund_bundle_id: str | None = None,
+        tenant_id: str | None = None, user_id: str | None = None,
+    ) -> dict[str, Any]:
+        resolver = getattr(self.gateway, "resolve_fund_report_parent", None)
+        if not callable(resolver):
+            raise ReportInputError("fund_bundle_gateway_unavailable", "当前报告入口不支持基金 Bundle")
+        return dict(resolver(fund_code=fund_code, as_of_date=_parse_date(as_of_date),
+            fund_bundle_id=fund_bundle_id, tenant_id=tenant_id, user_id=user_id))
 
     def freeze_request(self, request: RequestEnvelope) -> RequestEnvelope:
         """Return a request whose formal-report inputs are frozen and DB-backed.
@@ -1152,6 +1469,19 @@ class ReportInputService:
         _validate_fund_report_manifest(trusted, fund_code=fund_code)
         return trusted
 
+    def validate_fund_report_manifest_reference(
+        self, manifest: Mapping[str, Any], *, fund_code: str,
+        expected_symbols: Iterable[str], tenant_id: str | None, user_id: str | None,
+    ) -> dict[str, Any]:
+        validator = getattr(self.gateway, "validate_fund_report_manifest_reference", None)
+        expected = _unique_symbols(expected_symbols)
+        if not callable(validator):
+            return self.load_fund_report_manifest(manifest, fund_code=fund_code,
+                expected_symbols=expected, tenant_id=tenant_id, user_id=user_id)
+        return dict(validator(manifest_id=str(manifest.get("manifest_id") or manifest.get("id") or ""),
+            manifest_hash=str(manifest.get("manifest_hash") or ""), fund_code=fund_code,
+            expected_symbols=expected, tenant_id=tenant_id, user_id=user_id))
+
     @staticmethod
     def is_formal_report(request: RequestEnvelope) -> bool:
         intent = str(request.intent or "").strip()
@@ -1445,12 +1775,33 @@ def _validate_manifest_item(item: Mapping[str, Any], all_rows: Sequence[Mapping[
             raise ReportInputError("bundle_snapshot_dimension_missing", f"{symbol} 快照缺少 dimension_id")
         if dimension in actual_by_dimension:
             raise ReportInputError("bundle_snapshot_dimension_duplicate", f"{symbol} 重复维度：{dimension}")
+        # A previously frozen envelope may carry the legacy false PIT-safe
+        # stamp. Reject explicit future price facts before any model call;
+        # do not truncate or relabel the immutable historical input.
+        price_errors = commodity_fact_date_errors(
+            row.get("facts") or {}, dimension=dimension,
+            as_of_date=_parse_date(bundle.get("as_of_date")),
+        )
+        if price_errors:
+            raise ReportInputError(
+                "bundle_snapshot_future_price_fact",
+                f"{symbol}/{dimension} 存在截止日之后的商品价格事实，需重新采集并创建修订 Bundle："
+                + "; ".join(price_errors[:4]),
+            )
         quality = _snapshot_status(row)
         query_manifest = (
             dict(row.get("query_manifest") or {})
             if isinstance(row.get("query_manifest"), Mapping)
             else {}
         )
+        empty_errors = commodity_empty_query_errors(
+            query_manifest, dimension=dimension, as_of_date=_parse_date(bundle.get("as_of_date")),
+        )
+        if empty_errors:
+            raise ReportInputError(
+                "bundle_snapshot_unproven_empty_result",
+                f"{symbol}/{dimension} 历史空结果没有实际合约查询证明，需补采并创建修订 Bundle",
+            )
         degradation = (
             dict(query_manifest.get("degradation") or {})
             if isinstance(query_manifest.get("degradation"), Mapping)
@@ -1905,7 +2256,7 @@ def _freeze_manifest_dependencies(
     ]
 
 
-def _load_manifest_dependencies(*, repository, manifest, stock_items) -> list[dict[str, Any]]:
+def _load_manifest_dependencies(*, repository, manifest, stock_items, reference_only=False) -> list[dict[str, Any]]:
     stored = repository.list_report_manifest_dependencies(manifest.id)
     if not stored:
         return []
@@ -1931,8 +2282,18 @@ def _load_manifest_dependencies(*, repository, manifest, stock_items) -> list[di
             "fund_holding_dependency_drift",
             "冻结的父基金持仓依赖与 Bundle 不一致",
         )
-    _, payload = _materialize_fund_dependency(repository, bundle)
-    _bind_fund_holdings_to_stock_items(payload, stock_items)
+    if reference_only:
+        from research_system.market_data.reference_validation import (
+            validate_bundle_reference,
+        )
+        validate_bundle_reference(repository, bundle)
+        # This immutable context was verified against the complete parent
+        # payload on freeze/first consumption and is covered by Manifest hash.
+        canonical_context = dict(dependency.context_json or {})
+    else:
+        _, payload = _materialize_fund_dependency(repository, bundle)
+        _bind_fund_holdings_to_stock_items(payload, stock_items)
+        canonical_context = _canonical_fund_dependency_context(payload)
     bundle_items = repository.list_bundle_items(bundle.id)
     if len(bundle_items) != 1:
         raise ReportInputError(
@@ -1940,7 +2301,6 @@ def _load_manifest_dependencies(*, repository, manifest, stock_items) -> list[di
             "冻结的父基金 Bundle 槽位数不正确",
         )
     item = bundle_items[0]
-    canonical_context = _canonical_fund_dependency_context(payload)
     if (
         item.snapshot_id != dependency.snapshot_id
         or item.snapshot_content_hash != dependency.snapshot_content_hash
@@ -2086,8 +2446,11 @@ def _workflow_pins(request: RequestEnvelope) -> dict[str, Any]:
             "workflow_commit",
             "skill_version",
             "model_id",
+            "model_parameters",
             "prompt_hash",
             "research_profile",
+            "agent_workflow_mode",
+            "snapshot_projection_version",
         )
         if constraints.get(key) is not None
     }

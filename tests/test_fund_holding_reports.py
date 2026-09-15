@@ -384,6 +384,144 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         finally:
             self.service._submit_item = original_submit  # type: ignore[method-assign]
 
+    def test_complete_workflow_pins_must_match_deployment_before_child_is_prepared(self) -> None:
+        from research_system.market_data.report_inputs import ReportInputError
+        from research_system.strategies.runtime_pins import deployed_workflow_pins
+
+        pins = {**deployed_workflow_pins(self.settings), "research_profile": "medium"}
+        state = {"profile": "medium", "_report_data_manifest": {"workflow_pins": pins}}
+        self.assertEqual(self.service._assert_deployed_manifest_pins(state)["model_id"], pins["model_id"])
+        for key in ("model_id", "workflow_commit", "prompt_hash", "agent_workflow_mode"):
+            with self.subTest(key=key):
+                changed = {**state, "_report_data_manifest": {"workflow_pins": {**pins, key: "different"}}}
+                with self.assertRaisesRegex(ReportInputError, key):
+                    self.service._prepare_child(changed, {"symbol": "600001"})
+        self.assertEqual(self.service._assert_deployed_manifest_pins({"_report_data_manifest": {"workflow_pins": {"workflow_commit": "legacy-only"}}}), {})
+
+    def test_recorded_research_gap_allows_agent_without_rewriting_frozen_manifest(self) -> None:
+        with patch.object(self.service, "_submit_item"):
+            created = self.service.create_batch("source-run", fund_code="110011", profile="lite")
+        batch_id = created["batch_id"]
+        state = self.service._load_batch(batch_id)
+        state["_report_data_manifest"] = {"input_preflight": {"stocks": [{
+            "symbol": "600001.SH", "can_start_analysis": False,
+            "evidence_gaps": [{"dimension": "3_macro", "reason_code": "requires_two_cited_sources"}],
+            "data_issues": [{"severity": "critical", "dimension": "19_contests", "check": "empty_dims"}],
+        }]}}
+        self.service._write_batch(state, event_type="test_fixture")
+        self.run_service.report_input_service = SimpleNamespace(freeze_request=lambda request: request)
+        first, second = state["holdings"][:2]
+        frozen = self.service._manifest_for_state(state)
+        with patch.object(self.agent_os, "handle_request", wraps=self.agent_os.handle_request) as handle:
+            self.service._execute_item(batch_id, first["symbol"], first["child_run_id"])
+            handle.assert_called_once()
+        completed = self.service._load_batch(batch_id)
+        self.assertTrue(completed["holdings"][0]["report_available"])
+        assessment = completed["holdings"][0]["input_preflight"]
+        self.assertTrue(assessment["can_start_analysis"])
+        self.assertTrue(assessment["legacy_start_gate_reclassified"])
+        self.assertFalse(frozen["input_preflight"]["stocks"][0]["can_start_analysis"])
+        self.assertEqual(self.service._manifest_for_state(completed), frozen)
+        self.assertEqual(completed["holdings"][1]["status"], "queued")
+        self.service._execute_item(batch_id, second["symbol"], second["child_run_id"])
+        self.assertTrue(self.service._load_batch(batch_id)["holdings"][1]["report_available"])
+
+    def test_frozen_input_safety_blocker_still_stops_agent(self) -> None:
+        with patch.object(self.service, "_submit_item"):
+            created = self.service.create_batch("source-run", fund_code="110011", profile="lite")
+        state = self.service._load_batch(created["batch_id"])
+        state["_report_data_manifest"] = {"input_preflight": {"stocks": [{
+            "symbol": "600001.SH", "can_start_analysis": False,
+            "input_blockers": [{"reason_code": "frozen_snapshots_missing"}],
+        }]}}
+        self.service._write_batch(state, event_type="test_fixture")
+        self.run_service.report_input_service = SimpleNamespace(freeze_request=lambda request: request)
+        first = state["holdings"][0]
+        with patch.object(self.agent_os, "handle_request") as handle:
+            self.service._execute_item(created["batch_id"], first["symbol"], first["child_run_id"])
+            handle.assert_not_called()
+        item = self.service._load_batch(created["batch_id"])["holdings"][0]
+        self.assertEqual(item["recovery"]["kind"], "input_integrity")
+        self.assertIn("frozen_snapshots_missing", item["error"])
+
+    def test_large_manifest_is_written_once_across_one_hundred_progress_updates(self) -> None:
+        from domain_packs.finance_ashare.subagents.uzi_recovery import content_hash
+        from research_system.market_data.report_inputs import ReportInputError
+
+        with patch.object(self.service, "_submit_item"):
+            created = self.service.create_batch("source-run", fund_code="110011", profile="lite")
+        state = self.service._load_batch(created["batch_id"])
+        manifest = {"manifest_id": "frozen-1", "manifest_hash": "a" * 64,
+                    "workflow_pins": {"model_id": "pinned-model"}, "raw": "original-evidence " * 100_000}
+        state["_report_data_manifest"] = manifest
+        self.service._write_batch(state, event_type="test_manifest_frozen")
+        root = self.agent_os.run_store.load_run_paths(created["batch_id"]).root
+        manifest_path = root / state["_report_data_manifest_ref"]
+        original_stat = manifest_path.stat()
+        for _ in range(100):
+            self.service._write_batch(state, event_type="test_progress")
+        stored = read_json(root / "fund_holding_batch.json")
+        self.assertNotIn("_report_data_manifest", stored)
+        self.assertEqual(stored["_report_data_manifest_content_hash"], content_hash(manifest))
+        self.assertEqual(manifest_path.stat().st_mtime_ns, original_stat.st_mtime_ns)
+        self.assertEqual(len(list((root / "inputs").glob("report-data-manifest-*.json"))), 1)
+        self.assertLess((root / "fund_holding_batch.json").stat().st_size, 50_000)
+        self.assertNotIn("original-evidence", (root / "artifact_board.jsonl").read_text())
+        self.service._manifest_cache.clear()  # Simulate a fresh process reading the original input.
+        self.assertEqual(self.service._manifest_for_state(stored), manifest)
+        with patch.object(self.service, "_trusted_fund_manifest", return_value={**manifest, "raw": "a newer projection"}):
+            self.assertEqual(self.service.frozen_report_manifest(created["batch_id"]), manifest)
+        for relative in ("../another-batch/manifest.json", str(manifest_path.resolve())):
+            with self.subTest(relative=relative), self.assertRaises(ReportInputError):
+                self.service._manifest_for_state({**stored, "_report_data_manifest_ref": relative})
+        write_json(manifest_path, {**manifest, "raw": "new evidence must not enter this run"})
+        with self.assertRaisesRegex(ReportInputError, "内容校验失败"):
+            self.service._manifest_for_state(stored)
+
+    def test_legacy_inline_manifest_reads_do_not_migrate_or_reparse_unchanged_file(self) -> None:
+        from domain_packs.finance_ashare.subagents.uzi_recovery import content_hash
+
+        with patch.object(self.service, "_submit_item"):
+            created = self.service.create_batch("source-run", fund_code="110011", profile="lite")
+        state = self.service._load_batch(created["batch_id"])
+        manifest = {"manifest_id": "legacy-frozen", "original_body": "archived content" * 1000}
+        state["_report_data_manifest"] = manifest
+        root = self.agent_os.run_store.load_run_paths(created["batch_id"]).root
+        path = root / "fund_holding_batch.json"
+        write_json(path, state)
+        original_bytes = path.read_bytes()
+        self.service._batch_read_cache.clear()
+        with patch("research_system.api.fund_holding_report_service.read_json", wraps=read_json) as reader:
+            for _ in range(3):
+                public = self.service.detail(created["batch_id"])
+                self.assertNotIn("_report_data_manifest", public)
+            self.assertEqual(sum(call.args[0] == path for call in reader.call_args_list), 1)
+        self.assertEqual(path.read_bytes(), original_bytes)
+        self.assertFalse((root / "inputs").exists())
+        loaded = self.service._load_batch(created["batch_id"])
+        self.assertEqual(self.service._manifest_for_state(loaded), manifest)
+        self.service._write_batch(loaded, event_type="explicit_legacy_state_update")
+        self.assertEqual(loaded["_report_data_manifest_content_hash"], content_hash(manifest))
+        self.assertEqual(self.service._manifest_for_state(loaded), manifest)
+
+    def test_terminal_batch_uses_compact_lineage_validation_without_loading_manifest_body(self) -> None:
+        with patch.object(self.service, "_submit_item"):
+            created = self.service.create_batch("source-run", fund_code="110011", profile="lite")
+        state = self.service._load_batch(created["batch_id"])
+        state.update({"status": "completed", "report_manifest_id": "frozen-1", "report_manifest_hash": "a" * 64,
+                      "_report_data_manifest_ref": "not-read-by-display"})
+        calls = []
+        self.run_service.report_input_service = SimpleNamespace(
+            has_fund_report_lineage=True,
+            gateway=SimpleNamespace(validate_fund_report_manifest_reference=lambda **_kwargs: None),
+            validate_fund_report_manifest_reference=lambda manifest, **kwargs: calls.append((manifest, kwargs)),
+        )
+        with patch.object(self.service, "_manifest_for_state", side_effect=AssertionError("display must not load raw inputs")):
+            public = self.service._public_delivery_state(state)
+        self.assertEqual(public["status"], "completed")
+        self.assertEqual(calls[0][0], {"manifest_id": "frozen-1", "manifest_hash": "a" * 64})
+        self.assertEqual(calls[0][1]["expected_symbols"], [row["symbol"] for row in state["holdings"]])
+
     def test_partial_failure_retry_and_partial_delivery(self) -> None:
         self.agent_os.fail_symbols.add("600001")
         self.agent_os.partial_symbols.add("600002")
@@ -440,7 +578,7 @@ class FundHoldingReportServiceTests(unittest.TestCase):
             self.service,
             "_recovery_fingerprint",
             side_effect=changing_fingerprint,
-        ):
+        ), patch.object(self.service, "_recovery_decision", return_value={"retryable": True, "kind": "worker_interrupted"}):
             created = self.service.create_batch(
                 "source-run",
                 fund_code="110011",
@@ -454,6 +592,33 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         self.assertEqual(item["status"], "failed")
         self.assertIn("holding_stock_report_retry_exhausted", item["data_gap"])
         self.assertIn("自动恢复已达到上限", item["error"])
+
+    def test_fixed_native_source_gap_is_not_retried_by_parent(self) -> None:
+        self.run_service.source_artifacts = [snapshot_artifact(funds=[equity_fund(count=1)])]
+
+        def gated(_request, *, run_id):
+            self.agent_os.details[run_id] = {"mode": "graph", "snapshot": {"status": "gated"}, "artifacts": [{
+                "artifact_id": "new-native", "artifact_type": "uzi_native_analysis", "status": "active",
+                "content": {"critical_count": 1, "report_allowed": False, "results": [{
+                    "self_review": {"critical_count": 1, "issues": [{"severity": "critical", "category": "data",
+                        "dim": "12_capital_flow", "issue": "真实历史证据缺失", "suggested_fix": "补采"}]}}]},
+            }]}
+
+        with patch.object(self.agent_os, "handle_request", side_effect=gated) as initial, patch.object(self.agent_os, "resume") as resume:
+            created = self.service.create_batch("source-run", fund_code="110011", profile="medium")
+            final = self.wait_terminal(created["batch_id"])
+        self.assertEqual(initial.call_count, 1)
+        resume.assert_not_called()
+        self.assertEqual(final["holdings"][0]["retry_count"], 0)
+        self.assertEqual(final["holdings"][0]["recovery"]["action"], "collect_data")
+
+    def test_recovery_fingerprint_ignores_new_artifact_ids_but_detects_content_change(self) -> None:
+        def detail(artifact_id, reviewed_at, score=50):
+            return {"snapshot": {"status": "gated"}, "artifacts": [{"artifact_type": "uzi_native_analysis",
+                "artifact_id": artifact_id, "content": {"reviewed_at": reviewed_at, "score": score}}]}
+        fingerprint = self.service._recovery_fingerprint
+        self.assertEqual(fingerprint(detail("a", "t1")), fingerprint(detail("b", "t2")))
+        self.assertNotEqual(fingerprint(detail("a", "t1")), fingerprint(detail("b", "t2", 60)))
 
     def test_recovered_legacy_retry_storm_stops_before_another_resume(self) -> None:
         self.run_service.source_artifacts = [
@@ -720,7 +885,7 @@ class FundHoldingReportServiceTests(unittest.TestCase):
         self.assertNotIn("LLMProviderError", message)
         self.assertNotIn("CLI 直跑可以忽略", message)
         self.assertIn(
-            "应跑的维度 3 完全缺失（建议：通过 Agent OS 仅重试该持仓，系统会按当前研究档位重新执行启用的数据源）",
+            "应跑的维度 3 完全缺失（建议：先在数据中心补齐缺失维度并冻结新 Bundle，再生成报告修订；冻结报告不联网补采）",
             message,
         )
         self.assertNotIn("run.py", message)

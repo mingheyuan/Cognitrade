@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 import math
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
 
-from research_system.strategies.backtesting.result_store import ContentAddressedResultStore
-from research_system.strategies.contracts import GovernanceState
-from research_system.strategies.contracts import StrategyDocumentV1
+from research_system.strategies.backtesting.result_store import (
+    ContentAddressedResultStore,
+)
+from research_system.strategies.contracts import (
+    GovernanceState,
+    parse_strategy_document,
+)
 from research_system.strategies.database import StrategyDatabase
 from research_system.strategies.errors import StrategyConflict, StrategyDomainError
 from research_system.strategies.models import (
@@ -22,7 +26,6 @@ from research_system.strategies.models import (
 )
 from research_system.strategies.repository import StrategyRepository
 from research_system.strategies.service import OwnerScope
-
 
 DEFAULT_VERIFICATION_THRESHOLDS: dict[str, float | int | bool] = {
     "minimum_sample_days": 20,
@@ -176,7 +179,7 @@ class StrategyVerificationService:
             for trade in trades
             for signal_id in trade.get("signal_ids") or ([trade.get("signal_id")] if trade.get("signal_id") else [])
         }
-        document = StrategyDocumentV1.model_validate(version.document_json)
+        document = parse_strategy_document(version.document_json)
         lineage_complete = bool(trades) and trade_signal_ids.issubset(linked_signal_ids)
         trade_lineage_complete = bool(trades)
         for trade in trades:

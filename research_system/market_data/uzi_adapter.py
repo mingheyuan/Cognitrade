@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
+from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -19,7 +20,8 @@ from research_system.market_data.dimension_contracts import (
     DEFAULT_DIMENSION_REGISTRY,
     DimensionRegistry,
 )
-from research_system.market_data.historical import capability_for_dimension
+from research_system.market_data.historical import capability_for_dimension, historical_provider_revision
+from research_system.market_data.native_projection import EMPTY_INPUT_VERSION
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 _UTC_OFFSET_RE = re.compile(
@@ -94,6 +96,18 @@ class UziSnapshotAdapter:
             else {}
         )
         raw = self._raw_data(facts)
+        native_data_present = bool({key: value for key, value in raw.items() if key != "price_evidence"})
+        price_evidence = facts.get("price_evidence")
+        if dimension == "2_kline" and isinstance(price_evidence, Mapping):
+            # Add independent replay facts to the normalized copy, never alter
+            # the pinned native envelope or its qfq technical indicators.
+            for field in ("corporate_actions", "adjustment_factors"):
+                if field in price_evidence:
+                    raw[field] = deepcopy(price_evidence[field])
+            raw["field_queries"] = {
+                **dict(raw.get("field_queries") or {}),
+                **deepcopy(dict(price_evidence.get("field_queries") or {})),
+            }
         observed_at = self._timestamp(snapshot.get("retrieved_at"))
         local_observed_date = observed_at.astimezone(ZoneInfo(exchange_timezone)).date()
         reconstruction = (
@@ -129,7 +143,7 @@ class UziSnapshotAdapter:
         # and let normalized fields, evidence, and ingestion validation decide;
         # only explicit provider failures are rejected up front.
         native_available = (
-            bool(raw) and declared_status not in _NATIVE_UNAVAILABLE_STATUSES
+            native_data_present and declared_status not in _NATIVE_UNAVAILABLE_STATUSES
         )
         pit_safe = as_of_date == local_observed_date or reconstruction_safe
         if not pit_safe:
@@ -188,6 +202,14 @@ class UziSnapshotAdapter:
                 query_manifest["coverage"] = {"ohlcv_adjustment": adjustment}
         if reconstruction_safe:
             query_manifest["historical_reconstruction"] = reconstruction
+            if revision := historical_provider_revision(dimension):
+                query_manifest["historical_provider_revision"] = revision
+            capability = capability_for_dimension(dimension)
+            if capability.implementation_status == "inputs_only":
+                query_manifest["historical_capability"] = {
+                    "strategy": capability.strategy,
+                    "implementation_status": capability.implementation_status,
+                }
             query_manifest.update(
                 self._historical_query_manifest(
                     dimension=dimension,
@@ -277,9 +299,75 @@ class UziSnapshotAdapter:
                     "message": "历史来源已自动查询，但结果不足以满足严格维度合同",
                     "attempted_reconstruction": True,
                 }
+                if dimension == "6_fund_holders" and "fund_holders_publication_dates_missing" in (facts.get("data_gap") or []):
+                    query_manifest["degradation"].update(
+                        reason_code="fund_holders_publication_dates_missing", retryable=False,
+                        message="当前基金持股表只有持仓截止日期，没有公开披露日期或历史版本证明；不能把报告期当作当时可见日期，也不能认定历史无持仓。需补充可信历史披露归档。",
+                    )
+                if dimension == "13_policy" and (snapshot.get("facts") or {}).get("policy_query_status") == "empty":
+                    query_manifest["degradation"].update(
+                        reason_code="bounded_archive_gap", retryable=False,
+                        message="历史公告查询成功，但在实际查询范围内没有匹配政策记录；这不代表没有历史政策。需补充官方政策归档，而非重复同一公告查询。",
+                    )
+                if dimension in {"8_materials", "9_futures"}:
+                    gap_codes = set(raw.get("data_gap") or []) | set(facts.get("data_gap") or [])
+                    if "industry_material_mapping_missing" in gap_codes:
+                        query_manifest["degradation"].update(
+                            reason_code="industry_material_mapping_missing",
+                            retryable=False,
+                            attempted_reconstruction=False,
+                            message="截止日行业尚未匹配到原料/期货合约，未执行价格查询；这不代表历史价格为空。需补齐历史行业依据或合约映射。",
+                        )
+                    else:
+                        query_manifest["degradation"].update(
+                            reason_code="historical_price_query_unproven",
+                            retryable=False,
+                            message="没有可核验的历史合约价格查询记录，不能将通用 no_data 或依赖查询成功视为已核实为空。",
+                        )
+                if capability.implementation_status == "inputs_only":
+                    statuses = {
+                        str(row.get("status") or "").lower()
+                        for row in query_manifest["source_trace"]
+                    }
+                    archive_gap = "no_data" in statuses and not statuses.intersection(
+                        {"available", "success", "succeeded"}
+                    )
+                    missing = ", ".join(field_coverage["missing_fields"])
+                    query_manifest["degradation"].update(
+                        reason_code=(
+                            "bounded_archive_gap"
+                            if archive_gap
+                            else "normalization_or_derivation_missing"
+                        ),
+                        message=(
+                            "当前限量候选中未获得截止日前可用记录，不代表历史没有记录；"
+                            if archive_gap
+                            else "历史可比公司集合及比较数据重建尚未接通；"
+                            if dimension == "4_peers"
+                            else "当前历史路径仅支持素材采集，尚未完成目标字段的规范化或派生；"
+                        )
+                        + f"缺少 {missing}。需完善历史派生/归档适配，原样重试不能保证补齐。",
+                        retryable=False,
+                        implementation_status="inputs_only",
+                        missing_fields=field_coverage["missing_fields"],
+                    )
+                if dimension == "3_macro" and self._historical_macro_benchmark_only(
+                    snapshot=dict(snapshot), raw=raw, field_coverage=field_coverage,
+                ):
+                    query_manifest["historical_capability"] = {
+                        "strategy": capability.strategy,
+                        "implementation_status": "inputs_only",
+                        "input_collection": "historical_benchmark",
+                        "native_derivation": "not_implemented",
+                    }
+                    query_manifest["degradation"].update(
+                        reason_code="normalization_or_derivation_missing",
+                        retryable=False, implementation_status="inputs_only",
+                        missing_fields=field_coverage["missing_fields"],
+                        message="历史指数接口已返回，但当前路径未接通原生宏观六组证据与派生；指数行情不能替代宏观研究，原样重试不能补齐 observations。",
+                    )
             if outcome == "verified_empty":
                 status = SnapshotStatus.VERIFIED_EMPTY
-                payload = {}
             elif outcome in {"retryable_failure", "unavailable"}:
                 status = SnapshotStatus.DATA_GAP
             else:
@@ -295,6 +383,63 @@ class UziSnapshotAdapter:
                     snapshot=dict(snapshot),
                 )
             )
+        if dimension == "2_kline" and isinstance(price_evidence, Mapping):
+            query_manifest["price_evidence"] = {
+                key: deepcopy(price_evidence.get(key))
+                for key in ("provider_version", "observed_at", "status", "retryable", "error_reason", "field_sources")
+            }
+            if price_evidence.get("status") != "available" and native_available:
+                query_manifest["collection_outcome"] = "partial"
+                query_manifest["partial_disclosure"] = {
+                    "excluded_from_scoring": False,
+                    "reason_code": "price_evidence_unavailable",
+                    "retryable": bool(price_evidence.get("retryable")),
+                    "message": "UZI 行情可用于报告，但回放所需公司行动/因子证明未完成：" + str(price_evidence.get("error_reason") or "source query unavailable"),
+                }
+        # A native symbol has lane-specific roots and optional bonus fields.
+        # Preserve their presence states outside DimResult.data. Historical
+        # dimension reconstruction alone does not prove a current root spill.
+        transport = {
+            key: deepcopy(dict(facts[key]))
+            for key in ("_uzi_root_fields", "_uzi_top_level_fields")
+            if isinstance(facts.get(key), Mapping)
+        }
+        if transport:
+            payload.update(transport)
+            digest = canonical_hash(transport)
+            captured_before_cutoff = observed_at <= cutoff_at
+            query_manifest["native_symbol_transport"] = {
+                "version": "native-symbol-transport-v1",
+                "content_hash": digest,
+                "observed_at": observed_at.isoformat(),
+                "bonus_status": "fixed_observation" if captured_before_cutoff else "not_fixed_historical",
+                "reason": "captured_before_cutoff" if captured_before_cutoff else "dimension_reconstruction_does_not_prove_symbol_bonus",
+            }
+            if captured_before_cutoff:
+                evidence.append(EvidenceInput(
+                    provider=provider_id, source_kind="native_symbol_transport",
+                    # The immutable payload already stores the complete
+                    # transport. Large native fund/NAV lists exceed the inline
+                    # evidence column's 256 KiB bound; commit their exact hash
+                    # without duplicating or truncating those source bytes.
+                    content_hash=digest,
+                    published_at=observed_at, observed_at=observed_at,
+                    grade=EvidenceGrade.A, immutable_proof=True,
+                    metadata={"transport_version": "native-symbol-transport-v1", "purpose": "native_input_transport", "content_storage": "immutable_snapshot_payload"},
+                ))
+        if status == SnapshotStatus.VERIFIED_EMPTY:
+            # Keep actual zero counts, empty lists and source/error envelope.
+            # The collection status is not a native fact or a replacement for
+            # these bytes. Store them outside the strict empty payload, bound
+            # by the immutable snapshot hash and an explicit transport hash.
+            native_input = {key: deepcopy(payload[key]) for key in (
+                "raw", "_uzi_raw_result", "_uzi_root_fields", "_uzi_top_level_fields",
+            ) if key in payload}
+            query_manifest["native_empty_input"] = {
+                "version": EMPTY_INPUT_VERSION, "payload": native_input,
+                "content_hash": canonical_hash(native_input),
+            }
+            payload = {}
         return SnapshotIngestInput(
             symbol=symbol,
             market=market,
@@ -322,7 +467,14 @@ class UziSnapshotAdapter:
                 "audit_passed": not semantic_errors and pit_safe,
                 "audit_errors": semantic_errors,
             },
-            field_sources={"$": provider_id},
+            field_sources={
+                "$": provider_id,
+                **(
+                    dict(price_evidence.get("field_sources") or {})
+                    if dimension == "2_kline" and isinstance(price_evidence, Mapping)
+                    else {}
+                ),
+            },
             evidence=evidence,
             observation_metadata={
                 "native_snapshot_date": snapshot.get("snapshot_date"),
@@ -509,6 +661,14 @@ class UziSnapshotAdapter:
             # between legacy top-level error and pipeline _pipeline.error).
             # UZI self-review reads those locations differently.
             payload["_uzi_raw_result"] = dict(native_result)
+        execution = facts.get("_uzi_execution")
+        if isinstance(execution, Mapping) and execution.get("input_contract"):
+            # Version the collection boundary in audit metadata, not native data.
+            payload["_uzi_execution"] = {
+                key: execution[key] for key in ("lane", "input_contract") if key in execution
+            }
+            if isinstance(execution.get("search_budget"), Mapping):
+                payload["_uzi_execution"]["search_budget"] = deepcopy(dict(execution["search_budget"]))
         if dimension == "0_basic":
             price = self._number(raw.get("price"))
             market_cap = self._number(raw.get("market_cap_raw"), raw.get("market_cap"))
@@ -573,7 +733,18 @@ class UziSnapshotAdapter:
                 raw.get("macro_headlines_playwright"),
             )
         elif dimension == "4_peers":
-            peers = list(raw.get("peer_table") or raw.get("peers") or [])
+            comparison = raw.get("comparison")
+            nested_peers = (
+                comparison.get("peers") if isinstance(comparison, Mapping) else None
+            )
+            # Host peer snapshots wrap rows in comparison; retain the native
+            # top-level shapes' precedence and preserve each source row. This
+            # alias does not relax the comparable-count or evidence contract.
+            peers = list(
+                raw.get("peer_table")
+                or raw.get("peers")
+                or (nested_peers if isinstance(nested_peers, list) else [])
+            )
             payload.update(
                 target=raw.get("self")
                 or (raw.get("global_peer_comparison") or {}).get("target")
@@ -593,7 +764,8 @@ class UziSnapshotAdapter:
                 or [],
                 upstream=raw.get("upstream"),
                 downstream=raw.get("downstream"),
-                concentration={
+                concentration=raw.get("concentration")
+                or {
                     "client": raw.get("client_concentration"),
                     "supplier": raw.get("supplier_concentration"),
                 },
@@ -942,6 +1114,13 @@ class UziSnapshotAdapter:
                 )
             )
         for index, row in enumerate(url_rows[:20]):
+            if reconstruction is not None:
+                # The date-bounded provider response above proves structured
+                # facts, not the historical version of every URL it mentions.
+                # Preserve these links in raw for audit/discovery only. Actual
+                # document evidence must pass ResearchArchiveCollector and is
+                # persisted separately with the original bytes and version proof.
+                continue
             published, timestamp_present, time_basis, time_error = self._published_time(
                 row,
                 fallback=observed_at,
@@ -964,8 +1143,6 @@ class UziSnapshotAdapter:
             grade = (
                 EvidenceGrade.A
                 if pit_safe and official and timestamp_present
-                else EvidenceGrade.B
-                if reconstruction is not None and timestamp_present
                 else EvidenceGrade.C
             )
             evidence.append(
@@ -978,7 +1155,7 @@ class UziSnapshotAdapter:
                     published_at=published,
                     observed_at=observed_at,
                     grade=grade,
-                    immutable_proof=official or reconstruction is not None,
+                    immutable_proof=False,
                     metadata={"dimension": dimension, "published_at_basis": time_basis},
                 )
             )
@@ -1003,6 +1180,20 @@ class UziSnapshotAdapter:
         return evidence, semantic_errors
 
     @staticmethod
+    def _historical_macro_benchmark_only(*, snapshot, raw, field_coverage) -> bool:
+        """Only a proven-success benchmark path is a local derivation gap."""
+        trace = [row for row in snapshot.get("source_trace") or [] if isinstance(row, Mapping)]
+        requested = [row for row in trace if row.get("request_executed") is not False
+                     and str(row.get("status") or "").lower() not in {"not_queried", "disabled"}]
+        return bool(
+            raw.get("benchmark") and not field_coverage.get("present_fields")
+            and any(row.get("interface") == "akshare.index_zh_a_hist"
+                    and row.get("request_executed") is True for row in requested)
+            and all(str(row.get("status") or "").lower() in {"available", "success", "succeeded"}
+                    for row in requested)
+        )
+
+    @staticmethod
     def _historical_outcome(
         *,
         dimension: str,
@@ -1019,7 +1210,12 @@ class UziSnapshotAdapter:
             raw.get("observation_status") or facts.get("observation_status") or ""
         ).lower()
         contract = DEFAULT_DIMENSION_REGISTRY.get(dimension)
-        if observation_status == "verified_empty" and contract.permits_verified_empty:
+        price_dimension = dimension in {"8_materials", "9_futures"}
+        if (
+            observation_status == "verified_empty"
+            and contract.permits_verified_empty
+            and not price_dimension
+        ):
             return "verified_empty"
         statuses = {
             str(row.get("status") or "").strip().lower()
@@ -1032,9 +1228,46 @@ class UziSnapshotAdapter:
             {"provider_unavailable", "rate_limited", "timeout", "parse_failed"}
         ) and not field_coverage.get("present_fields"):
             return "retryable_failure"
+        if dimension == "13_policy" and facts.get("policy_query_status") == "empty":
+            # A successful zero-match archive query is neither an outage nor
+            # verified-empty research. Preserve a gap and native empty gate.
+            return "unavailable"
+        if dimension == "3_macro" and UziSnapshotAdapter._historical_macro_benchmark_only(
+            snapshot=snapshot, raw=raw, field_coverage=field_coverage,
+        ):
+            return "unavailable"
         present = set(field_coverage.get("present_fields") or [])
         recoverable = set(field_coverage.get("recoverable_fields") or [])
         current_only = set(field_coverage.get("current_only_fields") or [])
+        if price_dimension:
+            price_queries = [
+                row
+                for row in snapshot.get("source_trace") or []
+                if isinstance(row, Mapping)
+                and row.get("query_scope") == "futures_prices"
+            ]
+            failures = statuses.intersection(
+                {"provider_unavailable", "rate_limited", "timeout", "parse_failed"}
+            )
+            if present and failures:
+                return "partial"
+            if not present:
+                # Only completed queries for actual requested contracts prove
+                # zero prices. Industry lookups and unexecuted mapping gaps do
+                # not. Keep legacy generic no_data as a disclosed gap.
+                if (
+                    price_queries
+                    and all(
+                        row.get("request_executed") is True
+                        and row.get("bounded_query_completed") is True
+                        and row.get("status") == "no_data"
+                        and row.get("in_window_count") == 0
+                        for row in price_queries
+                    )
+                    and contract.permits_verified_empty
+                ):
+                    return "verified_empty"
+                return "unavailable"
         if present:
             return (
                 "available"
@@ -1047,6 +1280,15 @@ class UziSnapshotAdapter:
         if successful and contract.permits_verified_empty:
             return "verified_empty"
         if successful:
+            if (
+                capability_for_dimension(dimension).implementation_status
+                == "inputs_only"
+            ):
+                # A successful fetch of inputs (or an empty recent-news page)
+                # is not a provider outage.  These paths have no completed PIT
+                # derivation, so another identical request cannot supply the
+                # absent final fields.  Real source failures are handled above.
+                return "unavailable"
             return "retryable_failure"
         return "unavailable"
 
@@ -1175,6 +1417,10 @@ class UziSnapshotAdapter:
             for row in list(snapshot.get("source_trace") or [])
             if isinstance(row, Mapping)
         ]
+        if dimension in {"8_materials", "9_futures"}:
+            # An industry classification query is not a price query. Retain
+            # all traces in source_trace, but scope price proof to contracts.
+            trace = [row for row in trace if row.get("query_scope") == "futures_prices"]
         successful_statuses = {
             "available",
             "success",
@@ -1194,7 +1440,20 @@ class UziSnapshotAdapter:
                         if row_status in successful_statuses
                         else row_status or "unknown"
                     ),
-                    "result_count": int(row.get("count") or 0),
+                    "result_count": int(
+                        row.get("in_window_count", row.get("count")) or 0
+                    ),
+                    **{
+                        key: row[key]
+                        for key in (
+                            "symbol",
+                            "query_window",
+                            "request_executed",
+                            "bounded_query_completed",
+                            "date_filter",
+                        )
+                        if key in row
+                    },
                     **(
                         {"reason_code": row.get("reason_code")}
                         if row.get("reason_code")
@@ -1214,6 +1473,18 @@ class UziSnapshotAdapter:
             ]
         field_queries: dict[str, Any] = {}
         for path in paths:
+            if dimension == "2_kline" and path in {
+                "corporate_actions",
+                "adjustment_factors",
+            }:
+                proof = UziSnapshotAdapter._kline_price_field_query(
+                    dict(payload.get("raw") or {}), path
+                )
+                if proof is not None:
+                    field_queries[path] = proof
+                # K-line success is not a query of dividends/splits or factors.
+                # In particular, adapter-generated [] must not acquire proof.
+                continue
             value = payload.get(path)
             count = len(value) if isinstance(value, (list, tuple, dict)) else 0
             field_queries[path] = {
@@ -1288,6 +1559,11 @@ class UziSnapshotAdapter:
         }
         field_queries: dict[str, Any] = {}
         for requirement in contract.field_query_requirements:
+            if dimension == "2_kline" and requirement.path in {"corporate_actions", "adjustment_factors"}:
+                proof = self._kline_price_field_query(raw, requirement.path)
+                if proof is not None:
+                    field_queries[requirement.path] = proof
+                continue
             value = payload.get(requirement.path)
             count = len(value) if isinstance(value, (list, tuple, dict)) else 0
             status = str(query_status.get("status") or "").strip().lower()
@@ -1341,6 +1617,15 @@ class UziSnapshotAdapter:
                 "result_count": count,
             }
         return {"field_queries": field_queries} if field_queries else {}
+
+    @staticmethod
+    def _kline_price_field_query(raw: dict[str, Any], field: str) -> dict[str, Any] | None:
+        """Forward only an actual field-scoped source query, including failures."""
+        queries = raw.get("field_queries")
+        proof = queries.get(field) if isinstance(queries, Mapping) else None
+        if field not in raw or not isinstance(raw[field], list) or not isinstance(proof, Mapping):
+            return None
+        return {**deepcopy(dict(proof)), "query_scope": "field", "field": field}
 
     @classmethod
     def _url_records(cls, value: Any) -> Iterable[dict[str, Any]]:

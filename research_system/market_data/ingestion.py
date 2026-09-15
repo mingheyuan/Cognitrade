@@ -6,6 +6,9 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
 from research_system.market_data.contracts import (
     EvidenceGrade,
     EvidenceInput,
@@ -31,6 +34,26 @@ from research_system.market_data.repository import MarketDataRepository
 
 class SnapshotIngestionError(ValueError):
     pass
+
+
+def _evidence_insert_if_absent(dialect_name: str, values: dict[str, Any]):
+    """Let the unique key arbitrate concurrent writers without an UPDATE.
+
+    In particular, do not recover SQLite's insert race with a first-statement
+    SAVEPOINT: releasing it under legacy transaction control can commit the
+    evidence before the caller's enclosing snapshot transaction completes.
+    """
+    factory = {"sqlite": sqlite_insert, "postgresql": postgresql_insert}.get(
+        dialect_name
+    )
+    if factory is None:
+        return None
+    return (
+        factory(MarketDataEvidence)
+        .values(**values)
+        .on_conflict_do_nothing(index_elements=[MarketDataEvidence.evidence_key])
+        .returning(MarketDataEvidence.id)
+    )
 
 
 def snapshot_content_hash(
@@ -1136,26 +1159,83 @@ class SnapshotIngestionService:
         evidence_key = evidence.evidence_key()
         existing = self.repository.find_evidence_by_key(evidence_key)
         if existing is not None:
+            self._validate_evidence_reuse(existing, evidence)
             return existing
-        return self.repository.add_evidence(
-            MarketDataEvidence(
-                evidence_key=evidence_key,
-                provider=evidence.provider,
-                source_url=evidence.source_url,
-                source_kind=evidence.source_kind,
-                title=evidence.title,
-                mime_type=evidence.mime_type,
-                content_hash=evidence.resolved_content_hash(),
-                content_ref=evidence.content_ref,
-                inline_content=evidence.inline_content,
-                published_at=evidence.published_at,
-                observed_at=evidence.observed_at,
-                grade=evidence.grade.value,
-                immutable_proof=evidence.immutable_proof,
-                is_manual=evidence.is_manual,
-                metadata_json=evidence.metadata,
+        values = {
+            "evidence_key": evidence_key,
+            "provider": evidence.provider,
+            "source_url": evidence.source_url,
+            "source_kind": evidence.source_kind,
+            "title": evidence.title,
+            "mime_type": evidence.mime_type,
+            "content_hash": evidence.resolved_content_hash(),
+            "content_ref": evidence.content_ref,
+            "inline_content": evidence.inline_content,
+            "published_at": evidence.published_at,
+            "observed_at": evidence.observed_at,
+            "grade": evidence.grade.value,
+            "immutable_proof": evidence.immutable_proof,
+            "is_manual": evidence.is_manual,
+            "metadata_json": evidence.metadata,
+        }
+        session = self.repository.session
+        statement = _evidence_insert_if_absent(session.get_bind().dialect.name, values)
+        if statement is None:
+            # Preserve the existing path for other dialects; the application
+            # supports SQLite and PostgreSQL for atomic concurrent ingestion.
+            return self.repository.add_evidence(MarketDataEvidence(**values))
+        inserted_id = session.execute(statement).scalar_one_or_none()
+        row = (
+            self.repository.get_evidence(inserted_id)
+            if inserted_id is not None
+            else self.repository.find_evidence_by_key(evidence_key)
+        )
+        if row is None:
+            raise SnapshotIngestionError("concurrent evidence winner is not visible")
+        self._validate_evidence_reuse(row, evidence)
+        return row
+
+    @staticmethod
+    def _validate_evidence_reuse(
+        existing: MarketDataEvidence, evidence: EvidenceInput
+    ) -> None:
+        """Only identical content may reuse a winning immutable evidence row.
+
+        Collection time, title, local path and dimension-specific use metadata
+        are not content identity. Keep the first stored values unchanged; the
+        caller records its own snapshot association and observation separately.
+        A different known body under the same claimed hash is not a harmless
+        uniqueness race and must fail the enclosing transaction.
+        """
+        from research_system.market_data.research_archive_text import (
+            text_binding_identity,
+        )
+
+        published = existing.published_at
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=timezone.utc)
+        identity_matches = (
+            existing.content_hash == evidence.resolved_content_hash()
+            and existing.provider == evidence.provider
+            and existing.source_url == evidence.source_url
+            and existing.source_kind == evidence.source_kind
+            and published == evidence.published_at
+            and existing.grade == evidence.grade.value
+            and existing.immutable_proof == evidence.immutable_proof
+            and existing.is_manual == evidence.is_manual
+            and (
+                existing.source_kind != "research_document"
+                or text_binding_identity(existing.metadata_json or {})
+                == text_binding_identity(evidence.metadata)
             )
         )
+        known_body_conflicts = (
+            existing.inline_content is not None
+            and evidence.inline_content is not None
+            and existing.inline_content != evidence.inline_content
+        )
+        if not identity_matches or known_body_conflicts:
+            raise SnapshotIngestionError("evidence content identity conflict")
 
     @staticmethod
     def _series_point_hash(ingest: SnapshotIngestInput, point) -> str:

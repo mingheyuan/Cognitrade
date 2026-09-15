@@ -185,6 +185,7 @@ export function ConfirmBundleFreezeDialog({ job, busy, onClose, onSubmit }: {
 }) {
   const [confirmed, setConfirmed] = useState(false)
   const candidate = job.publication_candidate
+  const inputVersionPending = job.company_profile_dependencies?.can_freeze === false
   const scopes = candidate?.previews?.length ? candidate.previews : candidate?.scopes || []
   const qualityGate = String(candidate?.quality_gate || 'strict').toLowerCase()
   const degraded = Boolean(candidate?.degraded) || qualityGate.includes('degrad') || Boolean(candidate?.missing_dimensions?.length)
@@ -197,13 +198,14 @@ export function ConfirmBundleFreezeDialog({ job, busy, onClose, onSubmit }: {
     >
       <form className="mdc-dialog-form" onSubmit={(event) => {
         event.preventDefault()
-        if (!confirmed) return
+        if (!confirmed || inputVersionPending) return
         void onSubmit(degraded).then(onClose).catch(() => undefined)
       }}>
         <div className="mdc-freeze-candidate-summary">
           <span><strong>{job.asset_family === 'fund' ? '基金前十大持仓组合' : `${job.symbols.length} 只股票`}</strong><small>{job.start_date} — {job.end_date}</small></span>
           <code>{candidate?.quality_gate || 'strict'}</code>
         </div>
+        {inputVersionPending && <p role="alert">输入版本待补齐：{job.company_profile_dependencies?.pending_dimensions.join('、') || '公司信息依赖'}，当前草稿不能冻结。</p>}
         {scopes.length ? <ol className="mdc-freeze-scope-list" aria-label="将发布的 Bundle 范围">{scopes.slice(0, 12).map((scope, index) => (
           <li key={`${scope.symbol || 'scope'}-${scope.as_of_date || index}`}>
             <span>{scope.symbol || `范围 ${index + 1}`}</span>
@@ -218,7 +220,7 @@ export function ConfirmBundleFreezeDialog({ job, busy, onClose, onSubmit }: {
           </div>
         ) : null}
         <label className="mdc-check-row mdc-freeze-confirmation"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} /><span>{degraded ? '我已阅读缺口与降级披露，仍确认冻结当前候选版本' : '我确认将当前采集草稿发布为不可变 Bundle'}</span></label>
-        <footer><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="submit" disabled={busy || !confirmed}>{busy ? '正在冻结 Bundle…' : '确认冻结 Bundle'}</button></footer>
+        <footer><button className="secondary-button" type="button" onClick={onClose}>取消</button><button className="primary-button" type="submit" disabled={busy || !confirmed || inputVersionPending}>{busy ? '正在冻结 Bundle…' : '确认冻结 Bundle'}</button></footer>
       </form>
     </DialogFrame>
   )
@@ -245,7 +247,7 @@ export function ReportLaunchDialog({ symbol, asOfDate, bundleId, assetFamily, ho
   ], [])
   const isFund = assetFamily === 'fund'
   return (
-    <DialogFrame title={isFund ? '创建前十大股票组合 Manifest' : '创建正式报告 Manifest'} description={isFund ? '基金 Bundle 负责证明前十大股票的选择与权重；基金代码不会被当成股票分析。后端会把已确认的 10 只股票 Bundle 绑定进同一不可变 Manifest。报告阶段外部数据调用数必须为 0。' : '从已确认冻结的 Bundle 创建不可变报告 Manifest，再用 Manifest ID 与 hash 精确启动报告；报告阶段外部数据调用数必须为 0。'} onClose={onClose}>
+    <DialogFrame title={isFund ? '创建前十大股票组合 Manifest' : '创建正式报告 Manifest'} description={isFund ? '基金 Bundle 负责证明前十大股票的选择与权重；基金代码不会被当成股票分析。后端会把已确认的 10 只股票 Bundle 绑定进同一不可变 Manifest。报告阶段不联网补数，LLM 推理仍会调用外部模型。' : '从已确认冻结的 Bundle 创建不可变报告 Manifest，再用 Manifest ID 与 hash 精确启动报告；报告阶段不联网补数，LLM 推理仍会调用外部模型。'} onClose={onClose}>
       <form className="mdc-dialog-form" onSubmit={(event) => {
         event.preventDefault()
         if (frozen) return

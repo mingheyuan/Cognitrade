@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import time
+import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from copy import deepcopy
 from threading import Lock
-import time
 from types import SimpleNamespace
-import unittest
 from unittest.mock import patch
 
 from domain_packs.finance_ashare.reporting import (
@@ -22,8 +22,28 @@ from domain_packs.finance_ashare.subagents.runtime import (
 )
 from domain_packs.finance_ashare.subagents.uzi_portfolio_contract import ticker_identity
 
-
 RUN_ID = "01JREPORT000000000000000001"
+
+
+def test_historical_report_has_actual_generation_disclosure():
+    rows = sample_uzi_artifacts()
+    native = next(row for row in rows if row["artifact_type"] == "uzi_native_analysis")
+    native["created_at"] = "2026-09-06T01:00:00Z"
+    rows.append({"artifact_type": "stock_snapshot_bundle", "content": {"collection": {
+        "data_source_mode": "bundle_only", "as_of_date": "2026-09-02",
+    }}})
+    result = render_uzi_native_html(rows, run_id=RUN_ID)
+    assert "截至 2026-09-02 可见资料的回溯生成；实际生成于 2026-09-06" in result.html
+
+
+def test_later_export_does_not_relabel_contemporaneous_report():
+    rows = sample_uzi_artifacts()
+    native = next(row for row in rows if row["artifact_type"] == "uzi_native_analysis")
+    native["created_at"] = "2026-09-02T10:00:00Z"
+    rows.append({"artifact_type": "stock_snapshot_bundle", "content": {"collection": {
+        "data_source_mode": "bundle_only", "as_of_date": "2026-09-02",
+    }}})
+    assert "cognitrade-asof-disclosure" not in render_uzi_native_html(rows, run_id=RUN_ID).html
 
 
 def sample_uzi_artifacts() -> list[dict]:

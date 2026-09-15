@@ -3,6 +3,13 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
+from research_system.market_data.commodity_pit import (
+    commodity_empty_query_errors,
+    commodity_fact_date_errors,
+)
+from research_system.market_data.company_profile_dependencies import (
+    check_company_profile_dependencies,
+)
 from research_system.market_data.contracts import (
     CoverageResult,
     DimensionCoverage,
@@ -50,6 +57,25 @@ def _safe_non_data_disclosure(snapshot: MarketDataSnapshot) -> bool:
     )
 
 
+def _matches_profile_dependency(snapshot: MarketDataSnapshot, basic: MarketDataSnapshot | None,
+                                materials: MarketDataSnapshot | None = None) -> bool:
+    if basic is None:
+        return False
+    receipt = (snapshot.query_manifest_json or {}).get("company_profile_dependency_receipt")
+    # Rows without a receipt cannot be preferred. Let the protocol authority
+    # also recognize inherited per-consumer bindings after a later unrelated
+    # identity edit; demanding the latest basic ID here would force re-fetches.
+    if not isinstance(receipt, dict):
+        return False
+    inputs = [basic, snapshot]
+    if snapshot.dimension == "9_futures" and materials is not None:
+        inputs.append(materials)
+    check = check_company_profile_dependencies(inputs)
+    return (check["status"] != "invalid"
+            and snapshot.dimension in check["required_dimensions"]
+            and snapshot.dimension not in check["pending_dimensions"])
+
+
 def _snapshot_pit_visibility_errors(
     repository: MarketDataRepository,
     snapshot: MarketDataSnapshot,
@@ -68,6 +94,38 @@ def _snapshot_pit_visibility_errors(
     """
 
     cutoff = require_aware_utc(cutoff_at, field_name="cutoff_at")
+    manifest = dict(snapshot.query_manifest_json or {})
+    price_errors = commodity_fact_date_errors(
+        dict(snapshot.payload_json or {}), dimension=snapshot.dimension,
+        as_of_date=min(
+            snapshot.as_of_date,
+            cutoff.astimezone(ZoneInfo(snapshot.exchange_timezone)).date(),
+        ),
+    )
+    if price_errors:
+        return price_errors
+    empty_errors = commodity_empty_query_errors(
+        manifest, dimension=snapshot.dimension, as_of_date=snapshot.as_of_date,
+    )
+    if empty_errors:
+        return empty_errors
+    if manifest.get("pit_safe") is False:
+        return ["snapshot is explicitly marked PIT unsafe"]
+    requested_date = manifest.get("requested_as_of_date")
+    observed_date = manifest.get("observed_local_date")
+    if (
+        requested_date
+        and observed_date
+        and requested_date != observed_date
+        and manifest.get("pit_mode") != "historical_reconstruction"
+    ):
+        # These are the requested report day and actual collection day, not
+        # the latest trading day contained in a weekend/holiday quote. A
+        # declared cross-day live observation must not become an advisory
+        # empty dimension merely because its native projection clears data.
+        return [
+            "snapshot observation date differs from target without historical reconstruction"
+        ]
     if _safe_non_data_disclosure(snapshot):
         # This is a post-hoc statement that no recoverable data exists, not a
         # market fact.  Keeping its empty slot makes the gap auditable while
@@ -88,20 +146,23 @@ def _snapshot_pit_visibility_errors(
     if _database_utc(snapshot.published_at) > cutoff:
         errors.append("snapshot was published after cutoff")
 
-    reconstruction_proven = bool(evidence) and all(
+    # One immutable B proof is sufficient to establish that the snapshot
+    # payload was already public by the cutoff.  Evidence associations are
+    # append-only and content-addressed snapshots can be reused by a later
+    # collection attempt; an older, misclassified A association must not
+    # permanently poison an otherwise valid reconstruction.
+    reconstruction_proven = any(
         _database_utc(item.published_at) <= cutoff
-        and (
-            _database_utc(item.observed_at) <= cutoff
-            or (
-                item.grade == EvidenceGrade.B.value
-                and bool(item.immutable_proof)
-            )
-        )
+        and item.grade == EvidenceGrade.B.value
+        and bool(item.immutable_proof)
         for item in evidence
     )
-    if _database_utc(snapshot.observed_at) > cutoff and not (
+    reconstruction_snapshot = (
         snapshot.evidence_grade == EvidenceGrade.B.value
         and reconstruction_proven
+    )
+    if _database_utc(snapshot.observed_at) > cutoff and not (
+        reconstruction_snapshot
     ):
         errors.append("snapshot was not observable by cutoff")
 
@@ -109,14 +170,14 @@ def _snapshot_pit_visibility_errors(
         if _database_utc(item.published_at) > cutoff:
             errors.append("snapshot evidence was published after cutoff")
         if _database_utc(item.observed_at) > cutoff and not (
-            item.grade == EvidenceGrade.B.value and bool(item.immutable_proof)
+            bool(item.immutable_proof)
+            and (
+                item.grade == EvidenceGrade.B.value
+                or reconstruction_snapshot
+            )
         ):
             errors.append("snapshot evidence was not observable by cutoff")
 
-    reconstruction_snapshot = (
-        snapshot.evidence_grade == EvidenceGrade.B.value
-        and reconstruction_proven
-    )
     for point in series_points:
         if _database_utc(point.published_at) > cutoff:
             errors.append("snapshot series point was published after cutoff")
@@ -160,8 +221,29 @@ class SnapshotResolver:
             current.astimezone(ZoneInfo(exchange_timezone)).date() == as_of_date
         )
 
+        # A revised identity defines the source input of its dependent rows.
+        # Resolve it once first, even for custom registry orderings. Old
+        # registries/Bundles without a profile marker keep their old policy.
+        basic_contract = next((item for item in self.registry if item.dimension == "0_basic"), None)
+        basic_coverage = self._resolve_dimension(
+            symbol=symbol, market=market, as_of_date=as_of_date, cutoff_at=cutoff,
+            now=current, current_day=is_current_local_date, contract=basic_contract,
+        ) if basic_contract is not None else None
+        basic = (self.repository.get_snapshot(basic_coverage.snapshot_id)
+                 if basic_coverage is not None and basic_coverage.snapshot_id else None)
+        # Native dimension 9 consumes dimension 8's exact result. Resolve that
+        # one explicit dependency before futures, not a generic dependency DAG.
+        material_contract = next((item for item in self.registry if item.dimension == "8_materials"), None)
+        material_coverage = self._resolve_dimension(
+            symbol=symbol, market=market, as_of_date=as_of_date, cutoff_at=cutoff,
+            now=current, current_day=is_current_local_date, contract=material_contract,
+            profile_basic=basic,
+        ) if material_contract is not None else None
+        materials = (self.repository.get_snapshot(material_coverage.snapshot_id)
+                     if material_coverage is not None and material_coverage.snapshot_id else None)
         dimensions = [
-            self._resolve_dimension(
+            basic_coverage if contract.dimension == "0_basic" else
+            material_coverage if contract.dimension == "8_materials" else self._resolve_dimension(
                 symbol=symbol,
                 market=market,
                 as_of_date=as_of_date,
@@ -169,6 +251,8 @@ class SnapshotResolver:
                 now=current,
                 current_day=is_current_local_date,
                 contract=contract,
+                profile_basic=basic,
+                profile_materials=materials,
             )
             for contract in self.registry
         ]
@@ -303,6 +387,8 @@ class SnapshotResolver:
         now: datetime,
         current_day: bool,
         contract: DimensionContract,
+        profile_basic: MarketDataSnapshot | None = None,
+        profile_materials: MarketDataSnapshot | None = None,
     ) -> DimensionCoverage:
         candidates = self.repository.list_snapshots(
             symbol=symbol,
@@ -321,6 +407,10 @@ class SnapshotResolver:
         ]
         candidates.sort(
             key=lambda row: (
+                # A real source failure with a matching receipt is still the
+                # correct new-profile input. Do not hide it behind an old
+                # success from another identity; native quality stays below.
+                0 if _matches_profile_dependency(row, profile_basic, profile_materials) else 1,
                 0 if native_snapshot_usable(row) else 1,
                 int(row.source_priority),
                 -_database_utc(row.published_at).timestamp(),
@@ -358,6 +448,9 @@ class SnapshotResolver:
                     if row.contract_version == self.registry.contract_version
                     and row.revoked_at is None
                     and _safe_non_data_disclosure(row)
+                    and not _snapshot_pit_visibility_errors(
+                        self.repository, row, cutoff_at,
+                    )
                 ),
                 None,
             )

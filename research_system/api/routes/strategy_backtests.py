@@ -28,6 +28,7 @@ class StrategyBacktestRequest(BaseModel):
     initial_cash: float = Field(default=1_000_000, ge=10_000, le=1_000_000_000)
     benchmark: dict[str, Any] = Field(default_factory=dict)
     report_policy: Literal["existing_only", "require_complete"] = "existing_only"
+    market_data_manifest_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class StrategyBacktestPreflightRequest(BaseModel):
@@ -38,6 +39,7 @@ class StrategyBacktestPreflightRequest(BaseModel):
     mode: BacktestMode
     start_date: date
     end_date: date
+    market_data_manifest_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 @router.post("/strategy-backtests/preflight")

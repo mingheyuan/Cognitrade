@@ -1,9 +1,9 @@
 """ArtifactBoard adapter for UZI 3.9.4 analysis and 3.9.4 report presentation.
 
 The pinned upstream template and renderer helpers remain byte-for-byte intact.
-The adapter adds only narrowly scoped browser-compatibility rules for confirmed
-upstream rendering defects. Cognitrade metadata stays out of the visible
-document and remains in the surrounding Artifact records/API headers.
+The adapter adds only narrowly scoped presentation compatibility for confirmed
+upstream rendering defects. Source failures remain visible; Cognitrade run
+metadata stays in the surrounding Artifact records/API headers.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ from pathlib import Path
 import re
 from threading import RLock
 from typing import Any
+
+from domain_packs.finance_ashare.subagents.uzi_input_views import without_native_demo_holdings
 
 from domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime import (
     UZI_REPORT_VERSION,
@@ -39,6 +41,60 @@ _RENDER_COMPATIBILITY_STYLE = """
 .jargon:hover::after {
   letter-spacing: normal;
   text-transform: none;
+}
+/* The native coverage headline lays out four metrics in one flex row. Keep
+   their content/order, but allow the row to wrap on narrow report screens. */
+@media (max-width: 640px) {
+  /* Real Agent numbers may retain full precision. Do not round evidence or
+     hide text to fit: wrap long tokens and let native grid cells shrink. */
+  .risk-box li,
+  .zone-price {
+    overflow-wrap: anywhere;
+  }
+  .zones-grid > .zone {
+    min-width: 0;
+  }
+  /* A populated native peer table must not set the grid item's minimum
+     width. Keep all columns, with local horizontal scrolling when needed. */
+  .dim-card {
+    min-width: 0;
+  }
+  .dim-viz {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+  .initiating-block > div:nth-child(2) {
+    flex-wrap: wrap;
+    row-gap: 12px;
+  }
+  .initiating-block > div:nth-child(2) > div {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  /* Native school cards impose a 300px grid minimum inside padded panels. */
+  .school-scores > div:last-child {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .fund-mgr-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sens-heatmap {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+@media (max-width: 360px) {
+  .fund-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .zones-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ic-memo-block > div:nth-child(3) > div:last-child {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
 }
 </style>
 """
@@ -69,7 +125,9 @@ def render_exact_uzi_392_report(
     review = result.get("self_review") if isinstance(result.get("self_review"), dict) else {}
     if int(review.get("critical_count") or 0) != 0 or result.get("report_allowed") is not True:
         raise UziNativeQualityGateError("UZI 关键质量门禁尚未通过")
-    raw = _escape_payload(result.get("raw") if isinstance(result.get("raw"), dict) else {})
+    raw = _escape_payload(without_native_demo_holdings(
+        result.get("raw") if isinstance(result.get("raw"), dict) else {}
+    ))
     dimensions = _escape_payload(result.get("dimensions") if isinstance(result.get("dimensions"), dict) else {})
     panel = _escape_payload(result.get("panel") if isinstance(result.get("panel"), dict) else {})
     synthesis = _escape_payload(result.get("synthesis") if isinstance(result.get("synthesis"), dict) else {})
@@ -183,7 +241,7 @@ def render_exact_uzi_392_report(
         "<!-- INJECT_SCHOOL_SCORES -->": renderer.render_school_scores(synthesis, panel),
         "<!-- INJECT_RISKS -->": renderer.render_risks(synthesis.get("risks") or []),
         "<!-- INJECT_DEBATE_ROUNDS -->": renderer.render_debate_rounds(debate),
-        "<!-- INJECT_FRIENDLY_LAYER -->": renderer.render_friendly_layer(synthesis, raw),
+        "<!-- INJECT_FRIENDLY_LAYER -->": _render_friendly_layer(renderer, synthesis, raw),
         "<!-- INJECT_FUND_MANAGERS -->": renderer.render_fund_managers(synthesis.get("fund_managers") or raw.get("fund_managers") or []),
         "<!-- INJECT_DIM_FINANCIAL -->": renderer.render_dim_category("fin", dimensions, raw),
         "<!-- INJECT_DIM_MARKET -->": renderer.render_dim_category("mkt", dimensions, raw),
@@ -200,7 +258,7 @@ def render_exact_uzi_392_report(
         ),
         "<!-- INJECT_DATA_GAP_BANNER -->": (
             renderer._render_school_lock_banner(synthesis)
-            + renderer._render_data_gap_banner(synthesis.get("data_gaps"), raw=raw, syn=synthesis)
+            + _render_data_gap_banner(renderer, synthesis.get("data_gaps"), raw=raw, synthesis=synthesis)
         ),
         "<!-- INJECT_STYLE_CHIP -->": renderer._render_style_chip(synthesis),
     }
@@ -216,6 +274,73 @@ def render_exact_uzi_392_report(
     if unresolved:
         raise RuntimeError(f"存在未解析的 UZI native 模板标记：{', '.join(unresolved)}")
     return _inline_avatars(template), str(raw.get("ticker") or result.get("symbol") or "unknown")
+
+
+def _render_data_gap_banner(renderer: Any, data_gaps: Any, *, raw: dict, synthesis: dict) -> str:
+    """An Agent acknowledgement is not a log of exhausted data acquisition.
+
+    Keep the native gap counts/chips and original analysis unchanged. Only
+    remove this template's unconditional source-attempt/unrecoverable claims;
+    explicit collection attempts and recovery capabilities live in DC records.
+    """
+    banner = renderer._render_data_gap_banner(data_gaps, raw=raw, syn=synthesis)
+    native_hint = (
+        "Agent 已尝试浏览器抓取 / MX API / WebSearch / 逻辑推导；"
+        "划线字段为已确认无法补齐，其余字段显示为 “—”。"
+    )
+    if native_hint not in banner:
+        return banner
+    banner = banner.replace(native_hint, (
+        "划线仅表示 Agent 已记录该缺口，不代表数据源已全部尝试或无法恢复；"
+        "补采结果及是否可重试，请以数据中心采集记录为准。"
+    ), 1)
+    banner = banner.replace("已由 agent 确认真的拿不到", "已由 Agent 记录缺口")
+    return banner.replace('class="data-gap-banner"', (
+        'class="data-gap-banner" data-render-diagnostic="gap_acknowledgement_not_collection_proof"'
+    ), 1)
+
+
+def _render_friendly_layer(
+    renderer: Any, synthesis: dict[str, Any], raw: dict[str, Any],
+) -> str:
+    """Disclose the pinned pipeline's known timeout shape in this view only.
+
+    Native synthesis intentionally retains the original error envelope, while
+    its renderer assumes a list. Do not fix raw/synthesis or rerun acquisition:
+    give just this renderer an empty list and replace its misleading empty-state
+    text with a failure disclosure. All other shapes use the unmodified helper.
+    """
+
+    friendly = synthesis.get("friendly") or {}
+    similar = friendly.get("similar_stocks")
+    pipeline = similar.get("_pipeline") if isinstance(similar, dict) else None
+    known_timeout = (
+        isinstance(pipeline, dict)
+        and similar.get("source") == "pipeline:timeout"
+        and similar.get("fallback") is True
+        and similar.get("data") == {}
+        and pipeline.get("dim_key") == "similar_stocks"
+        and pipeline.get("quality") == "error"
+        and pipeline.get("top_level_fields") == {}
+        and isinstance(pipeline.get("error"), str)
+        and bool(pipeline["error"])
+    )
+    if not known_timeout:
+        return renderer.render_friendly_layer(synthesis, raw)
+
+    view = {**synthesis, "friendly": {**friendly, "similar_stocks": []}}
+    rendered = renderer.render_friendly_layer(view, raw)
+    empty_state = '<div style="color:#94a3b8;font-size:11px">暂无可比股</div>'
+    if rendered.count(empty_state) != 1:
+        raise RuntimeError("UZI similar-stock empty-state markup changed")
+    disclosure = (
+        '<div style="color:#b45309;font-size:11px" '
+        'data-render-diagnostic="native_similar_stocks_timeout" '
+        'data-source-field="synthesis.friendly.similar_stocks">'
+        '可比股数据采集超时，未取得结果；不代表不存在可比股。'
+        '原始错误已保留，本卡片不参与评分或交易条件计算。</div>'
+    )
+    return rendered.replace(empty_state, disclosure, 1)
 
 
 def _apply_render_compatibility(html: str, *, overall_score: int) -> str:

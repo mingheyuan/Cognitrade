@@ -172,6 +172,35 @@ class UziRootCollectionRouterTests(unittest.TestCase):
         self.assertIn("uzi_pipeline_partial", row["degrade_reasons"])
         self.assertEqual(row["source_trace"][0]["status"], "degraded")
 
+    def test_capital_flow_uses_symbol_value_not_transport_presence_wrapper(self) -> None:
+        for field in ("margin_recent", "holder_count_history", "block_trades_recent", "unlock_recent"):
+            for row_symbol, expected in (("688041", "degraded"), ("688012", "data_gap")):
+                with self.subTest(field=field, row_symbol=row_symbol):
+                    raw_result = {
+                        "data": {field: [{"代码": row_symbol, "recorded": 1}]},
+                        "source": "recorded-source",
+                        "_pipeline": {
+                            "quality": "partial",
+                            "data_gaps": ["northbound"],
+                        },
+                    }
+                    # Native SKILL has ticker, but no host-added full/code aliases.
+                    symbol_result = {
+                        "ticker": "688041.SH",
+                        "dimensions": {"12_capital_flow": raw_result},
+                    }
+                    row = snapshot_collector._project_uzi_symbol_snapshot(
+                        query="recorded capital flow",
+                        requested_symbol="688041.SH",
+                        snapshot_type="capital_flow",
+                        symbol_result=symbol_result,
+                    )
+                    self.assertEqual(row["quality_status"], expected)
+                    self.assertEqual(row["facts"]["_uzi_raw_result"], raw_result)
+                    self.assertEqual(row["facts"]["_uzi_root_fields"]["full"], {
+                        "present": False, "value": None,
+                    })
+
     def test_request_scoped_no_resume_reaches_root_uzi_router(self) -> None:
         symbol_result = {
             "ticker": "600519",
@@ -948,6 +977,7 @@ class UziRootCollectionRouterTests(unittest.TestCase):
                 "lib.pipeline.fetchers.registry"
             )
             pipeline_schema = importlib.import_module("lib.pipeline.schema")
+            run_real_test = importlib.import_module("run_real_test")
 
             class FixtureFetcher:
                 def __init__(self, dim_key: str) -> None:
@@ -974,17 +1004,22 @@ class UziRootCollectionRouterTests(unittest.TestCase):
                 return FixtureFetcher(dim_key)
 
             def run_jobs(jobs, *, max_workers, overall_timeout):
+                # Execute the scheduler's complete transport signature. The
+                # cache-bound target carries (root, target, args, kwargs), and
+                # the contest policy wrapper is already part of that target.
                 return [
                     pipeline_collect.ProcessOutcome(
                         key=job.key,
-                        value=(
-                            pipeline_collect._run_fetcher_job
-                            if job.key == "19_contests"
-                            else job.target
-                        )(*job.args[:3], **job.kwargs),
+                        value=job.target(*job.args, **job.kwargs),
                     )
                     for job in jobs
                 ]
+
+            def offline_contest_job(dim_key, ticker, raw_context=None, policy=None):
+                # The fixture executes child work in the collector thread.
+                # Do not reacquire the parent's source-policy lock there;
+                # real spawned-process composition has dedicated coverage.
+                return pipeline_collect._run_fetcher_job(dim_key, ticker, raw_context)
 
             with (
                 patch.dict(os.environ, {"UZI_LEGACY": "0"}),
@@ -994,6 +1029,16 @@ class UziRootCollectionRouterTests(unittest.TestCase):
                 patch.object(
                     pipeline_collect, "run_process_jobs", side_effect=run_jobs
                 ),
+                patch(
+                    "domain_packs.finance_ashare.vendor.uzi_3_9_2.runtime._run_pipeline_contest_job",
+                    side_effect=offline_contest_job,
+                ),
+                patch.object(
+                    run_real_test, "collect_raw_data",
+                    side_effect=AssertionError("registry fixture must not fall back to real collection"),
+                ),
+                patch("socket.socket.connect", side_effect=AssertionError("registry fixture must stay offline")),
+                patch("socket.create_connection", side_effect=AssertionError("registry fixture must stay offline")),
                 patch.object(Uzi392FetcherRuntime, "_write_native_raw"),
             ):
                 rows = snapshot_collector.collect_snapshots(

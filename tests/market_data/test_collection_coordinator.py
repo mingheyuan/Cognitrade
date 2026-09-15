@@ -304,6 +304,7 @@ class CollectionCoordinatorTests(unittest.TestCase):
 
         self.assertEqual(len(self.collector.calls), 1)
         self.assertTrue(self.collector.calls[0]["uzi_root_route"])
+        self.assertEqual(self.collector.calls[0]["uzi_root_route_mode"], "skill")
         self.assertTrue(self.collector.calls[0]["no_resume"])
 
     def test_full_draft_requires_agent_stage_and_explicit_freeze_confirmation(
@@ -528,9 +529,16 @@ class CollectionCoordinatorTests(unittest.TestCase):
                 "snapshot_type": None,
                 "completed": 1,
                 "total": 1,
+                "symbol": "600519.SH",
+                "scope_symbols": ["600519.SH"],
+                "activity_scope": "symbol",
+                "started_at": completed["progress"]["provider"]["started_at"],
+                "elapsed_seconds": completed["progress"]["provider"]["elapsed_seconds"],
                 "updated_at": completed["progress"]["provider"]["updated_at"],
             },
         )
+        self.assertGreaterEqual(completed["progress"]["provider"]["elapsed_seconds"], 0)
+        self.assertTrue(completed["progress"]["provider"]["started_at"])
 
     def test_adapter_validation_failure_is_isolated_and_batch_continues(self) -> None:
         today = datetime.now(timezone.utc).date()
@@ -1681,6 +1689,7 @@ class CollectionCoordinatorTests(unittest.TestCase):
     def test_heartbeat_errors_past_deadline_prevent_worker_final_write(self) -> None:
         started = Event()
         release = Event()
+        lease_lost = Event()
         delegate = self.collector
 
         def blocking_collector(**kwargs):
@@ -1691,6 +1700,21 @@ class CollectionCoordinatorTests(unittest.TestCase):
         coordinator = MarketDataCollectionCoordinator(
             self.database, collector=blocking_collector
         )
+        heartbeat = coordinator._heartbeat_lease
+
+        def expire_while_provider_is_running(job_id, worker_id, stop, signals, *, recovery, lease_deadline):
+            # Exercise loss during a provider call, not whether DB setup happens
+            # to finish within 30 ms on this machine/CI worker.
+            self.assertTrue(started.wait(timeout=5))
+            deadline = datetime.now(timezone.utc) + timedelta(milliseconds=30)
+            with self.database.session() as session:
+                row = session.get(MarketDataCollectionJob, job_id)
+                row.lease_until = deadline
+                for task in session.scalars(select(MarketDataCollectionTask).where(MarketDataCollectionTask.job_id == job_id)):
+                    task.lease_until = deadline
+            heartbeat(job_id, worker_id, stop, signals, recovery=recovery, lease_deadline=deadline)
+            if signals.lost.is_set():
+                lease_lost.set()
         self.addCleanup(coordinator.close)
         today = datetime.now(timezone.utc).date()
         job = coordinator.create_job(
@@ -1705,10 +1729,7 @@ class CollectionCoordinatorTests(unittest.TestCase):
         )
 
         with (
-            patch(
-                "research_system.market_data.collection.COLLECTION_LEASE_DURATION",
-                timedelta(milliseconds=30),
-            ),
+            patch.object(coordinator, "_heartbeat_lease", side_effect=expire_while_provider_is_running),
             patch(
                 "research_system.market_data.collection."
                 "COLLECTION_LEASE_HEARTBEAT_SECONDS",
@@ -1723,7 +1744,7 @@ class CollectionCoordinatorTests(unittest.TestCase):
         ):
             future = executor.submit(coordinator.run_job_now, job["id"])
             self.assertTrue(started.wait(timeout=5))
-            sleep(0.08)
+            self.assertTrue(lease_lost.wait(timeout=5))
             release.set()
             future.result(timeout=5)
 

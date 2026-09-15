@@ -11,23 +11,23 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials
-from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
 
-from research_system.api.chat_service import ChatService
 from research_system.api.agent_os_run_service import AgentOSRunService
+from research_system.api.chat_service import ChatService
 from research_system.api.config import ApiConfig
-from research_system.api.finance_market_data_service import FinanceMarketDataService
-from research_system.api.fund_holding_report_service import FundHoldingReportService
-from research_system.api.paper_trading_service import PaperTradingService
 from research_system.api.dependencies import (
     ApiRuntimeState,
     _authenticate_principal,
     require_principal,
 )
 from research_system.api.errors import install_exception_handlers
+from research_system.api.finance_market_data_service import FinanceMarketDataService
+from research_system.api.fund_holding_report_service import FundHoldingReportService
+from research_system.api.paper_trading_service import PaperTradingService
 from research_system.api.routes import (
     admin,
     chat,
@@ -37,37 +37,36 @@ from research_system.api.routes import (
     market_data_center,
     report_signals,
     runs,
+    strategies,
     strategy_backtests,
     strategy_paper,
     strategy_verifications,
-    strategies,
     system,
 )
 from research_system.api.sse import RunEventSource
-from research_system.runtime.core.id_utils import generate_ulid
-from research_system.runtime.agent_os import AgentOS
 from research_system.market_data.report_inputs import (
     DatabaseReportInputGateway,
     ReportInputService,
 )
 from research_system.market_data.service import MarketDataCenterService
+from research_system.runtime.agent_os import AgentOS
+from research_system.runtime.core.id_utils import generate_ulid
 from research_system.runtime.platform.settings import Settings, ensure_workspace_layout
 from research_system.services.memory.maintenance import MemoryExpirationScheduler
-from research_system.strategies.database import StrategyDatabase, resolve_database_url
 from research_system.strategies.backtesting.market_data_gateway import MarketDataGateway
 from research_system.strategies.backtesting.service import StrategyBacktestService
-from research_system.strategies.orchestration import ReportOrchestrationService
+from research_system.strategies.database import StrategyDatabase, resolve_database_url
+from research_system.strategies.errors import StrategyDomainError
 from research_system.strategies.idempotency import (
     ApiMutationIdempotencyService,
     MutationReplay,
     MutationReservation,
 )
+from research_system.strategies.orchestration import ReportOrchestrationService
 from research_system.strategies.paper_execution import StrategyPaperExecutionService
-from research_system.strategies.errors import StrategyDomainError
 from research_system.strategies.service import StrategyService, owner_scope
 from research_system.strategies.signals import SignalEngineService
 from research_system.strategies.verification import StrategyVerificationService
-
 
 LOGGER = logging.getLogger(__name__)
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -258,6 +257,7 @@ def create_app(
             StrategyDatabase(resolve_database_url(current_settings)),
             workspace_root=current_settings.workspace_root,
             auto_bootstrap=current_settings.cognitrade_database_auto_bootstrap,
+            runtime_settings=current_settings,
         )
     )
     build_signal_engine = signal_engine_factory or SignalEngineService
@@ -279,7 +279,7 @@ def create_app(
     build_strategy_backtesting = strategy_backtesting_factory or (
         lambda current_settings, database, market_data: StrategyBacktestService(
             database,
-            market_data_gateway=MarketDataGateway(market_data),
+            market_data_gateway=MarketDataGateway(market_data, database=database),
             object_store_root=(
                 current_settings.strategy_object_store_root
                 or current_settings.workspace_root / "strategy_objects"
@@ -348,7 +348,7 @@ def create_app(
                     strategy_database,
                 )
                 report_inputs = ReportInputService(
-                    DatabaseReportInputGateway(strategy_database)
+                    DatabaseReportInputGateway(strategy_database, runtime_settings=effective_settings)
                 )
                 bind_report_inputs = getattr(run_service, "bind_report_inputs", None)
                 if callable(bind_report_inputs):

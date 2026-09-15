@@ -81,6 +81,48 @@ class UziSnapshotAdapterTests(unittest.TestCase):
         self.assertFalse(result.validation["audit_passed"])
         self.assertEqual(result.evidence[-1].grade, EvidenceGrade.C)
 
+    def test_historical_url_is_not_promoted_to_immutable_document_evidence(self) -> None:
+        snapshot = self._snapshot(
+            "chain",
+            {
+                "main_business_breakdown": [{"name": "白酒", "value": 1.0}],
+                "upstream": [{"name": "粮食"}],
+                "downstream": [{"name": "经销商"}],
+                "concentration": {"top_segment_share": 1.0},
+                "publication_evidence": [
+                    {
+                        "title": "2025 年年度报告",
+                        "url": "https://www.cninfo.com.cn/disclosure/1",
+                        "provider": "cninfo.disclosure_report",
+                        "published_at": "2026-03-31",
+                    }
+                ],
+            },
+        )
+        snapshot["historical_reconstruction"] = {
+            "safe": True,
+            "requested_as_of_date": "2026-08-19",
+            "strategy": "published_archive",
+        }
+
+        result = self.adapter.adapt(
+            snapshot,
+            symbol="600519.SH",
+            market="cn_equity",
+            exchange_timezone="Asia/Shanghai",
+            as_of_date=date(2026, 8, 19),
+        )
+
+        self.assertEqual(result.status, SnapshotStatus.AVAILABLE)
+        self.assertEqual(len(result.evidence), 1)
+        self.assertEqual(result.evidence[0].source_kind, "historical_structured")
+        self.assertIsNone(result.evidence[0].source_url)
+        self.assertTrue(all(row.grade == EvidenceGrade.B for row in result.evidence))
+        self.assertTrue(all(row.immutable_proof for row in result.evidence))
+        self.assertFalse(
+            any("not observed by cutoff" in error for error in result.validation["semantic_errors"])
+        )
+
     def test_degraded_native_result_can_pass_the_strict_adapter_contract(self) -> None:
         snapshot = self._snapshot(
             "market",

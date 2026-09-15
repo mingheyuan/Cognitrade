@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Callable, Iterable
@@ -34,9 +35,63 @@ SeriesLoader = Callable[[TradableInstrument, date, date, date], Iterable[dict[st
 
 
 class MarketDataGateway:
-    def __init__(self, market_data=None, *, series_loader: SeriesLoader | None = None) -> None:
+    def __init__(self, market_data=None, *, series_loader: SeriesLoader | None = None, database=None) -> None:
         self.market_data = market_data
         self.series_loader = series_loader
+        self.database = database
+
+    def get_frozen_series(
+        self, instrument: TradableInstrument, *, start_date: date, end_date: date, as_of_date: date,
+    ) -> MarketSeries:
+        """V2 uses only already-collected data, never the legacy live fallback."""
+        from research_system.strategies.backtesting.frozen_market_series import (
+            read_frozen_market_rows,
+        )
+
+        if end_date > as_of_date:
+            raise StrategyDomainError("market_data_as_of_violation", "行情结束日期不能晚于 as_of_date")
+        if self.series_loader is not None:
+            rows = list(self.series_loader(instrument, start_date, end_date, as_of_date))
+            source = {"provider": "injected_series_loader", "evidence_mode": "fixture", "adjustment": "raw", "currency": "CNY", "price_unit": "per_share"}
+        else:
+            rows, source = read_frozen_market_rows(
+                self.database, instrument, start_date=start_date, end_date=end_date, as_of_date=as_of_date,
+            )
+        # Missing open must remain missing: a synthetic close-as-open would
+        # manufacture an execution price that the outcome data never contained.
+        normalised = self._normalise_frozen(rows, start_date=start_date, end_date=end_date)
+        if not normalised:
+            raise StrategyDomainError("market_history_missing_in_data_center", "冻结行情区间没有有效收盘价", status_code=409)
+        digest = json_content_hash({"instrument": instrument.payload(), "bars": normalised, "source": source, "as_of_date": as_of_date})
+        missing_open = tuple(f"real_open_missing:{bar['date']}" for bar in normalised if bar["open"] is None)
+        return MarketSeries(instrument, tuple(normalised), digest, source, missing_open)
+
+    @staticmethod
+    def _normalise_frozen(rows: Iterable[dict[str, Any]], *, start_date: date, end_date: date) -> list[dict[str, Any]]:
+        """The legacy normalizer fills prices; replay must preserve real facts."""
+        by_date: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            day = _date(row.get("date") or row.get("datetime") or row.get("as_of") or row.get("日期"))
+            if day is None or not start_date <= day <= end_date:
+                continue
+            close = _finite_positive(row.get("close"), row.get("收盘"))
+            if close is None:
+                raise StrategyDomainError("market_close_unverified", "冻结行情缺少有效真实收盘价", status_code=409, details={"date": day.isoformat()})
+            bar = {
+                "date": day.isoformat(),
+                "open": _finite_positive(row.get("open"), row.get("开盘")),
+                "high": _finite_positive(row.get("high"), row.get("最高")),
+                "low": _finite_positive(row.get("low"), row.get("最低")),
+                "close": close,
+                "volume": _number(row.get("volume"), row.get("成交量")),
+                "amount": _number(row.get("amount"), row.get("成交额")),
+            }
+            if day.isoformat() in by_date and by_date[day.isoformat()] != bar:
+                raise StrategyDomainError("market_duplicate_date_conflict", "冻结行情同一交易日存在冲突价格", status_code=409, details={"date": day.isoformat()})
+            by_date[day.isoformat()] = bar
+        return [by_date[key] for key in sorted(by_date)]
 
     def get_series(
         self,
@@ -345,6 +400,11 @@ def _number(*values: Any) -> float | None:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _finite_positive(*values: Any) -> float | None:
+    value = _number(*values)
+    return value if value is not None and math.isfinite(value) and value > 0 else None
 
 
 def _open_status(*values: Any) -> bool | None:

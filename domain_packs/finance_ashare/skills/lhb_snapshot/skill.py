@@ -3,20 +3,20 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
+from domain_packs.finance_ashare.subagents.uzi_panel_context import match_youzi_seats
 from research_system.adapters.vendors.akshare_lhb_adapter import AkShareLHBAdapter
 from research_system.adapters.vendors.market_router import MarketRouter
-from research_system.adapters.vendors.provider_registry import (
-    ProviderSpec,
-    VendorProviderRegistry,
-)
 from research_system.adapters.vendors.provider_execution import (
     execute_provider_chain,
     failure_facts,
 )
+from research_system.adapters.vendors.provider_registry import (
+    ProviderSpec,
+    VendorProviderRegistry,
+)
 from research_system.adapters.vendors.tushare_signal_adapter import TuShareLHBAdapter
 from research_system.adapters.vendors.uzi_browser_adapter import UziBrowserAdapter
 from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
-from domain_packs.finance_ashare.subagents.uzi_panel_context import match_youzi_seats
 
 
 class LHBSnapshotSkill:
@@ -43,8 +43,12 @@ class LHBSnapshotSkill:
         symbol: str | None = None,
         as_of_date: date | None = None,
         cutoff_at: datetime | None = None,
+        dependencies: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        del cutoff_at
+        from research_system.market_data.fixed_pit_inputs import (
+            fixed_historical_profile,
+        )
+        fixed = fixed_historical_profile(dependencies, symbol=symbol, day=as_of_date, cutoff=cutoff_at)
         snapshot_date = (as_of_date or date.today()).isoformat()
         provider_chain = (
             self.provider_registry.get_provider_chain("lhb", "cn_equity")
@@ -172,6 +176,21 @@ class LHBSnapshotSkill:
                 if browser_available
                 else list(execution.facts.get("data_gap") or []),
             }
+        profile_trace = []
+        if fixed is not None:
+            # Pinned fetch_lhb only uses industry truthiness to decide whether
+            # to query the rolling stock statistic table. That table is live;
+            # dated single-stock records cannot prove its old top-50 ranking.
+            industry_present = bool(fixed["data"].get("industry"))
+            facts["profile_input"] = fixed["_pit_context"]
+            facts["historical_sector_context"] = {
+                "industry_present": industry_present,
+                "status": "historical_unavailable" if industry_present else "not_applicable",
+                "field": "sector_lhb_top50",
+            }
+            profile_trace.append({"source_id": "akshare:stock_lhb_stock_statistic_em",
+                "status": "not_queried", "request_executed": False,
+                "reason_code": "current_only" if industry_present else "native_industry_empty"})
         return VerifiedSnapshot(
             snapshot_type="lhb",
             symbol=symbol,
@@ -187,6 +206,7 @@ class LHBSnapshotSkill:
             else "medium",
             source_trace=[
                 *execution.trace,
+                *profile_trace,
                 *list(browser_result.get("source_trace") or []),
             ],
             degraded=not available,

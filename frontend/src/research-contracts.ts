@@ -244,7 +244,9 @@ export type SystemStatus = {
   total_runs?: number
   status_counts?: Record<string, number>
   recent_runs?: RunHistoryRecord[]
-  openai_configured?: boolean
+  model_transport?: string
+  model_authentication?: string
+  embedding_status?: string
   qdrant_configured?: boolean
   qdrant_available?: boolean
   redis_configured?: boolean

@@ -11,7 +11,6 @@ from typing import Any
 from research_system.adapters.vendors.mx_api_adapter import MxApiAdapter
 from research_system.adapters.vendors.uzi_browser_adapter import UziBrowserAdapter
 from research_system.adapters.vendors.uzi_qualitative_fallback import (
-    UziQualitativeFallback,
     is_junk_fallback_text,
 )
 from research_system.adapters.vendors.uzi_web_search_adapter import UziWebSearchAdapter
@@ -735,57 +734,12 @@ def recover_qualitative_snapshots(
     """Apply UZI's six-dimension real fallback and preserve every attempt."""
 
     selected_profile = _require_profile(profile)
-    if selected_profile == "lite":
-        return {
-            "schema_version": "uzi-3.9.4-agent-os-v1",
-            "profile": selected_profile,
-            "enabled": False,
-            "order": ["mx_api", "ddgs"],
-            "attempted": 0,
-            "succeeded": 0,
-            "failed": 0,
-            "attempts": [],
-            "disabled_reason": "profile_ddgs_budget_zero",
-        }
-    fallback = UziQualitativeFallback(settings)
-    attempts: list[dict[str, Any]] = []
-    resolved_symbols = list(dict.fromkeys(str(item).strip() for item in symbols if str(item).strip()))
-    for symbol in resolved_symbols:
-        identity = _identity(snapshots, symbol)
-        context = {
-            "code": symbol,
-            "name": identity["name"],
-            "industry": identity["industry"] or "综合",
-        }
-        for snapshot_type, target in _QUALITATIVE_TARGETS.items():
-            snapshot = _find_snapshot(snapshots, snapshot_type, symbol)
-            if snapshot is None or not _qualitative_field_missing(snapshot, str(target["field"])):
-                continue
-            rendered_query = str(target["query"]).format(**context)
-            result = fallback.collect(
-                query=rendered_query,
-                dimension=snapshot_type,
-                symbol=symbol,
-            )
-            _apply_recovery(snapshot, snapshot_type, result)
-            attempts.append({
-                "symbol": symbol,
-                "snapshot_type": snapshot_type,
-                "status": result["status"],
-                "source_id": result.get("source_id"),
-                "query": rendered_query,
-                "source_trace": list(result.get("source_trace") or []),
-            })
-    return {
-        "schema_version": "uzi-3.9.4-agent-os-v1",
-        "profile": selected_profile,
-        "enabled": True,
-        "order": ["mx_api", "ddgs"],
-        "attempted": len(attempts),
-        "succeeded": sum(row["status"] == "available" for row in attempts),
-        "failed": sum(row["status"] != "available" for row in attempts),
-        "attempts": attempts,
-    }
+    from domain_packs.finance_ashare.tools.uzi_native_postfetch import (
+        recover_snapshot_postfetch,
+    )
+
+    return recover_snapshot_postfetch(snapshots, symbols=symbols, profile=selected_profile,
+                                      settings=settings, qualitative=True, browser=False)
 
 
 def collect_qualitative_agent_evidence(
@@ -989,12 +943,10 @@ def recover_playwright_snapshots(
     profile: str | None,
     settings: Settings,
 ) -> dict[str, Any]:
-    """Run UZI 3.9.4's profile-scoped final browser fallback stage."""
+    """Run fixed SKILL's explicitly requested, profile-scoped active pass."""
 
     selected_profile = _require_profile(profile)
-    enabled_dimensions = _PLAYWRIGHT_PROFILE_DIMS.get(selected_profile, frozenset())
-    attempts: list[dict[str, Any]] = []
-    if not enabled_dimensions:
+    if selected_profile == "lite":
         return {
             "schema_version": "uzi-3.9.4-agent-os-v1",
             "profile": selected_profile,
@@ -1005,7 +957,7 @@ def recover_playwright_snapshots(
             "attempts": [],
             "disabled_reason": "profile_playwright_mode_off",
         }
-    if not settings.browser_sources_enabled or not settings.sensitive_sources_enabled:
+    if not settings.browser_sources_enabled:
         return {
             "schema_version": "uzi-3.9.4-agent-os-v1",
             "profile": selected_profile,
@@ -1014,55 +966,14 @@ def recover_playwright_snapshots(
             "succeeded": 0,
             "failed": 0,
             "attempts": [],
-            "disabled_reason": "sensitive_browser_policy_disabled",
+            "disabled_reason": "browser_sources_disabled",
         }
-    browser = UziBrowserAdapter(settings)
-    resolved_symbols = list(dict.fromkeys(str(item).strip() for item in symbols if str(item).strip()))
-    for symbol in resolved_symbols:
-        identity = _identity(snapshots, symbol)
-        for snapshot_type in sorted(enabled_dimensions):
-            snapshot = _find_snapshot(snapshots, snapshot_type, symbol)
-            if snapshot is None:
-                continue
-            needs, reason = _snapshot_needs_browser(snapshot)
-            if not needs:
-                continue
-            browser_query = _browser_query(snapshot_type, query, symbol, identity)
-            result = browser.collect_many(
-                source_ids=_PLAYWRIGHT_STRATEGIES[snapshot_type],
-                symbol=symbol,
-                query=browser_query,
-            )
-            evidence = dict(result.get("evidence") or {})
-            projected = _project_browser_evidence(snapshot_type, evidence, identity)
-            success = bool(projected)
-            trace = list(result.get("source_trace") or [])
-            if evidence and not projected:
-                trace.append({
-                    "source_id": "playwright",
-                    "strategy_id": snapshot_type,
-                    "status": "parse_failed",
-                    "reason": "uzi_strategy_parser_returned_no_structured_fields",
-                })
-            _apply_browser_recovery(snapshot, evidence, projected, trace, reason)
-            attempts.append({
-                "symbol": symbol,
-                "snapshot_type": snapshot_type,
-                "status": "available" if success else "data_gap",
-                "reason": reason,
-                "source_ids": list(_PLAYWRIGHT_STRATEGIES[snapshot_type]),
-                "source_trace": list(result.get("source_trace") or []),
-            })
-    return {
-        "schema_version": "uzi-3.9.4-agent-os-v1",
-        "profile": selected_profile,
-        "enabled": True,
-        "attempted": len(attempts),
-        "succeeded": sum(row["status"] == "available" for row in attempts),
-        "failed": sum(row["status"] != "available" for row in attempts),
-        "attempts": attempts,
-        "disabled_reason": None,
-    }
+    from domain_packs.finance_ashare.tools.uzi_native_postfetch import (
+        recover_snapshot_postfetch,
+    )
+
+    return recover_snapshot_postfetch(snapshots, symbols=symbols, profile=selected_profile,
+                                      settings=settings, qualitative=False, browser=True, force_browser=True)
 
 
 def _require_profile(profile: str | None) -> str:

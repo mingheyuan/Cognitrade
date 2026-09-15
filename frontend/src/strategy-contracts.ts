@@ -4,7 +4,7 @@ type StrategyLifecycle = 'draft' | 'published' | 'archived'
 type GovernanceState = 'published' | 'verified' | 'promoted'
 type SignalState = 'ALLOW_BUY' | 'WATCH' | 'AVOID' | 'BLOCKED'
 
-export type StrategyDocument = {
+export type StrategyDocumentV1 = {
   metadata: { schema_version: '1'; description: string }
   pins: {
     uzi_methodology_version: string
@@ -82,6 +82,49 @@ export type StrategyDocument = {
   }
 }
 
+export type StrategyDocumentV2 = Omit<StrategyDocumentV1,
+  'metadata' | 'fund_composite' | 'factor_weights' | 'signal_thresholds' | 'execution'> & {
+  metadata: { schema_version: '2'; description: string }
+  report_signal: {
+    model: 'report_conditions_v1'
+    source: 'dashboard.battle_plan'
+    extractor_version: 'uzi-battle-plan-v1'
+    entry_fraction: 0.5
+    entry_valid_trading_days: 3
+    evaluation: 'daily_close_next_open'
+    position_plan: 'lock_on_entry'
+    gap_policy: 'cancel_outside_stop_target'
+    weight_policy: 'original_disclosed_no_normalization'
+  }
+  execution: { max_single_stock_pct: number }
+}
+
+export type StrategyDocument = StrategyDocumentV1 | StrategyDocumentV2
+
+export function isReportConditionsDocument(document: StrategyDocument | null | undefined): document is StrategyDocumentV2 {
+  return document?.metadata.schema_version === '2'
+}
+
+export type ReportExecutionPlan = {
+  model: 'report_conditions_v1'
+  native_verdict: string
+  native_verdict_label: string
+  native_overall_score: number | null
+  prices: { entry: number | null; stop: number | null; target: number | null }
+  original_disclosed_weight_pct: number | null
+  entry_fraction: number
+  entry_permitted: boolean
+  executable: boolean
+  errors: string[]
+  source_artifact_id: string | null
+  source_content_hash: string | null
+  source_field: string
+  source_node_id: string
+  source_report_set_id: string
+  source_report_revision: number
+  [key: string]: unknown
+}
+
 type StrategyVersion = {
   id: string
   strategy_id: string
@@ -93,6 +136,8 @@ type StrategyVersion = {
   published_at: string
   published_by: string
   research_profile?: ResearchProfile
+  schema_version?: '1' | '2'
+  signal_model?: string
   document?: StrategyDocument
 }
 
@@ -165,6 +210,34 @@ export type ReportJob = {
   completed_at?: string | null
 }
 
+export type ReportRepairPlan = {
+  job_id: string
+  automatic_collection: false
+  items: Array<{
+    symbol: string
+    as_of_date: string
+    recovery: { kind: string; action: string }
+    dimensions: Array<{ dimension: string; reason: string; retryable: boolean }>
+    pending_evidence: Array<{ dimension: string; url: string }>
+    collection_request: {
+      symbols: string[]; asset_family: 'equity'; start_date: string; end_date: string
+      dimensions: string[]; mode: 'missing_or_stale' | 'force_all'; max_concurrency: number
+      publish_when_complete: false; include_research_archive: boolean
+      research_document_requests?: Array<{ dimension: string; url: string }>
+    } | null
+    notes: string[]
+  }>
+}
+
+export type ReportEvidenceCollection = {
+  id: string
+  status: string
+  freeze_status?: string
+  can_confirm_freeze?: boolean
+  publication_candidate?: { proposal_hash: string; degraded?: boolean } | null
+  research_archive?: { succeeded?: number; failed?: number; attempted?: number; persisted_snapshot_count?: number } | null
+}
+
 export type DailyReportSet = {
   id: string
   assignment_id?: string | null
@@ -200,6 +273,7 @@ export type TradeSignal = {
   confidence: number
   reasons: string[]
   content_hash?: string
+  execution_plan?: ReportExecutionPlan | null
   [key: string]: unknown
 }
 
@@ -211,6 +285,7 @@ type SignalCalculation = {
   coverage: number
   confidence: number
   reasons: string[]
+  execution_plan?: ReportExecutionPlan | null
 }
 
 export type SignalPreviewResult = {
@@ -219,11 +294,15 @@ export type SignalPreviewResult = {
   strategy_version_id: string
   strategy_content_hash: string
   report_set_id: string
-  fund_signal: SignalCalculation
+  fund_signal: SignalCalculation | null
   stock_signals: SignalCalculation[]
 }
 
 export type BacktestPreflight = {
+  signal_model?: 'report_conditions_v1' | string
+  executable_plan_count?: number
+  blocked_plan_count?: number
+  executable_plan_coverage?: number
   assignment_id: string
   strategy_version_id: string
   strategy_content_hash: string
@@ -234,6 +313,12 @@ export type BacktestPreflight = {
   missing_report_dates: string[]
   signal_count: number
   ready: boolean
+  can_run?: boolean
+  report_coverage?: number
+  signal_coverage?: number
+  market_data_checked?: boolean
+  market_data_missing?: Array<{ symbol: string; code: string; message: string; suggested_collection?: unknown }>
+  signal_uncovered_dates?: string[]
   carry_days: number
 }
 
@@ -355,6 +440,7 @@ export type StrategyWorkspaceContext = {
   fundName?: string
   sourceRunId?: string
   sourceArtifactId?: string
+  fundBundleId?: string
   reportSetId?: string
   strategyVersionId?: string
   assignmentId?: string

@@ -106,9 +106,10 @@ describe('MarketDataCenterApi', () => {
         freeze_status: 'awaiting_recovery', can_confirm_freeze: false,
         publication_candidate: { can_publish: false, quality_gate: 'blocked', missing_dimensions: ['12_capital_flow'], scopes: [{ symbol: '600001.SH', can_publish: false }] },
         agent_recovery: { status: 'failed', attempted: ['12_capital_flow'], succeeded: [], failed: ['12_capital_flow'] },
-        progress: { completed: 1, total: 1, child_complete: 3, child_total: 10, by_status: { partial: 1 } },
+        progress: { completed: 1, total: 1, child_complete: 3, child_total: 10, by_status: { partial: 1 },
+          native_postfetch: { status: 'partial', attempted: 2, succeeded: 1, failed: 1, persisted_snapshot_count: 1 } },
         task_summary: { total: 1, by_status: { partial: 1 }, active: 0, succeeded: 0, skipped: 0, retryable_failed: 1, blocked_failed: 0, by_error_code: [], by_dimension: [] },
-        portfolio_summary: { total_holdings: 10, ready_holdings: 3, dimensions_per_holding: 22, total_slots: 220, ready_slots: 91, missing_slots: 129, retryable_slots: 80, blocked_slots: 49, active_slots: 0, attempt: 2, current_child_job_ids: ['child-2'], by_error_code: [{ key: 'strict_contract_gap', count: 49, retryable_count: 0, blocked_count: 49, active_count: 0 }], by_dimension: [] },
+        portfolio_summary: { total_holdings: 10, ready_holdings: 3, dimensions_per_holding: 22, total_slots: 220, ready_slots: 91, missing_slots: 129, retryable_slots: 80, blocked_slots: 49, active_slots: 0, unassessed_slots: 0, degraded_slots: 49, by_holding: [{ symbol: '600001.SH', total_slots: 22, ready_slots: 0, missing_slots: 22, retryable_slots: 0, blocked_slots: 22, active_slots: 0, unassessed_slots: 0, degraded_slots: 22 }], attempt: 2, current_child_job_ids: ['child-2'], by_error_code: [{ key: 'strict_contract_gap', count: 49, retryable_count: 0, blocked_count: 49, active_count: 0 }], by_dimension: [] },
         tasks: [{
           id: 'task-1', symbol: '020464', dimension_id: 'fund_top_holdings', status: 'partial',
           attempt_count: 1, max_attempts: 3, retryable: true,
@@ -125,7 +126,8 @@ describe('MarketDataCenterApi', () => {
     const api = new MarketDataCenterApi({ baseUrl: 'http://127.0.0.1:8000/api/v1', token: '' })
     const page = await api.listJobs({ symbol: '020464', asset_family: 'fund', as_of_date: '2026-08-20', status: 'partial' })
 
-    expect(page.items[0].progress).toMatchObject({ child_complete: 3, child_total: 10 })
+    expect(page.items[0].progress).toMatchObject({ child_complete: 3, child_total: 10, completed: 0, partial: 1, running: 0, queued: 0 })
+    expect(page.items[0].progress.native_postfetch).toMatchObject({ status: 'partial', attempted: 2, succeeded: 1, failed: 1, persisted_snapshot_count: 1 })
     expect(page.items[0].tasks?.[0]).toMatchObject({
       task_id: 'task-1', attempt: 1, max_attempts: 3, retryable: true,
       collection_outcome: 'retryable_failure', reason_code: 'historical_provider_failure',
@@ -135,6 +137,7 @@ describe('MarketDataCenterApi', () => {
     })
     expect(page.items[0].task_summary).toMatchObject({ retryable_failed: 1, blocked_failed: 0 })
     expect(page.items[0].portfolio_summary).toMatchObject({ ready_slots: 91, retryable_slots: 80, blocked_slots: 49 })
+    expect(page.items[0].portfolio_summary).toMatchObject({ unassessed_slots: 0, degraded_slots: 49, by_holding: [{ symbol: '600001.SH', ready_slots: 0, degraded_slots: 22 }] })
     expect(page.items[0]).toMatchObject({ freeze_status: 'awaiting_recovery', can_confirm_freeze: false })
     expect(page.items[0].publication_candidate).toMatchObject({ can_publish: false, quality_gate: 'blocked', missing_dimensions: ['12_capital_flow'] })
     expect(page.items[0].agent_recovery).toMatchObject({ status: 'failed', attempted: 1, succeeded: 0, failed: 1 })

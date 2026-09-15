@@ -164,7 +164,7 @@ class StrategyPersistenceTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def _published_assignment(self) -> tuple[dict, dict, dict]:
-        strategy = self.service.create_strategy(self.owner, name="日报策略")
+        strategy = self.service.create_strategy(self.owner, name="日报策略", document=StrategyDocumentV1().model_dump(mode="json"))
         version = self.service.publish(self.owner, strategy["id"])
         assignment = self.service.create_assignment(
             self.owner,

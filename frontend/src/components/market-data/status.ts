@@ -37,7 +37,7 @@ export function freshnessStatusMeta(status: string | null | undefined) {
 export function evidenceGradeLabel(grade: EvidenceGrade | undefined) {
   if (grade === 'A') return 'A级 · 截止前观测'
   if (grade === 'B') return 'B级 · 可证明历史可见'
-  if (grade === 'C') return 'C级 · 仅可作排除评分的降级披露'
+  if (grade === 'C') return 'C级 · 证据受限，保留缺口提示'
   return '无合格证据'
 }
 
@@ -45,6 +45,7 @@ export function jobStatusMeta(status: string | null | undefined) {
   const normalized = String(status || 'unknown').toLowerCase()
   if (['completed', 'succeeded', 'published'].includes(normalized)) return { label: '已完成', tone: 'good' as const }
   if (['running', 'processing', 'leased'].includes(normalized)) return { label: '运行中', tone: 'info' as const }
+  if (normalized === 'cancelling') return { label: '取消中', tone: 'info' as const }
   if (['queued', 'pending', 'draft'].includes(normalized)) return { label: '等待中', tone: 'muted' as const }
   if (['failed', 'cancelled', 'revoked', 'invalid'].includes(normalized)) return { label: normalized === 'cancelled' ? '已取消' : '失败', tone: 'danger' as const }
   if (['partial', 'completed_partial'].includes(normalized)) return { label: '部分完成', tone: 'warning' as const }
@@ -60,12 +61,12 @@ export function collectionOutcomeMeta(
   if (normalized === 'partial') return { label: '部分恢复', summary: fallback || 'UZI 核心字段可用；无法历史恢复的可选字段已单独披露。', tone: 'warning' as const }
   if (normalized === 'verified_empty') return { label: '查证为空', summary: fallback || '数据源查询成功，目标窗口内确实没有记录；这不是采集失败。', tone: 'info' as const }
   if (normalized === 'retryable_failure') return { label: '数据源失败', summary: fallback || '本次上游请求失败，没有把失败误判为历史不可恢复；可定向重试。', tone: 'danger' as const }
-  if (normalized === 'unavailable') return { label: '无历史档案', summary: fallback || '该字段没有可证明的历史归档；当前值未写入历史快照，并已排除评分。', tone: 'warning' as const }
+  if (normalized === 'unavailable') return { label: '无历史档案', summary: fallback || '该字段没有可证明的历史归档；不以当前值回填历史，保留缺口披露，评分按 UZI 原生结果。', tone: 'warning' as const }
   return null
 }
 
 export function isActiveCollectionJob(status: string | null | undefined) {
-  return ['queued', 'pending', 'running', 'processing', 'leased'].includes(
+  return ['queued', 'pending', 'running', 'processing', 'leased', 'cancelling'].includes(
     String(status || '').toLowerCase(),
   )
 }
@@ -113,7 +114,11 @@ export function shortHash(value?: string | null) {
   return value.length > 16 ? `${value.slice(0, 10)}…${value.slice(-6)}` : value
 }
 
-export function progressValue(progress: { total: number; completed: number; failed: number; skipped: number }) {
+export function collectionSettledCount(progress: { completed: number; partial?: number; failed: number; skipped: number }) {
+  return progress.completed + (progress.partial || 0) + progress.failed + progress.skipped
+}
+
+export function progressValue(progress: { total: number; completed: number; partial?: number; failed: number; skipped: number }) {
   if (!progress.total) return 0
-  return Math.min(100, Math.round(((progress.completed + progress.failed + progress.skipped) / progress.total) * 100))
+  return Math.min(100, Math.round((collectionSettledCount(progress) / progress.total) * 100))
 }

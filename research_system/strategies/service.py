@@ -13,20 +13,27 @@ from research_system.runtime.core.artifact_board import ArtifactBoard
 from research_system.runtime.core.id_utils import generate_ulid
 from research_system.schemas.artifacts import ArtifactProducer, ArtifactRecord
 from research_system.strategies.contracts import (
-    BacktestMode,
-    GovernanceState,
-    StrategyDocumentV1,
-    StrategyLifecycle,
+    REPORT_CONDITIONS_TEMPLATE_KEY,
+    REPORT_CONDITIONS_TEMPLATE_NAME,
     SYSTEM_TEMPLATE_KEY,
     SYSTEM_TEMPLATE_NAME,
-    blank_strategy_document,
+    BacktestMode,
+    GovernanceState,
+    StrategyDocument,
+    StrategyLifecycle,
     canonical_strategy_json,
     next_weekday,
+    parse_strategy_document,
+    report_conditions_template_document,
     strategy_content_hash,
     system_template_document,
 )
 from research_system.strategies.database import StrategyDatabase
-from research_system.strategies.errors import StrategyConflict, StrategyDomainError, StrategyNotFound
+from research_system.strategies.errors import (
+    StrategyConflict,
+    StrategyDomainError,
+    StrategyNotFound,
+)
 from research_system.strategies.models import (
     BacktestRun,
     PaperStrategyBinding,
@@ -65,12 +72,19 @@ class StrategyService:
         *,
         workspace_root: Path,
         auto_bootstrap: bool = True,
+        runtime_settings=None,
     ) -> None:
         self.database = database
         self.workspace_root = Path(workspace_root)
+        self.runtime_settings = runtime_settings
         self.repository = StrategyRepository()
         self.database.bootstrap_or_validate(allow_bootstrap=auto_bootstrap)
         self.seed_system_template()
+        self._seed_template(
+            REPORT_CONDITIONS_TEMPLATE_KEY,
+            REPORT_CONDITIONS_TEMPLATE_NAME,
+            report_conditions_template_document(),
+        )
 
     def close(self) -> None:
         self.database.close()
@@ -79,16 +93,20 @@ class StrategyService:
         return self.database.health()
 
     def seed_system_template(self) -> str:
-        document = system_template_document()
+        return self._seed_template(SYSTEM_TEMPLATE_KEY, SYSTEM_TEMPLATE_NAME, system_template_document())
+
+    def _seed_template(self, key: str, name: str, document: StrategyDocument) -> str:
         with self.database.session() as session:
-            existing = self.repository.get_system_template(session, SYSTEM_TEMPLATE_KEY)
+            existing = self.repository.get_system_template(session, key)
             if existing is not None:
                 return existing.id
+            from research_system.strategies.runtime_pins import resolve_publication_document
+            document = resolve_publication_document(document, self.runtime_settings)
             strategy = Strategy(
                 tenant_id=SYSTEM_OWNER.tenant_id,
                 user_id=SYSTEM_OWNER.user_id,
-                name=SYSTEM_TEMPLATE_NAME,
-                system_key=SYSTEM_TEMPLATE_KEY,
+                name=name,
+                system_key=key,
                 is_system_template=True,
                 lifecycle=StrategyLifecycle.PUBLISHED.value,
             )
@@ -112,7 +130,7 @@ class StrategyService:
                 user_id=SYSTEM_OWNER.user_id,
                 actor_id=SYSTEM_OWNER.actor_id,
                 event_type="system_template_seeded",
-                payload={"system_key": SYSTEM_TEMPLATE_KEY, "version_id": version.id},
+                payload={"system_key": key, "version_id": version.id},
             )
             return strategy.id
 
@@ -168,8 +186,10 @@ class StrategyService:
             elif document is not None:
                 candidate = dict(document)
             else:
-                candidate = blank_strategy_document(description=description).model_dump(mode="json")
-            validated = StrategyDocumentV1.model_validate(candidate)
+                candidate = report_conditions_template_document().model_dump(mode="json")
+                if description:
+                    candidate["metadata"]["description"] = description
+            validated = parse_strategy_document(candidate)
             if description and not from_strategy_id and document is not None:
                 validated.metadata.description = description
             strategy = Strategy(
@@ -216,7 +236,7 @@ class StrategyService:
         document: dict[str, Any],
         name: str | None = None,
     ) -> dict[str, Any]:
-        validated = StrategyDocumentV1.model_validate(document)
+        validated = parse_strategy_document(document)
         with self.database.session() as session:
             strategy = self._require_mutable_strategy(session, strategy_id, scope)
             if strategy.lifecycle == StrategyLifecycle.ARCHIVED.value:
@@ -277,7 +297,9 @@ class StrategyService:
             draft = self.repository.get_draft(session, strategy.id)
             if draft is None:
                 raise StrategyConflict("strategy_draft_missing", "没有可发布的工作草稿")
-            document = StrategyDocumentV1.model_validate(draft.document_json)
+            document = parse_strategy_document(draft.document_json)
+            from research_system.strategies.runtime_pins import resolve_publication_document
+            document = resolve_publication_document(document, self.runtime_settings)
             content_hash = strategy_content_hash(document)
             latest = self.repository.latest_version(session, strategy.id)
             if latest is not None and latest.content_hash == content_hash:
@@ -532,7 +554,7 @@ class StrategyService:
             version = self.repository.latest_version(session, strategy.id)
             if version is None:
                 raise StrategyConflict("strategy_not_published", "策略尚无已发布版本")
-            document = StrategyDocumentV1.model_validate(version.document_json)
+            document = parse_strategy_document(version.document_json)
             if mode not in document.report_inputs.enabled_backtest_modes:
                 raise StrategyDomainError("backtest_mode_disabled", "策略版本未启用该回测模式")
             normalized_fund_code = str(fund_code or "").strip()
@@ -914,6 +936,8 @@ class StrategyService:
                     "research_profile", "deep"
                 )
             ),
+            "schema_version": str((dict(row.document_json or {}).get("metadata") or {}).get("schema_version") or "1"),
+            "signal_model": str((dict(row.document_json or {}).get("report_signal") or {}).get("model") or "legacy_fund_composite"),
         }
         if include_document:
             payload["document"] = row.document_json

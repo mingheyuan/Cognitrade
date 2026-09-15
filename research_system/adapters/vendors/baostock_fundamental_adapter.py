@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from datetime import date
-from importlib import import_module
 from typing import Any, Callable
 
 from research_system.adapters.vendors.akshare_utils import normalize_value
 from research_system.adapters.vendors.baostock_socket_safety import (
-    install_baostock_socket_safety,
+    baostock_session,
 )
 
 
@@ -18,13 +17,8 @@ class BaoStockFundamentalAdapter:
     def get_fundamental_snapshot(
         self, *, symbol: str, as_of_date: date | None = None
     ) -> dict[str, Any]:
-        install_baostock_socket_safety()
-        bs = import_module("baostock")
-        login = bs.login()
-        if str(getattr(login, "error_code", "0")) != "0":
-            raise ConnectionError("baostock login failed")
         code = self._code(symbol)
-        try:
+        with baostock_session() as bs:
             sections = {
                 "profit": self._quarterly(
                     bs.query_profit_data, code, as_of_date=as_of_date
@@ -45,8 +39,6 @@ class BaoStockFundamentalAdapter:
                     bs.query_operation_data, code, as_of_date=as_of_date
                 ),
             }
-        finally:
-            bs.logout()
         populated = {key: value for key, value in sections.items() if value}
         if not populated:
             raise ValueError(f"no fundamental data returned for symbol {symbol}")

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from datetime import date, timedelta
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pandas as pd
 
@@ -82,7 +82,11 @@ class FinanceDataAdapterTests(unittest.TestCase):
             )
         )
 
-        with patch.object(efinance_market_module, "import_module", return_value=fake_efinance):
+        with (
+            patch.object(efinance_market_module, "import_module", return_value=fake_efinance),
+            patch.object(efinance_market_module, "date") as frozen_date,
+        ):
+            frozen_date.today.return_value = date(2026, 8, 23)
             result = efinance_market_module.EFinanceMarketAdapter().get_market_snapshot(
                 symbol="600519.SH",
                 start_date="20260801",
@@ -93,6 +97,32 @@ class FinanceDataAdapterTests(unittest.TestCase):
         self.assertEqual(result["bar_count"], 1)
         self.assertEqual(result["latest_bar"]["close"], 1418.2)
         self.assertEqual(result["latest_bar"]["pre_close"], 1400.7)
+        self.assertEqual(result["latest_bar"]["date"], "2026-08-23")
+
+    def test_efinance_historical_market_failure_never_uses_current_quote(self) -> None:
+        history_error = ConnectionError("push2his unavailable")
+        history = Mock(side_effect=history_error)
+        current_quote = Mock(return_value=pd.Series({"最新价": 1418.2}))
+        fake_efinance = SimpleNamespace(stock=SimpleNamespace(
+            get_quote_history=history,
+            get_quote_snapshot=current_quote,
+        ))
+
+        with (
+            patch.object(efinance_market_module, "import_module", return_value=fake_efinance),
+            patch.object(efinance_market_module, "date") as frozen_date,
+        ):
+            frozen_date.today.return_value = date(2026, 9, 11)
+            with self.assertRaises(ConnectionError) as caught:
+                efinance_market_module.EFinanceMarketAdapter().get_market_snapshot(
+                    symbol="600519.SH",
+                    start_date="20260801",
+                    end_date="20260823",
+                )
+
+        self.assertIs(caught.exception, history_error)
+        history.assert_called_once_with("600519", beg="20260801", end="20260823", klt=101, fqt=0)
+        current_quote.assert_not_called()
 
     def test_efinance_capital_flow_normalizes_and_orders_recent_history(self) -> None:
         history = pd.DataFrame(

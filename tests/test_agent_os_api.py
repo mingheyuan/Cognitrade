@@ -1054,7 +1054,7 @@ class AgentOSApiTests(unittest.TestCase):
                     "domain_packs_root": repository_root / "domain_packs",
                     # No provider means UZI's critical quality gate must hold
                     # the run instead of producing a partial report.
-                    "openai_api_key": None,
+                    "codex_enabled": False,
                 }
             )
             with TestClient(
@@ -1130,6 +1130,10 @@ class AgentOSApiTests(unittest.TestCase):
             root = Path(temporary_directory)
             settings = Settings.from_env(repository_root).model_copy(
                 update={
+                    "workspace_root": root / "workspace",
+                    "cognitrade_database_url": None,
+                    "codex_enabled": False,
+                    "openai_base_url": None,
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": repository_root / "domain_packs",
@@ -1207,6 +1211,10 @@ class AgentOSApiTests(unittest.TestCase):
             root = Path(temporary_directory)
             settings = Settings.from_env(repository_root).model_copy(
                 update={
+                    "workspace_root": root / "workspace",
+                    "cognitrade_database_url": None,
+                    "codex_enabled": False,
+                    "openai_base_url": None,
                     "runs_root": root / "runs",
                     "memory_root": root / "memory",
                     "domain_packs_root": root / "empty_packs",

@@ -32,6 +32,11 @@ class CollectionJobRequest(BaseModel):
     mode: Literal["missing_or_stale", "force_all"] = "missing_or_stale"
     max_concurrency: int = Field(default=5, ge=1, le=5)
     publish_when_complete: bool = False
+    include_research_archive: bool | None = Field(
+        default=None,
+        description="股票任务显式启用原文归档及研究；省略时保留完整任务启用、单维任务关闭的默认行为",
+    )
+    research_document_requests: list[dict[str, str]] = Field(default_factory=list, max_length=12)
     asset_family: Literal["auto", "equity", "fund"] = "auto"
     top_n: Literal[10] = 10
 

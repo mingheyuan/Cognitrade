@@ -4472,7 +4472,10 @@ select:focus-visible {
 .strategy-signal-table th { padding: 8px 9px; border-bottom: 1px solid var(--border); background: var(--surface-soft); color: var(--muted); font-size: 8px; text-align: left; }
 .strategy-signal-table td { padding: 9px; border-bottom: 1px solid var(--border); color: var(--text-soft); font-size: 9px; }
 .strategy-signal-table tr:last-child td { border-bottom: 0; }
-.strategy-signal-table td:first-child { display: grid; gap: 2px; }
+.strategy-signal-table td:first-child { display: table-cell; }
+.strategy-signal-table td > strong, .strategy-signal-table td > small, .strategy-signal-table td > code { display: block; margin-block: 2px; }
+.strategy-signal-table td { vertical-align: top; }
+.strategy-signal-table td:last-child { max-width: 240px; overflow-wrap: anywhere; }
 .strategy-signal-table td small { color: var(--muted); }
 .strategy-signal-table code { color: var(--muted); font-size: 8px; }
 .signal-state { padding: 4px 6px; border-radius: 5px; background: var(--surface-hover); color: var(--muted); font-size: 8px; }
@@ -4639,6 +4642,9 @@ select:focus-visible {
 .report-job-progress > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .report-job-progress span { color: var(--blue); font-size: 9px; font-weight: 700; white-space: nowrap; }
 .report-job-progress small { color: var(--muted); font-size: 8px; }
+.report-stage-progress { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.report-stage-progress p { margin: 0; }
+.report-stage-progress small { display: block; }
 
 .governance-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
 .governance-grid article { display: grid; gap: 5px; padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-soft); }
@@ -7247,3 +7253,7 @@ select:focus-visible {
     animation: none;
   }
 }
+.report-evidence-repair { margin-top: 0.75rem; min-width: 0; }
+.report-evidence-repair section { margin-top: 0.75rem; padding: 0.75rem; border: 1px solid var(--border-color, #41524b); border-radius: 0.5rem; }
+.report-evidence-repair code { overflow-wrap: anywhere; white-space: normal; }
+.report-evidence-repair button { margin: 0.25rem 0.5rem 0.25rem 0; }

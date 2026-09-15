@@ -24,16 +24,12 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
     workspace_root = root / "workspace"
     config_root = workspace_root / "config"
     return {
-        "provider_name": env_values.get("PROVIDER_NAME", "openai"),
-        "default_model": env_values.get("OPENAI_MODEL", "gpt-5.6-luna"),
-        "openai_reasoning_effort": env_values.get("OPENAI_REASONING_EFFORT") or None,
-        "openai_service_tier": env_values.get("OPENAI_SERVICE_TIER", "default").strip().lower(),
-        "openai_disable_response_storage": env_values.get("OPENAI_DISABLE_RESPONSE_STORAGE", "true").strip().lower()
-        in {"1", "true", "yes", "on"},
+        "provider_name": "codex",
+        "codex_enabled": env_values.get("CODEX_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"},
+        "default_model": env_values.get("CODEX_MODEL", "gpt-5.6-luna"),
+        "codex_reasoning_effort": env_values.get("CODEX_REASONING_EFFORT", "low") or None,
         "embedding_model": env_values.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
         "embedding_dimensions": int(env_values.get("OPENAI_EMBEDDING_DIMENSIONS", "1536")),
-        "openai_api_key": env_values.get("OPENAI_API_KEY"),
-        "openai_base_url": env_values.get("OPENAI_BASE_URL"),
         "tushare_token": env_values.get("TUSHARE_TOKEN"),
         "mx_api_key": env_values.get("MX_APIKEY"),
         "qdrant_url": env_values.get("QDRANT_URL"),
@@ -135,7 +131,7 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
         ),
         "uzi_llm_max_concurrency": int(env_values.get("UZI_LLM_MAX_CONCURRENCY", "2")),
         "uzi_llm_transient_retries": int(
-            env_values.get("UZI_LLM_TRANSIENT_RETRIES", "6")
+            env_values.get("UZI_LLM_TRANSIENT_RETRIES", "2")
         ),
         "uzi_llm_retry_base_seconds": float(
             env_values.get("UZI_LLM_RETRY_BASE_SECONDS", "2")

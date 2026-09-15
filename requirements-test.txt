@@ -1,0 +1,4 @@
+# Only historical API exception/request recordings still use this SDK.
+# Production providers must never import it or use API credentials.
+openai>=2.45,<3
+pytest>=8,<10

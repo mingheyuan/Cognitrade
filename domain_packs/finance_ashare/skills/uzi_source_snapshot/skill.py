@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from math import isfinite
 from typing import Any
 
 import akshare as ak
 
+from domain_packs.finance_ashare.skills.fundamental_snapshot.skill import (
+    FundamentalSnapshotSkill,
+)
+from domain_packs.finance_ashare.skills.market_snapshot.skill import MarketSnapshotSkill
 from research_system.adapters.vendors.akshare_catalyst_adapter import (
     AkShareCatalystAdapter,
+    _safe_disclosure_error,
+)
+from research_system.adapters.vendors.akshare_pit_context_adapter import (
+    AkSharePitContextAdapter,
 )
 from research_system.adapters.vendors.akshare_sector_adapter import AkShareSectorAdapter
 from research_system.adapters.vendors.akshare_utils import (
@@ -15,25 +24,21 @@ from research_system.adapters.vendors.akshare_utils import (
     normalize_value,
 )
 from research_system.adapters.vendors.market_router import MarketRouter
-from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
 from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
-from domain_packs.finance_ashare.skills.fundamental_snapshot.skill import (
-    FundamentalSnapshotSkill,
-)
-from domain_packs.finance_ashare.skills.market_snapshot.skill import MarketSnapshotSkill
-from research_system.adapters.vendors.uzi_contest_adapter import UziContestAdapter
 from research_system.adapters.vendors.uzi_browser_adapter import UziBrowserAdapter
+from research_system.adapters.vendors.uzi_contest_adapter import UziContestAdapter
+from research_system.adapters.vendors.uzi_global_peer_adapter import (
+    fetch_global_peer_comparison,
+    global_peers_enabled,
+)
 from research_system.adapters.vendors.uzi_hottrend_adapter import UziHotTrendAdapter
 from research_system.adapters.vendors.uzi_news_adapter import UziNewsAdapter
 from research_system.adapters.vendors.uzi_web_search_adapter import UziWebSearchAdapter
 from research_system.adapters.vendors.yfinance_fundamental_adapter import (
     YFinanceFundamentalAdapter,
 )
-from research_system.adapters.vendors.uzi_global_peer_adapter import (
-    fetch_global_peer_comparison,
-    global_peers_enabled,
-)
-
+from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
+from research_system.market_data.instruments import SecurityIdentityResolver
 
 _UZI_INDUSTRY_MATERIALS: dict[str, tuple[tuple[str, str], ...]] = {
     "光学光电子": (("玻璃", "FG0"), ("铜", "CU0")),
@@ -248,7 +253,7 @@ class UziSourceSnapshotSkill:
             valuation = dict(market.get("valuation") or {})
             valuation["history"] = list(market.get("valuation_history") or [])
             industry_context = self._industry_context(
-                symbol, query=query, historical=as_of_date is not None
+                symbol, query=query, as_of_date=as_of_date, dependencies=dependencies
             )
             industry = str(industry_context.get("industry") or "").strip()
             route = MarketRouter().classify(symbol=symbol, query=query)
@@ -372,7 +377,8 @@ class UziSourceSnapshotSkill:
         if self.snapshot_type == "research":
             try:
                 reports = AkShareCatalystAdapter().get_symbol_research_reports(
-                    symbol=symbol, limit=50 if as_of_date is not None else 10
+                    symbol=symbol, limit=50 if as_of_date is not None else 10,
+                    **({"as_of_date": as_of_date} if as_of_date is not None else {}),
                 )
                 if as_of_date is not None:
                     reports = self._bounded_rows(
@@ -433,16 +439,27 @@ class UziSourceSnapshotSkill:
             }
         if self.snapshot_type == "macro":
             adapter = AkShareSectorAdapter()
+            query_end = as_of_date or date.today()
+            query_start = query_end - timedelta(days=30)
+            query_window = {
+                "start": query_start.isoformat(),
+                "end": query_end.isoformat(),
+            }
+            attempt = {
+                "source_id": "em_push2",
+                "interface": "akshare.index_zh_a_hist",
+                "symbol": "000300",
+                "request_executed": True,
+                "query_window": query_window,
+            }
             try:
                 benchmark = adapter.get_benchmark_snapshot(
-                    start_date=(
-                        (as_of_date or date.today()) - timedelta(days=30)
-                    ).strftime("%Y%m%d"),
-                    end_date=(as_of_date or date.today()).strftime("%Y%m%d"),
+                    start_date=query_start.strftime("%Y%m%d"),
+                    end_date=query_end.strftime("%Y%m%d"),
                 )
                 trace = [
                     {
-                        "source_id": "em_push2",
+                        **attempt,
                         "status": "available" if benchmark else "no_data",
                     }
                 ]
@@ -450,9 +467,9 @@ class UziSourceSnapshotSkill:
                 benchmark = {}
                 trace = [
                     {
-                        "source_id": "em_push2",
+                        **attempt,
                         "status": "provider_unavailable",
-                        "error_type": exc.__class__.__name__,
+                        **_safe_disclosure_error(exc),
                     }
                 ]
             search = (
@@ -471,6 +488,7 @@ class UziSourceSnapshotSkill:
             available = bool(benchmark or search.get("results") or news.get("sources"))
             return {
                 "benchmark": benchmark,
+                "query_window": query_window,
                 "web_search": search.get("results") or [],
                 "news_multi_source": news.get("sources") or {},
                 "availability": "available" if available else "data_gap",
@@ -487,16 +505,18 @@ class UziSourceSnapshotSkill:
                 ],
             }
         if self.snapshot_type == "industry":
-            return self._industry_context(
-                symbol, query=query, historical=as_of_date is not None
-            )
+            return self._industry_context(symbol, query=query, as_of_date=as_of_date, dependencies=dependencies)
         if self.snapshot_type == "chain":
-            context = self._industry_context(
-                symbol, query=query, historical=as_of_date is not None
-            )
+            context = self._industry_context(symbol, query=query, as_of_date=as_of_date, dependencies=dependencies)
+            if as_of_date is not None:
+                return AkSharePitContextAdapter().get_chain_snapshot(
+                    symbol=symbol,
+                    as_of_date=as_of_date,
+                    industry_context=context,
+                )
             resolved = dict(context.get("resolved_sector") or {})
             sector = {}
-            if context.get("industry") and as_of_date is None:
+            if context.get("industry"):
                 try:
                     sector = AkShareSectorAdapter().get_sector_snapshot(
                         query=str(context.get("industry") or symbol),
@@ -537,12 +557,13 @@ class UziSourceSnapshotSkill:
                 ],
             }
         if self.snapshot_type == "materials":
-            context = self._industry_context(
-                symbol, query=query, historical=as_of_date is not None
-            )
+            context = self._industry_context(symbol, query=query, as_of_date=as_of_date, dependencies=dependencies)
             industry = str(context.get("industry") or "").strip()
             contracts = self._material_contracts(industry)
-            rows = self._futures_rows(contracts, as_of_date=as_of_date)
+            price_trace: list[dict[str, Any]] = []
+            rows = self._futures_rows(
+                contracts, as_of_date=as_of_date, diagnostics=price_trace
+            )
             search = self._historical_safe_search(
                 query=f"{query} 原材料 价格 库存 基差",
                 dimension="materials",
@@ -557,6 +578,17 @@ class UziSourceSnapshotSkill:
             return {
                 "contracts": rows,
                 "materials_detail": rows,
+                # Native UZI exposes its first material's series at the top
+                # level as well as within materials_detail.
+                "price_history_12m": rows[0]["price_history_12m"] if rows else [],
+                "price_history_dates_12m": rows[0]["price_history_dates_12m"]
+                if rows
+                else [],
+                **(
+                    {"query_window": self._price_query_window(as_of_date, 550)}
+                    if as_of_date
+                    else {}
+                ),
                 "core_material": " / ".join(
                     str(row.get("name") or "") for row in rows if row.get("name")
                 )
@@ -582,11 +614,8 @@ class UziSourceSnapshotSkill:
                     "source_id": "akshare" if rows else "ddgs",
                 },
                 "_source_trace": [
-                    {
-                        "source_id": "akshare",
-                        "status": "available" if rows else "no_data",
-                        "count": len(rows),
-                    },
+                    *list(context.get("_source_trace") or []),
+                    *price_trace,
                     *list(search.get("source_trace") or []),
                 ],
             }
@@ -604,6 +633,32 @@ class UziSourceSnapshotSkill:
                 for row in material_facts.get("materials_detail") or []
                 if isinstance(row, dict)
             ]
+            if as_of_date is not None:
+                proof = (
+                    material_snapshot.get("historical_reconstruction")
+                    or material_snapshot.get("_pit_context")
+                    or {}
+                )
+                if not (
+                    proof.get("safe") is True
+                    and proof.get("requested_as_of_date") == as_of_date.isoformat()
+                ):
+                    material_rows = []
+                else:
+                    proved_contracts = {
+                        code
+                        for _, code in self._material_contracts(
+                            str(material_facts.get("industry_resolved") or "")
+                        )
+                    }
+                    material_rows = [
+                        row
+                        for row in material_rows
+                        if (row.get("code") or row.get("contract")) in proved_contracts
+                        and self._historical_material_row_safe(
+                            row, as_of_date=as_of_date
+                        )
+                    ]
             linked = next(
                 (
                     row
@@ -612,9 +667,7 @@ class UziSourceSnapshotSkill:
                 ),
                 None,
             )
-            context = self._industry_context(
-                symbol, query=query, historical=as_of_date is not None
-            )
+            context = self._industry_context(symbol, query=query, as_of_date=as_of_date, dependencies=dependencies)
             industry = str(context.get("industry") or "").strip()
             contracts = (
                 (
@@ -626,7 +679,13 @@ class UziSourceSnapshotSkill:
                 if linked
                 else self._material_contracts(industry)[:1]
             )
-            rows = self._futures_rows(contracts, as_of_date=as_of_date)
+            price_trace = []
+            rows = self._futures_rows(
+                contracts,
+                as_of_date=as_of_date,
+                window_days=180,
+                diagnostics=price_trace,
+            )
             search = self._historical_safe_search(
                 query=f"{query} 期货 库存 仓单 现货 基差",
                 dimension="futures",
@@ -640,6 +699,14 @@ class UziSourceSnapshotSkill:
                 "latest_price": rows[0].get("latest_price") if rows else None,
                 "contract_trend": rows[0].get("trend_pct_60d") if rows else None,
                 "price_history_60d": rows[0].get("price_history_60d") if rows else [],
+                "price_history_dates_60d": rows[0].get("price_history_dates_60d")
+                if rows
+                else [],
+                **(
+                    {"query_window": self._price_query_window(as_of_date, 180)}
+                    if as_of_date
+                    else {}
+                ),
                 "source_note": "8_materials 识别的原材料期货"
                 if linked
                 else "industry material mapping",
@@ -651,18 +718,21 @@ class UziSourceSnapshotSkill:
                 },
                 "web_search": search.get("results") or [],
                 "availability": "available" if available else "data_gap",
-                "data_gap": [] if available else ["futures_provider_missing"],
+                "data_gap": []
+                if available
+                else [
+                    "futures_provider_missing"
+                    if contracts
+                    else "industry_material_mapping_missing"
+                ],
                 "_source": {
                     "vendor": "uzi_futures",
                     "provider_id": "uzi_futures_multi",
                     "source_id": "akshare" if rows else "ddgs",
                 },
                 "_source_trace": [
-                    {
-                        "source_id": "akshare",
-                        "status": "available" if rows else "no_data",
-                        "count": len(rows),
-                    },
+                    *list(context.get("_source_trace") or []),
+                    *price_trace,
                     *list(search.get("source_trace") or []),
                 ],
             }
@@ -780,7 +850,7 @@ class UziSourceSnapshotSkill:
             facts = dict(fundamental.get("facts") or {})
             info = dict(facts.get("info") or {})
             context = self._industry_context(
-                symbol, query=query, historical=as_of_date is not None
+                symbol, query=query, as_of_date=as_of_date, dependencies=dependencies
             )
             target_name = next(
                 (
@@ -793,6 +863,15 @@ class UziSourceSnapshotSkill:
             target_industry = str(
                 context.get("industry") or info.get("industry") or ""
             ).strip()
+            from research_system.market_data.fixed_pit_inputs import (
+                fixed_historical_profile,
+            )
+            fixed = fixed_historical_profile(dependencies, symbol=symbol, day=as_of_date)
+            if fixed is not None:
+                # Empty fixed fields stay empty; do not resurrect the old
+                # provider's identity while rebuilding its consumers.
+                target_name = str(fixed["data"].get("name") or "").strip()
+                target_industry = str(fixed["data"].get("industry") or "").strip()
             if as_of_date is not None:
                 global_comparison = {
                     "conclusion_status": "historical_unavailable",
@@ -939,9 +1018,8 @@ class UziSourceSnapshotSkill:
                         "self_only": [
                             {
                                 "symbol": symbol,
-                                "name": info.get("股票简称")
-                                or info.get("名称")
-                                or info.get("公司名称"),
+                                "name": target_name if fixed is not None else (
+                                    info.get("股票简称") or info.get("名称") or info.get("公司名称")),
                             }
                         ],
                         "fallback_used": True,
@@ -974,6 +1052,7 @@ class UziSourceSnapshotSkill:
                 },
             )
         if self.snapshot_type == "fund_holders":
+            source_meta = {"vendor": "akshare", "provider_id": "akshare_fund_holders", "source_id": "sina"}
             fetcher = getattr(ak, "stock_fund_stock_holder", None)
             if not callable(fetcher):
                 return {
@@ -981,22 +1060,19 @@ class UziSourceSnapshotSkill:
                     "data_gap": ["fund_holders_provider_missing"],
                 }
             try:
+                code = SecurityIdentityResolver().resolve_stock(symbol).code
                 frame = call_with_retry(
-                    lambda: fetcher(symbol=symbol), retries=1, delay_seconds=0.2
+                    lambda: fetcher(symbol=code), retries=1, delay_seconds=0.2
                 )
             except Exception as exc:
                 return {
                     "availability": "data_gap",
                     "data_gap": ["fund_holders_provider_unavailable"],
                     "degrade_reason": "fund_holders_provider_unavailable",
-                    "_source": {
-                        "vendor": "akshare",
-                        "provider_id": "akshare_fund_holders",
-                        "source_id": "em_data",
-                    },
+                    "_source": source_meta,
                     "_source_trace": [
                         {
-                            "source_id": "em_data",
+                            "source_id": "sina",
                             "status": "provider_unavailable",
                             "error_type": exc.__class__.__name__,
                         }
@@ -1011,6 +1087,21 @@ class UziSourceSnapshotSkill:
                 else []
             )
             if as_of_date is not None:
+                # Sina's 截止日期 is the portfolio's reporting period, not
+                # when the public could see it. Do not certify the current
+                # table as historical zero or backdate its holdings.
+                publication_keys = ("published_at", "publish_time", "公告日期", "发布日期")
+                if not rows or any(not any(self._calendar_date(row.get(key)) for key in publication_keys) for row in rows):
+                    return {
+                        "holders": [], "active_funds_count": None,
+                        "availability": "data_gap",
+                        "data_gap": ["fund_holders_publication_dates_missing"],
+                        "degrade_reason": "fund_holders_publication_dates_missing",
+                        "_source": source_meta,
+                        "_source_trace": [{"source_id": "sina", "status": "historical_version_unavailable",
+                                           "reason_code": "fund_holders_publication_dates_missing",
+                                           "source_row_count": len(rows), "historical_result_count": None}],
+                    }
                 rows = self._bounded_rows(
                     rows,
                     as_of_date=as_of_date,
@@ -1021,14 +1112,10 @@ class UziSourceSnapshotSkill:
                 "active_funds_count": len(rows),
                 "availability": "available" if rows else "data_gap",
                 "data_gap": [] if rows else ["fund_holders_missing"],
-                "_source": {
-                    "vendor": "akshare",
-                    "provider_id": "akshare_fund_holders",
-                    "source_id": "em_data",
-                },
+                "_source": source_meta,
                 "_source_trace": [
                     {
-                        "source_id": "em_data",
+                        "source_id": "sina",
                         "status": "available" if rows else "no_data",
                         "count": len(rows),
                     }
@@ -1036,7 +1123,7 @@ class UziSourceSnapshotSkill:
             }
         if self.snapshot_type == "similar_stocks":
             context = self._industry_context(
-                symbol, query=query, historical=as_of_date is not None
+                symbol, query=query, as_of_date=as_of_date, dependencies=dependencies
             )
             resolved = dict(context.get("resolved_sector") or {})
             if as_of_date is not None:
@@ -1123,33 +1210,36 @@ class UziSourceSnapshotSkill:
         symbol: str,
         *,
         query: str = "",
-        historical: bool = False,
+        as_of_date: date | None = None,
+        dependencies: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         route = MarketRouter().classify(symbol=symbol, query=query)
         info: dict[str, Any] = {}
         trace: list[dict[str, Any]] = []
-        if historical:
+        if as_of_date is not None:
+            from research_system.market_data.fixed_pit_inputs import (
+                fixed_historical_profile,
+            )
+            fixed = fixed_historical_profile(dependencies, symbol=symbol, day=as_of_date)
+            if fixed is not None:
+                result = AkSharePitContextAdapter().get_fixed_profile_industry_snapshot(
+                    symbol=symbol, as_of_date=as_of_date, fixed_profile=fixed,
+                )
+                industry = str(result.get("industry") or "").strip()
+                return {**result, "company_info": {},
+                        "resolved_sector": self._known_sector(industry) if industry else {},
+                        "web_search": [], "browser_evidence": {}}
+            result = AkSharePitContextAdapter().get_industry_snapshot(
+                symbol=symbol,
+                as_of_date=as_of_date,
+            )
+            industry = str(result.get("industry") or "").strip()
             return {
-                "industry": None,
+                **result,
                 "company_info": {},
-                "resolved_sector": {},
+                "resolved_sector": self._known_sector(industry) if industry else {},
                 "web_search": [],
                 "browser_evidence": {},
-                "availability": "data_gap",
-                "data_gap": ["historical_industry_classification_unavailable"],
-                "degrade_reason": "historical_industry_classification_unavailable",
-                "_source": {
-                    "vendor": "finance_pack",
-                    "provider_id": "historical_industry",
-                    "source_id": "classification_archive",
-                },
-                "_source_trace": [
-                    {
-                        "source_id": "classification_archive",
-                        "status": "not_configured",
-                        "reason_code": "historical_classification_archive_missing",
-                    }
-                ],
             }
         if route.market == "cn_equity":
             try:
@@ -1626,6 +1716,9 @@ class UziSourceSnapshotSkill:
 
     @staticmethod
     def _material_contracts(industry: str) -> tuple[tuple[str, str], ...]:
+        industry = str(industry or "").strip()
+        if not industry:
+            return ()
         if industry in _UZI_INDUSTRY_MATERIALS:
             return tuple(row for row in _UZI_INDUSTRY_MATERIALS[industry] if row[1])
         for key, rows in _UZI_INDUSTRY_MATERIALS.items():
@@ -1634,27 +1727,129 @@ class UziSourceSnapshotSkill:
         return ()
 
     @staticmethod
+    def _price_query_window(as_of_date: date, window_days: int) -> dict[str, str]:
+        return {
+            "start": (as_of_date - timedelta(days=window_days)).isoformat(),
+            "end": as_of_date.isoformat(),
+        }
+
+    @classmethod
+    def _historical_material_row_safe(
+        cls, row: dict[str, Any], *, as_of_date: date
+    ) -> bool:
+        """Old safe=True labels alone cannot authorize historical linkage.
+
+        Earlier snapshots lacked price dates and could contain next-day closes
+        or an empty-industry fallback. Require the new point-by-point evidence
+        before reusing their contract mapping in a historical futures request.
+        """
+        prices = row.get("price_history_12m")
+        raw_dates = row.get("price_history_dates_12m")
+        if (
+            not isinstance(prices, list)
+            or not prices
+            or not isinstance(raw_dates, list)
+        ):
+            return False
+        if len(prices) != len(raw_dates):
+            return False
+        dates = [cls._calendar_date(value) for value in raw_dates]
+        if not all(
+            value is not None
+            and as_of_date - timedelta(days=550) <= value <= as_of_date
+            for value in dates
+        ):
+            return False
+        if (
+            dates != sorted(dates)
+            or cls._calendar_date(row.get("latest_record_date")) != dates[-1]
+        ):
+            return False
+        latest = row.get("latest_record") or {}
+        return all(
+            cls._calendar_date(latest[key]) == dates[-1]
+            for key in ("日期", "date", "trade_date", "交易日期", "datetime")
+            if key in latest
+        )
+
+    @classmethod
     def _futures_rows(
+        cls,
         contracts: tuple[tuple[str, str], ...],
         *,
         as_of_date: date | None = None,
+        window_days: int = 550,
+        diagnostics: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
+        trace = diagnostics if diagnostics is not None else []
+        window = (
+            cls._price_query_window(as_of_date, window_days) if as_of_date else None
+        )
+        if not contracts:
+            trace.append(
+                {
+                    "source_id": "akshare",
+                    "query_scope": "futures_prices",
+                    "status": "not_queried",
+                    "request_executed": False,
+                    "reason_code": "industry_material_mapping_missing",
+                    **({"query_window": window} if window else {}),
+                }
+            )
+            return []
         fetcher = getattr(ak, "futures_main_sina", None) or getattr(
             ak, "futures_zh_daily_sina", None
         )
         if not callable(fetcher):
+            trace.append(
+                {
+                    "source_id": "akshare",
+                    "query_scope": "futures_prices",
+                    "status": "not_configured",
+                    "request_executed": False,
+                    "reason_code": "futures_interface_unavailable",
+                    **({"query_window": window} if window else {}),
+                }
+            )
             return []
         rows: list[dict[str, Any]] = []
         for name, contract in contracts[:3]:
+            attempt: dict[str, Any] = {
+                "source_id": "akshare",
+                "query_scope": "futures_prices",
+                "interface": getattr(fetcher, "__name__", "futures_sina"),
+                "symbol": contract,
+                "request_executed": True,
+                "bounded_query_completed": False,
+                # Sina returns a full series. The date bound is applied here,
+                # not passed to the server or inferred from observation time.
+                **({"query_window": window, "date_filter": "client"} if window else {}),
+            }
+            trace.append(attempt)
             try:
                 frame = call_with_retry(
                     lambda contract=contract: fetcher(symbol=contract),
                     retries=1,
                     delay_seconds=0.2,
                 )
-            except Exception:
+            except Exception as exc:
+                attempt.update(
+                    status="provider_unavailable", **_safe_disclosure_error(exc)
+                )
                 continue
-            if frame is None or getattr(frame, "empty", True):
+            if frame is None:
+                attempt.update(
+                    status="provider_unavailable", reason_code="empty_provider_response"
+                )
+                continue
+            records = frame.to_dict("records")
+            attempt["result_count"] = len(records)
+            if not records:
+                attempt.update(
+                    status="no_data",
+                    in_window_count=0,
+                    bounded_query_completed=as_of_date is not None,
+                )
                 continue
             close_column = next(
                 (
@@ -1664,16 +1859,75 @@ class UziSourceSnapshotSkill:
                 ),
                 None,
             )
-            closes = [
-                float(parsed)
-                for value in (
-                    frame[close_column].tail(250).tolist() if close_column else []
+            dated: list[tuple[date | None, dict[str, Any]]] = []
+            unknown_dates = 0
+            for record in records:
+                record_date = next(
+                    (
+                        value
+                        for key in (
+                            "日期",
+                            "date",
+                            "trade_date",
+                            "交易日期",
+                            "datetime",
+                        )
+                        if (value := cls._calendar_date(record.get(key))) is not None
+                    ),
+                    None,
                 )
-                if (parsed := coerce_numeric(value)) is not None and float(parsed) > 0
-            ]
-            latest = frame.tail(1).to_dict("records")
-            if not latest:
+                if as_of_date is not None:
+                    if record_date is None:
+                        unknown_dates += 1
+                        continue
+                    if (
+                        not as_of_date - timedelta(days=window_days)
+                        <= record_date
+                        <= as_of_date
+                    ):
+                        continue
+                dated.append((record_date, record))
+            attempt.update(
+                in_window_count=len(dated), unparseable_date_count=unknown_dates
+            )
+            if not dated:
+                attempt.update(
+                    status="parse_failed" if unknown_dates else "no_data",
+                    bounded_query_completed=as_of_date is not None
+                    and not unknown_dates,
+                    **(
+                        {"reason_code": "historical_price_date_unproven"}
+                        if unknown_dates
+                        else {}
+                    ),
+                )
                 continue
+            if all(item[0] is not None for item in dated):
+                dated.sort(key=lambda item: item[0])
+            valid = [
+                (record_date, record, float(parsed))
+                for record_date, record in dated
+                if close_column
+                and (parsed := coerce_numeric(record.get(close_column))) is not None
+                and isfinite(float(parsed))
+                and float(parsed) > 0
+            ]
+            if not valid:
+                attempt.update(
+                    status="parse_failed", reason_code="historical_price_value_unproven"
+                )
+                continue
+            retained = valid[-250:]
+            closes = [item[2] for item in retained]
+            dates = [item[0].isoformat() if item[0] else None for item in retained]
+            parse_partial = bool(unknown_dates or len(valid) != len(dated))
+            attempt.update(
+                status="parse_failed" if parse_partial else "available",
+                bounded_query_completed=as_of_date is not None and not parse_partial,
+                retained_count=len(retained),
+                earliest_record_date=dates[0],
+                latest_record_date=dates[-1],
+            )
             history_60d = closes[-60:]
             rows.append(
                 {
@@ -1683,6 +1937,9 @@ class UziSourceSnapshotSkill:
                     "latest_price": round(closes[-1], 4) if closes else None,
                     "price_history_60d": [round(value, 4) for value in history_60d],
                     "price_history_12m": [round(value, 4) for value in closes],
+                    "price_history_dates_60d": dates[-60:],
+                    "price_history_dates_12m": dates,
+                    "latest_record_date": dates[-1],
                     "trend_pct_60d": round(
                         (history_60d[-1] / history_60d[0] - 1) * 100, 2
                     )
@@ -1693,7 +1950,7 @@ class UziSourceSnapshotSkill:
                     else None,
                     "data_points": len(closes),
                     "latest_record": {
-                        str(k): normalize_value(v) for k, v in latest[0].items()
+                        str(k): normalize_value(v) for k, v in retained[-1][1].items()
                     },
                 }
             )

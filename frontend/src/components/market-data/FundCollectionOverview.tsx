@@ -5,26 +5,13 @@ import {
   RotateCcw,
 } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { collectionOutcomeMeta, isActiveCollectionJob, jobStatusMeta } from './status'
+import { collectionOutcomeMeta, collectionSettledCount, isActiveCollectionJob, jobStatusMeta } from './status'
 import { StatusBadge } from './shared'
-import type { CollectionDiagnosticBucket, CollectionJob, CollectionTask, FundPortfolioSummary } from './types'
+import { fundPortfolioSummary } from './portfolio'
+import type { CollectionDiagnosticBucket, CollectionJob, CollectionTask } from './types'
 
 function dimensionCount(job: CollectionJob) {
   return job.dimensions === 'all' ? '全部' : job.dimensions?.length || 0
-}
-
-function activeChildSlots(childJobs: CollectionJob[]) {
-  return childJobs
-    .filter((child) => isActiveCollectionJob(child.status))
-    .reduce((sum, child) => {
-      const settled = child.progress.completed + child.progress.failed + child.progress.skipped
-      return sum + Math.max(
-        child.task_summary?.active || 0,
-        child.progress.queued + child.progress.running,
-        child.progress.total - settled,
-        0,
-      )
-    }, 0)
 }
 
 function taskFailurePresentation(task: CollectionTask) {
@@ -32,7 +19,7 @@ function taskFailurePresentation(task: CollectionTask) {
   const diagnostic = task.error_message || ''
   if (kind === 'audit_only') return {
     label: task.failure_label || 'UZI 可用 · 扩展审计提示',
-    summary: '该槽已按 UZI 原生口径判为可用；字段、证据或 PIT 扩展检查仅保留为审计信息。',
+    summary: '该槽保留原生数据检查结果；研究缺口仅作 Agent 输入提示，PIT 与冻结数据安全校验独立执行，不代表最终报告自审通过。',
     tone: 'info' as const,
   }
   if (kind === 'source_timeout') return {
@@ -51,55 +38,20 @@ function taskFailurePresentation(task: CollectionTask) {
   }
   if (kind === 'evidence_gap') return {
     label: task.failure_label || 'UZI 可用 · 证据审计提示',
-    summary: '原始数据已保存；证据等级只影响审计标记，不阻断 UZI 报告。',
+    summary: '原始数据已保存；研究引用缺口交给完整 Agent 按原生规则判断，不单独阻止启动。PIT 与冻结数据安全校验仍独立执行。',
     tone: 'info' as const,
   }
   if (kind === 'query_proof_gap') return {
     label: task.failure_label || 'UZI 可用 · 查询审计提示',
-    summary: '原始数据已保存；查询窗口证明只作为审计信息。',
+    summary: '原始数据已保存；查询窗口证明需通过独立 PIT 预检，不能据此承诺报告可生成。',
     tone: 'info' as const,
   }
   if (kind === 'normalization_gap' || task.raw_data_present) return {
     label: task.failure_label || 'UZI 可用 · 扩展审计提示',
-    summary: '上游原始数据已保存；扩展字段检查不再阻断 UZI 报告。',
+    summary: '上游原始数据已保存；字段缺口作为提示交给完整 Agent，不提前代替原生研判或最终自审。',
     tone: 'info' as const,
   }
   return null
-}
-
-function portfolioSummary(job: CollectionJob, childJobs: CollectionJob[] = []): FundPortfolioSummary {
-  const totalHoldings = job.progress.child_total ?? (job.expanded_holdings.length || job.top_n || 10)
-  const readyHoldings = job.progress.child_complete ?? job.expanded_holdings.filter((holding) => !holding.missing_dimensions?.length).length
-  const holdingMissingSlots = job.expanded_holdings.reduce((sum, holding) => sum + (holding.missing_dimensions?.length || 0), 0)
-  const totalSlots = totalHoldings * 22
-  const summary = job.portfolio_summary || {
-    total_holdings: totalHoldings,
-    ready_holdings: readyHoldings,
-    dimensions_per_holding: 22,
-    total_slots: totalSlots,
-    ready_slots: Math.max(0, totalSlots - holdingMissingSlots),
-    missing_slots: holdingMissingSlots,
-    retryable_slots: 0,
-    blocked_slots: holdingMissingSlots,
-    active_slots: 0,
-    attempt: 0,
-    current_child_job_ids: [],
-    by_error_code: [],
-    by_dimension: [],
-  }
-  const activeSlots = Math.max(summary.active_slots, activeChildSlots(childJobs))
-  if (!activeSlots) return summary
-  const missingSlots = Math.max(
-    summary.missing_slots,
-    activeSlots + summary.retryable_slots + summary.blocked_slots,
-  )
-  return {
-    ...summary,
-    ready_holdings: Math.min(summary.ready_holdings, job.progress.child_complete || 0),
-    ready_slots: Math.min(summary.ready_slots, Math.max(0, summary.total_slots - missingSlots)),
-    missing_slots: missingSlots,
-    active_slots: activeSlots,
-  }
 }
 
 function DiagnosticBuckets({ title, buckets }: { title: string; buckets: CollectionDiagnosticBucket[] }) {
@@ -108,21 +60,21 @@ function DiagnosticBuckets({ title, buckets }: { title: string; buckets: Collect
     <article key={bucket.key} title={bucket.sample_message || undefined}>
       <code>{bucket.key}</code>
       <strong>{bucket.count}</strong>
-      <small>可重试 {bucket.retryable_count} · 阻断 {bucket.blocked_count}{bucket.active_count ? ` · 运行 ${bucket.active_count}` : ''}</small>
+      <small>可重试 {bucket.retryable_count} · 不可重试/已降级 {bucket.blocked_count}{bucket.active_count ? ` · 运行 ${bucket.active_count}` : ''}</small>
     </article>
   ))}</div></section>
 }
 
 export function FundCollectionProgress({ job, childJobs = [] }: { job: CollectionJob; childJobs?: CollectionJob[] }) {
-  const portfolio = portfolioSummary(job, childJobs)
+  const portfolio = fundPortfolioSummary(job, childJobs)
   const value = portfolio.total_slots ? Math.round((portfolio.ready_slots / portfolio.total_slots) * 100) : 0
   return (
     <div className="mdc-progress mdc-fund-progress">
-      <div className="mdc-progress-label"><span>{portfolio.ready_holdings} / {portfolio.total_holdings} 只股票就绪</span><strong>{value}% 槽完整</strong></div>
+      <div className="mdc-progress-label"><span>{portfolio.ready_holdings} / {portfolio.total_holdings} 只股票严格完整</span><strong>{value}% 严格完整</strong></div>
       <div className="mdc-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={value} aria-label="基金十大持仓股票契约槽完整度">
         <span style={{ width: `${value}%` }} />
       </div>
-      <div className="mdc-progress-breakdown"><span>持仓 {job.expanded_holdings.length}/10 已落库</span><span>合格 {portfolio.ready_slots}/{portfolio.total_slots} 槽</span><span>缺口 {portfolio.missing_slots} 槽</span></div>
+      <div className="mdc-progress-breakdown"><span>持仓 {job.expanded_holdings.length}/10 已落库</span><span>严格可用 {portfolio.ready_slots}/{portfolio.total_slots} 槽</span><span>已确认缺口 {portfolio.missing_slots} 槽</span>{Boolean(portfolio.degraded_slots) && <span>其中已降级 {portfolio.degraded_slots} 槽</span>}{Boolean(portfolio.active_slots) && <span>处理中 {portfolio.active_slots} 槽</span>}{Boolean(portfolio.unassessed_slots) && <span>未评估 {portfolio.unassessed_slots} 槽</span>}</div>
     </div>
   )
 }
@@ -140,12 +92,16 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
   const [pendingRetryKey, setPendingRetryKey] = useState('')
   const [retryFeedback, setRetryFeedback] = useState<{ symbol: string; tone: 'success' | 'error'; message: string } | null>(null)
   const holdings = job.expanded_holdings
-  const portfolio = portfolioSummary(job, childJobs)
+  const portfolio = fundPortfolioSummary(job, childJobs)
   const total = portfolio.total_holdings
   const ready = portfolio.ready_holdings
   const missingSlots = portfolio.missing_slots
-  const collectionReady = total === 10 && ready === total && ['completed', 'succeeded'].includes(job.status)
+  const collectionReady = total === 10 && ready === total && missingSlots === 0 && ['completed', 'succeeded'].includes(job.status)
   const bundleFrozen = job.freeze_status === 'frozen'
+  const reportReady = Boolean(
+    job.can_confirm_freeze
+    || ['ready', 'ready_degraded', 'awaiting_confirmation'].includes(String(job.freeze_status || '').toLowerCase()),
+  )
   const agentRecoveryActive = ['queued', 'pending', 'running', 'processing', 'cancelling'].includes(
     String(job.agent_recovery?.status || '').toLowerCase(),
   )
@@ -159,7 +115,7 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
   const activeDetailJobKey = activeDetailJobIds.join('|')
   const relatedDetailStateKey = childJobs
     .filter((child) => expandedSymbol && child.symbols.includes(expandedSymbol))
-    .map((child) => `${child.job_id}:${child.status}:${child.progress.running}:${child.progress.queued}:${child.progress.failed}:${child.progress.completed}`)
+    .map((child) => `${child.job_id}:${child.status}:${child.progress.running}:${child.progress.queued}:${child.progress.failed}:${child.progress.completed}:${child.progress.partial || 0}`)
     .join('|')
 
   useEffect(() => {
@@ -249,7 +205,11 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
           <h3 id={`fund-workflow-${job.job_id}`}>前十大持仓采集链路</h3>
           <p>基金持仓与十只股票快照先落库为草稿；报告只消费用户确认冻结后的组合 Bundle。</p>
         </div>
-        <StatusBadge label={bundleFrozen ? '组合 Bundle 已冻结' : collectionReady ? '待确认冻结' : `${ready}/${total} 只就绪`} tone={bundleFrozen ? 'good' : collectionReady ? 'info' : 'warning'} />
+        <StatusBadge label={bundleFrozen
+          ? '组合 Bundle 已冻结'
+          : reportReady
+            ? missingSlots ? `数据可冻结 · ${missingSlots} 槽缺口披露` : '数据可冻结 · 待确认'
+            : collectionReady ? '严格数据已就绪' : `${ready}/${total} 只严格完整`} tone={bundleFrozen ? 'good' : reportReady ? 'info' : collectionReady ? 'good' : 'warning'} />
       </header>
 
       {holdings.length ? (
@@ -258,13 +218,20 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
             <thead><tr><th>排名</th><th>持仓股票</th><th>基金权重</th><th>披露权重</th><th>数据完整度</th></tr></thead>
             <tbody>{holdings.map((holding) => {
               const gaps = holding.missing_dimensions || []
-              const collecting = !gaps.length && childJobs.some((child) => (
+              const assessment = portfolio.by_holding?.find((row) => row.symbol === holding.symbol)
+              const collecting = Boolean(assessment?.active_slots) || childJobs.some((child) => (
                 isActiveCollectionJob(child.status) && child.symbols.includes(holding.symbol)
               ))
+              const knownReady = assessment
+                ? assessment.ready_slots === assessment.total_slots
+                : !collecting && !gaps.length && (reportReady || bundleFrozen || collectionReady)
+              const knownGaps = assessment?.missing_slots ?? gaps.length
+              const readiness = collecting ? '采集中' : knownGaps ? `缺 ${knownGaps} 槽` : knownReady ? '已就绪' : '未评估'
               const expanded = expandedSymbol === holding.symbol
               const tasks = tasksForHolding(holding.symbol)
               const retryableTasks = tasks.filter((task) => (
-                task.retryable
+                gaps.includes(task.dimension_id)
+                && task.retryable
                 && ['failed', 'partial'].includes(task.status)
                 && task.attempt < (task.max_attempts ?? Number.POSITIVE_INFINITY)
               ))
@@ -278,7 +245,7 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
                     <td>{holding.disclosed_weight_pct == null ? '—' : `${holding.disclosed_weight_pct.toFixed(2)}%`}</td>
                     <td>
                       <div className="mdc-holding-cell-stack">
-                        <span className={`mdc-holding-readiness ${gaps.length || collecting ? 'is-gap' : 'is-ready'}`}>{gaps.length ? `缺 ${gaps.length} 槽` : collecting ? '采集中' : '已就绪'}</span>
+                        <span className={`mdc-holding-readiness ${knownReady ? 'is-ready' : 'is-gap'}`}>{readiness}</span>
                         {gaps.length ? <small title={gaps.join('、')}>{gaps.slice(0, 2).join(' · ')}{gaps.length > 2 ? ` +${gaps.length - 2}` : ''}</small> : collecting ? <small>等待维度结算</small> : null}
                         <button className="mdc-holding-detail-toggle" type="button" aria-expanded={expanded} onClick={() => void toggleHolding(holding.symbol)}>
                           {expanded ? '收起明细' : '查看 22 维'}<ChevronDown className={expanded ? 'is-open' : undefined} size={12} />
@@ -306,7 +273,8 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
                               task.result_message,
                             )
                             const taskRetryable = Boolean(
-                              task.retryable
+                              gaps.includes(task.dimension_id)
+                              && task.retryable
                               && ['failed', 'partial'].includes(task.status)
                               && task.attempt < (task.max_attempts ?? Number.POSITIVE_INFINITY)
                             )
@@ -335,13 +303,14 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
         <header><div><strong>股票采集子任务</strong><small>按缺失维度分批执行，失败恢复不会重采基金持仓</small></div><span>{childJobs.length || job.child_collection_job_ids.length} 个批次</span></header>
         {childJobs.length ? childJobs.map((child) => {
           const status = jobStatusMeta(child.status)
-          const settled = child.progress.completed + child.progress.failed + child.progress.skipped
+          const settled = collectionSettledCount(child.progress)
           return (
             <article key={child.job_id}>
               <StatusBadge label={status.label} tone={status.tone} />
               <div><strong>{child.symbols.length} 只股票 · {dimensionCount(child)} 个维度</strong><code>{child.job_id}</code></div>
               <div>
                 <span>成功 {child.progress.completed}</span><span>失败 {child.progress.failed}</span>
+                {Boolean(child.progress.partial) && <span>部分完成 {child.progress.partial}</span>}
                 <small>{settled}/{child.progress.total} 已结算</small>
                 {child.progress.provider && settled < child.progress.total ? (
                   <small>上游 {child.progress.provider.completed}/{child.progress.provider.total} · {child.progress.provider.phase}</small>
@@ -358,23 +327,23 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
         <DiagnosticBuckets title="按数据维度" buckets={portfolio.by_dimension} />
       </div> : null}
 
-      {!collectionReady ? (
+      {missingSlots || portfolio.retryable_slots || portfolio.active_slots ? (
         <div className={`mdc-fund-recovery ${portfolio.retryable_slots ? 'is-retryable' : portfolio.active_slots || !portfolio.blocked_slots ? 'is-active' : 'is-blocked'}`} role={portfolio.blocked_slots && !portfolio.retryable_slots && !portfolio.active_slots ? 'alert' : 'status'}>
           {portfolio.active_slots || !portfolio.blocked_slots ? <CircleDashed size={18} aria-hidden="true" /> : <AlertTriangle size={18} aria-hidden="true" />}
           <div>
             <strong>{portfolio.active_slots
               ? `${portfolio.active_slots} 个槽正在处理`
               : portfolio.retryable_slots
-                ? `${portfolio.retryable_slots} 个槽可恢复，${portfolio.blocked_slots} 个槽需修复`
+                ? `${portfolio.retryable_slots} 个槽可重试，${portfolio.blocked_slots} 个槽不可重试/已降级`
                 : portfolio.blocked_slots
-                  ? '当前缺口不能靠重复采集解决'
+                  ? `${portfolio.blocked_slots} 个槽不可重试，缺口将降级披露`
                   : '等待股票子任务启动或同步状态'}</strong>
             <p>{portfolio.active_slots
               ? '运行完成后会按 UZI 原生口径重新计算；已落库的基金持仓与可用快照不会重采。'
               : portfolio.retryable_slots
-                ? `仅重新查询可重试的数据源缺口；已落库持仓和 ${portfolio.ready_slots} 个合格槽继续复用。当前恢复轮次 ${Math.max(1, portfolio.attempt)}。`
+                ? `仅重新查询可重试的数据源缺口；已落库持仓和 ${portfolio.ready_slots} 个严格可用槽继续复用。研究缺口仅作 Agent 输入提示，冻结安全校验与原生最终自审独立执行，当前恢复轮次 ${Math.max(1, portfolio.attempt)}。`
                 : portfolio.blocked_slots
-                  ? '阻断槽仅表示 UZI 原生关键数据缺失或采集失败；扩展证据与字段审计不会阻断。'
+                  ? '这些槽没有可证明的历史档案或已达到重试上限，不会用当前数据回填历史；冻结时披露缺口，不调整 UZI 原生评分权重。研究缺口仅作 Agent 输入提示，冻结安全校验与原生最终自审独立执行。'
                   : '父任务已创建，正在等待股票采集批次写入最新进度。'}</p>
           </div>
           {portfolio.retryable_slots && !portfolio.active_slots && !bundleFrozen && !agentRecoveryActive ? <button className="primary-button" type="button" disabled={actionLoading} onClick={() => void onRetry(job.job_id).catch(() => undefined)}><RotateCcw size={15} />{actionLoading ? '正在提交…' : `重试 ${portfolio.retryable_slots} 个可重试槽`}</button> : null}

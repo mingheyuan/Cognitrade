@@ -39,6 +39,8 @@ COPY research_system ./research_system
 COPY domain_packs ./domain_packs
 COPY workspace/config ./workspace_templates/config
 COPY scripts/migrate_workspace.py ./scripts/migrate_workspace.py
+COPY scripts/probe_codex_provider.py ./scripts/probe_codex_provider.py
+COPY scripts/codex_login.py ./scripts/codex_login.py
 COPY migrations ./migrations
 COPY alembic.ini ./alembic.ini
 COPY deploy/backend-entrypoint.sh /usr/local/bin/cognitrade-entrypoint

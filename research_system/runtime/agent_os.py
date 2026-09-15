@@ -155,7 +155,9 @@ class AgentOS:
         self.plan_agent = MainAgentPlanRole(self.dynamic_planner)
         self._active: dict[str, ExecutionGraphRunner] = {}
         self._prepared_run_ids: set[str] = set()
+        self._starting_prepared_run_ids: set[str] = set()
         self._resolved_request_preflight = None
+        self._continuation_preflight = None
         self._lock = RLock()
         self.turn_runner = TurnRunner(
             run_store=self.run_store,
@@ -168,6 +170,20 @@ class AgentOS:
         """Bind a domain-neutral preflight applied after intake resolution."""
 
         self._resolved_request_preflight = callback
+
+    def bind_continuation_preflight(self, callback) -> None:
+        """Bind read-only admission before resuming any persisted execution.
+
+        The owning domain validates fixed inputs; Core must do this before
+        completed nodes, idempotent receipts or cached outputs can be reused.
+        Reading/replaying existing artifacts deliberately does not call it.
+        """
+        self._continuation_preflight = callback
+
+    def _validate_continuation_request(self, request: RequestEnvelope) -> None:
+        callback = getattr(self, "_continuation_preflight", None)
+        if callable(callback):
+            callback(request)
 
     def list_domain_packs(self) -> list[dict[str, Any]]:
         return [
@@ -287,6 +303,10 @@ class AgentOS:
                 )
 
     def _memory_retrieval_backend(self):
+        if not getattr(self.provider, "supports_embeddings", True):
+            # Do not mix legacy semantic vectors with synthetic hash vectors.
+            # LayeredMemoryStore retains its lexical source-of-truth path.
+            return None
         if not (self.settings.memory_vector_search_enabled or self.settings.qdrant_url):
             return None
         try:
@@ -491,6 +511,8 @@ class AgentOS:
             raise ValueError(
                 "GraphRunner must be advanced through the TurnRunner safe-point adapter"
             )
+        if resume:
+            self._validate_continuation_request(request)
         runner = self._runner(
             run_id,
             event_callback=event_callback,
@@ -618,6 +640,16 @@ class AgentOS:
         if not str(request.intent or "").strip():
             request = decision.apply_to(request)
         intent = str(request.intent or "").strip()
+        input_payload = dict(request.slots.get("user_request") or {})
+        if str(request.constraints.get("data_source_mode") or "").strip().lower() == "bundle_only":
+            # Formal preflight has already replaced these top-level slots
+            # with trusted frozen inputs. A nested request may predate that
+            # binding; it cannot shadow it or restore an unpinned workflow.
+            for key in ("snapshots", "source_refs", "market_data_bundle", "report_data_manifest"):
+                if key in request.slots:
+                    input_payload[key] = request.slots[key]
+                elif key in input_payload:
+                    raise ValueError(f"bundle_only nested {key} has no trusted top-level binding")
         graph = self._build_initial_graph(request=request, decision=decision)
         effective_run_id, paths, _ = self.run_store.create_run(
             request,
@@ -635,7 +667,6 @@ class AgentOS:
             graph=graph,
             status="running",
         )
-        input_payload = dict(request.slots.get("user_request") or {})
         input_payload.setdefault("query", request.user_query)
         for key in (
             "symbols",
@@ -715,10 +746,11 @@ class AgentOS:
                 response = ResponseEnvelope.model_validate(persisted_response)
                 self.turn_runner.reconcile_persisted_response(response)
                 return response
-            # Idempotency applies while a worker is still running too.  Return
-            # the persisted lifecycle view instead of routing the same request
-            # into a second execution attempt.
-            return self._inflight_idempotent_response(existing_run_id)
+            # The owning background worker must enter its reservation once;
+            # it is not a duplicate of itself. External repeats (including a
+            # different request ID) still only observe the existing lifecycle.
+            if not self._claim_prepared_start(request, run_id, existing_run_id):
+                return self._inflight_idempotent_response(existing_run_id)
         reuse_existing = False
         if run_id:
             existing_paths = self.run_store.load_run_paths(run_id)
@@ -748,6 +780,32 @@ class AgentOS:
         finally:
             with self._lock:
                 self._prepared_run_ids.discard(effective_run_id)
+                self._starting_prepared_run_ids.discard(effective_run_id)
+
+    def _claim_prepared_start(
+        self, request: RequestEnvelope, run_id: str | None, existing_run_id: str
+    ) -> bool:
+        """Claim only this process's original, unstarted reservation.
+
+        The API worker lease owns cross-process exclusion. The in-memory claim
+        also prevents concurrent entries before the first Turn is persisted.
+        Restart recovery must explicitly adopt the reservation first.
+        """
+        if run_id != existing_run_id:
+            return False
+        with self._lock:
+            if run_id not in self._prepared_run_ids or run_id in self._starting_prepared_run_ids:
+                return False
+            root = self.run_store.load_run_paths(run_id).root
+            pending = read_json(root / "agent_os_pending.json")
+            if not isinstance(pending, dict) or pending.get("request_id") != request.request_id:
+                return False
+            if any((root / name).exists() for name in (
+                "turn_state.json", "main_agent_state.json", "execution_snapshot.json", "response.json"
+            )):
+                return False
+            self._starting_prepared_run_ids.add(run_id)
+            return True
 
     def _inflight_idempotent_response(self, run_id: str) -> ResponseEnvelope:
         """Return a stable response while an idempotent Run has no result yet."""
@@ -1416,6 +1474,7 @@ class AgentOS:
             ):
                 raise ValueError(f"core run is not resumable: {state.status}")
             request, decision = self._load_core_request(run_id)
+            self._validate_continuation_request(request)
             result, _ = self._resume_core_task(
                 request=request,
                 decision=decision,
@@ -1424,6 +1483,7 @@ class AgentOS:
             )
             return result  # type: ignore[return-value]
         request, decision = self._load_graph_request(run_id)
+        self._validate_continuation_request(request)
         snapshot = detail.get("snapshot") or {}
         turn_config = self._stored_turn_config(detail)
         turn_status = str((detail.get("turn") or {}).get("status") or "")
@@ -1451,6 +1511,7 @@ class AgentOS:
         if detail.get("mode") == "core":
             raise ValueError("Core Agent Loop runs do not expose graph nodes for partial rerun")
         request, decision = self._load_graph_request(run_id)
+        self._validate_continuation_request(request)
         snapshot = detail.get("snapshot") or {}
         turn_config = self._stored_turn_config(detail)
         outcome = self.turn_runner.execute_task(
@@ -1540,6 +1601,10 @@ class AgentOS:
         request_payload = read_json(paths.request) or {}
         if isinstance(request_payload, dict) and isinstance(request_payload.get("request"), dict):
             request_payload = request_payload["request"]
+        constraints = request_payload.get("constraints") if isinstance(request_payload, dict) else None
+        frozen_report = isinstance(constraints, dict) and constraints.get("data_source_mode") == "bundle_only"
+        # Frozen reports already emit structured runtime/UZI progress. Avoid
+        # extra synchronous model calls for node and tool progress prose only.
         return ExecutionGraphRunner(
             registry=self.registry,
             run_root=paths.root,
@@ -1556,7 +1621,7 @@ class AgentOS:
             llm_provider=self.provider,
             cache_root=self.settings.memory_root / "agent_os_cache",
             event_callback=event_callback,
-            progress_observer=self.main_agent.observe_graph_progress,
+            progress_observer=None if frozen_report else self.main_agent.observe_graph_progress,
             turn_id=turn_id,
             user_id=(request_payload.get("user_id") if isinstance(request_payload, dict) else None),
             tenant_id=(request_payload.get("tenant_id") if isinstance(request_payload, dict) else None),
@@ -1680,6 +1745,7 @@ class AgentOS:
         if not step:
             raise ValueError("Graph recovery must be advanced through TurnRunner")
         request, _ = self._load_graph_request(run_id)
+        self._validate_continuation_request(request)
         runner = self._runner(
             run_id,
             event_callback=event_callback,
@@ -1711,6 +1777,7 @@ class AgentOS:
         if not step:
             raise ValueError("Graph worker recovery must be advanced through TurnRunner")
         request, _ = self._load_graph_request(run_id)
+        self._validate_continuation_request(request)
         runner = self._runner(
             run_id,
             event_callback=event_callback,
@@ -1740,6 +1807,7 @@ class AgentOS:
         deadline_at: float | None = None,
     ) -> GraphStepOutcome | ExecutionRunResult:
         request, _ = self._load_graph_request(run_id)
+        self._validate_continuation_request(request)
         turn_payload = read_json(
             self.run_store.load_run_paths(run_id).root / "turn_state.json"
         )

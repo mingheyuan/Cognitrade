@@ -136,7 +136,7 @@ def test_uzi_inexplicably_empty_enabled_dimension_blocks() -> None:
     )
 
 
-def test_safe_historical_gap_is_disclosed_without_blocking_report() -> None:
+def test_historical_disclosure_does_not_override_native_empty_dimension_gate() -> None:
     rows = _native_rows()
     rows["19_contests"] = SimpleNamespace(
         status="data_gap",
@@ -159,13 +159,12 @@ def test_safe_historical_gap_is_disclosed_without_blocking_report() -> None:
 
     report = evaluate_uzi_collection_gate(rows, profile="medium")
 
-    assert report["gate_passed"] is True
-    assert report["critical_count"] == 0
+    assert report["gate_passed"] is False
+    assert report["critical_count"] == 1
     assert any(
         row["check"] == "empty_dims"
         and row["dimension"] == "19_contests"
-        and row["severity"] == "warning"
-        and "评分排除" in row["message"]
+        and row["severity"] == "critical"
         for row in report["issues"]
     )
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 from typing import Any
 
@@ -7,10 +8,8 @@ import akshare as ak
 
 from research_system.adapters.vendors.akshare_utils import (
     call_with_retry,
-    normalize_ashare_symbol,
     normalize_value,
 )
-
 
 _LHB_STATISTICS_PERIOD = "\u8fd1\u4e00\u6708"
 _LHB_SYMBOL_COLUMNS = {
@@ -28,24 +27,29 @@ class AkShareLHBAdapter:
     def get_lhb_snapshot(
         self, *, symbol: str, as_of_date: date | None = None
     ) -> dict[str, Any]:
+        provider_symbol = self._provider_symbol(symbol)
         target = as_of_date or date.today()
         window_start = target - timedelta(days=30)
         date_df = call_with_retry(
-            lambda: ak.stock_lhb_stock_detail_date_em(symbol=symbol),
+            lambda: ak.stock_lhb_stock_detail_date_em(symbol=provider_symbol),
             retries=2,
             delay_seconds=0.5,
         )
-        dates = (
+        historical_dates = (
             sorted(
                 {
                     parsed
                     for row in date_df.to_dict("records")
                     for value in row.values()
-                    if window_start <= (parsed := self._date_value(value)) <= target
+                    if date.min < (parsed := self._date_value(value)) <= target
                 }
             )
             if not date_df.empty
             else []
+        )
+        dates = [value for value in historical_dates if value >= window_start]
+        latest_historical_date = (
+            historical_dates[-1].strftime("%Y%m%d") if historical_dates else None
         )
         if not dates:
             # A successful empty date list is a verified zero-event result,
@@ -55,6 +59,7 @@ class AkShareLHBAdapter:
             return {
                 "symbol": symbol,
                 "latest_lhb_date": None,
+                "latest_historical_lhb_date": latest_historical_date,
                 "buy_detail": [],
                 "sell_detail": [],
                 "lhb_statistics": [],
@@ -68,14 +73,14 @@ class AkShareLHBAdapter:
         latest_date = dates[-1].strftime("%Y%m%d")
         buy_df = call_with_retry(
             lambda: ak.stock_lhb_stock_detail_em(
-                symbol=symbol, date=latest_date, flag="买入"
+                symbol=provider_symbol, date=latest_date, flag="买入"
             ),
             retries=2,
             delay_seconds=0.5,
         )
         sell_df = call_with_retry(
             lambda: ak.stock_lhb_stock_detail_em(
-                symbol=symbol, date=latest_date, flag="卖出"
+                symbol=provider_symbol, date=latest_date, flag="卖出"
             ),
             retries=2,
             delay_seconds=0.5,
@@ -96,6 +101,7 @@ class AkShareLHBAdapter:
         return {
             "symbol": symbol,
             "latest_lhb_date": latest_date,
+            "latest_historical_lhb_date": latest_historical_date,
             "buy_detail": [
                 self._normalize_row(item) for item in buy_df.head(10).to_dict("records")
             ]
@@ -118,6 +124,21 @@ class AkShareLHBAdapter:
             "observation_status": "verified_non_empty",
             "observation_window_days": 30,
         }
+
+    @staticmethod
+    def _provider_symbol(symbol: str) -> str:
+        """Convert CN symbol notation to the six-digit code expected by LHB APIs."""
+        raw = str(symbol or "").strip().upper()
+        match = re.fullmatch(
+            r"(?:([0-9]{6})(?:\.(?:SH|SZ|BJ))?|(?:SH|SZ|BJ)\.?([0-9]{6}))",
+            raw,
+        )
+        if match is None:
+            raise ValueError(
+                "AkShare LHB requires a six-digit CN stock code, optionally "
+                "qualified by SH, SZ, or BJ"
+            )
+        return match.group(1) or match.group(2)
 
     @staticmethod
     def _date_value(value: str) -> date:
@@ -163,6 +184,8 @@ class AkShareLHBAdapter:
 
     def _matches_symbol(self, row: dict[str, Any], symbol: str) -> bool:
         target = self._symbol_text(symbol)
+        if not target:
+            return False
         for key, value in row.items():
             if (
                 str(key).strip().lower() in _LHB_SYMBOL_COLUMNS
@@ -172,14 +195,14 @@ class AkShareLHBAdapter:
         return False
 
     def _symbol_text(self, value: Any) -> str:
-        normalized = str(normalize_value(value) or "").strip().lower()
-        if normalized.endswith(".0"):
-            normalized = normalized[:-2]
-        if normalized[:2] in {"sh", "sz", "bj"}:
-            normalized = normalized[2:]
+        normalized = str(normalize_value(value) or "").strip()
+        normalized = normalized.removesuffix(".0")
         if normalized.isdigit():
             normalized = normalized.zfill(6)
-        return normalize_ashare_symbol(normalized)
+        try:
+            return self._provider_symbol(normalized)
+        except ValueError:
+            return ""
 
     def _sum_numeric_column(self, df) -> float | None:
         if df is None or getattr(df, "empty", True):

@@ -6,10 +6,11 @@ import inspect
 import json
 import math
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
@@ -61,6 +62,10 @@ from domain_packs.finance_ashare.tools.uzi_data_recovery import (
 from domain_packs.finance_ashare.vendor.uzi_3_9_2 import (
     UZI_ENVIRONMENT_LOCK,
     Uzi392FetcherRuntime,
+)
+from domain_packs.finance_ashare.vendor.uzi_3_9_2.search_budget import (
+    ThreadStockSearchBudget,
+    submit_budget_context,
 )
 from research_system.adapters.vendors.akshare_utils import initialize_akshare_js_runtime
 from research_system.adapters.vendors.baostock_socket_safety import (
@@ -325,6 +330,60 @@ def _uzi_profile_environment(
                     os.environ[key] = value
 
 
+def _fixed_basic_inputs(
+    fixed_basic_by_symbol: Mapping[str, dict[str, Any]] | None,
+    *,
+    symbols: list[str],
+    requested: tuple[str, ...],
+    sector: str | None,
+    uzi_root_route: bool,
+    as_of_date: date | None,
+    cutoff_at: datetime | None,
+) -> dict[str, dict[str, Any]] | None:
+    if fixed_basic_by_symbol is None:
+        return None
+    if uzi_root_route:
+        raise ValueError("fixed_basic_root_route_forbidden")
+    if (as_of_date is None) != (cutoff_at is None):
+        raise ValueError("fixed_basic_historical_route_forbidden")
+    if "market" in requested:
+        raise ValueError("fixed_basic_market_request_conflict")
+    if sector:
+        raise ValueError("fixed_basic_sector_scope_forbidden")
+    if not isinstance(fixed_basic_by_symbol, Mapping):
+        raise ValueError("fixed_basic_mapping_invalid")  # noqa: TRY004 - static dependency validation contract
+    if not symbols or set(fixed_basic_by_symbol) != set(symbols):
+        raise ValueError("fixed_basic_symbol_scope_mismatch")
+    fixed: dict[str, dict[str, Any]] = {}
+    for symbol, raw in fixed_basic_by_symbol.items():
+        if not isinstance(raw, Mapping) or not isinstance(raw.get("data"), Mapping):
+            raise ValueError("fixed_basic_dimresult_invalid")  # noqa: TRY004 - static dependency validation contract
+        if as_of_date is not None:
+            from research_system.market_data.fixed_pit_inputs import validate_pit_input
+            validate_pit_input(raw, symbol=symbol, dimension="0_basic", day=as_of_date, cutoff=cutoff_at)
+        fixed[symbol] = deepcopy({**raw, "data": dict(raw["data"])})
+    return fixed
+
+
+def _fixed_materials_inputs(value, basic, *, requested, symbols):
+    if value is None:
+        if basic is not None and "futures" in requested and "materials" not in requested:
+            raise ValueError("fixed_materials_dependency_required")
+        return None
+    if basic is None:
+        raise ValueError("fixed_materials_basic_required")
+    if "materials" in requested:
+        raise ValueError("fixed_materials_request_conflict")
+    if "futures" not in requested:
+        raise ValueError("fixed_materials_futures_required")
+    if not isinstance(value, Mapping) or set(value) != set(symbols):
+        raise ValueError("fixed_materials_symbol_scope_mismatch")
+    for raw in value.values():
+        if not isinstance(raw, Mapping) or not isinstance(raw.get("data"), Mapping):
+            raise ValueError("fixed_materials_dimresult_invalid")  # noqa: TRY004 - static dependency validation contract
+    return deepcopy(dict(value))
+
+
 def collect_snapshots(
     *,
     query: str,
@@ -342,11 +401,32 @@ def collect_snapshots(
     no_resume: bool = False,
     as_of_date: date | None = None,
     cutoff_at: datetime | None = None,
+    fixed_basic_by_symbol: Mapping[str, dict[str, Any]] | None = None,
+    fixed_materials_by_symbol: Mapping[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
+    """Collect current/PIT snapshots, optionally rebuilding from caller-bound basic.
+
+    Fixed inputs are explicitly scoped dependency transport. Historical inputs
+    additionally require a matching snapshot/hash/date/cutoff binding.
+    The caller owns DB/PIT/hash validation. They never enter the root/current
+    basic fetch or unbound historical route, nor reuse/write an unbound host snapshot
+    cache; native provider TTL and all fetch budgets remain unchanged.
+    """
     requested = tuple(
         dict.fromkeys(str(item).strip() for item in snapshot_types if str(item).strip())
     )
     resolved_symbols = _unique_symbols(symbols)
+    fixed_basic = _fixed_basic_inputs(
+        fixed_basic_by_symbol, symbols=resolved_symbols, requested=requested,
+        sector=sector, uzi_root_route=uzi_root_route, as_of_date=as_of_date,
+        cutoff_at=cutoff_at,
+    )
+    fixed_materials = _fixed_materials_inputs(fixed_materials_by_symbol, fixed_basic,
+                                             requested=requested, symbols=resolved_symbols)
+    if fixed_materials is not None and as_of_date is not None:
+        from research_system.market_data.fixed_pit_inputs import validate_pit_input
+        for symbol, raw in fixed_materials.items():
+            validate_pit_input(raw, symbol=symbol, dimension="8_materials", day=as_of_date, cutoff=cutoff_at)
     routed_types = [
         snapshot_type
         for snapshot_type in requested
@@ -415,7 +495,7 @@ def collect_snapshots(
                                 }
                             )
 
-                    return _collect_snapshots(
+                    return _collect_scoped_stock_snapshots(
                         query=query,
                         symbols=[symbol],
                         snapshot_types=requested,
@@ -433,6 +513,12 @@ def collect_snapshots(
                         progress_callback=emit_symbol_progress,
                         as_of_date=as_of_date,
                         cutoff_at=cutoff_at,
+                        fixed_basic_by_symbol=(
+                            {symbol: fixed_basic[symbol]} if fixed_basic is not None else None
+                        ),
+                        fixed_materials_by_symbol=(
+                            {symbol: fixed_materials[symbol]} if fixed_materials is not None else None
+                        ),
                     )
 
                 executor = ThreadPoolExecutor(
@@ -468,7 +554,7 @@ def collect_snapshots(
                     for symbol_index in range(len(resolved_symbols))
                     for row in collected_by_symbol.get(symbol_index, [])
                 ]
-            return _collect_snapshots(
+            return _collect_scoped_stock_snapshots(
                 query=query,
                 symbols=resolved_symbols,
                 snapshot_types=requested,
@@ -481,6 +567,8 @@ def collect_snapshots(
                 progress_callback=progress_callback,
                 as_of_date=as_of_date,
                 cutoff_at=cutoff_at,
+                fixed_basic_by_symbol=fixed_basic,
+                fixed_materials_by_symbol=fixed_materials,
             )
     return _collect_snapshots(
         query=query,
@@ -495,7 +583,31 @@ def collect_snapshots(
         progress_callback=progress_callback,
         as_of_date=as_of_date,
         cutoff_at=cutoff_at,
+        fixed_basic_by_symbol=fixed_basic,
+        fixed_materials_by_symbol=fixed_materials,
     )
+
+
+def _collect_scoped_stock_snapshots(**kwargs):
+    """Keep scoped acquisition's native allowance independent of other stocks.
+
+    Historical/sector entry semantics are unchanged. A timed-out current source
+    retains its sealed private context; it cannot consume a later wave's quota.
+    """
+    if kwargs.get("as_of_date") is not None or kwargs.get("sector") or len(kwargs["symbols"]) != 1:
+        return _collect_snapshots(**kwargs)
+    profile = importlib.import_module("lib.analysis_profile").get_profile(kwargs.get("research_profile"))
+    budget = ThreadStockSearchBudget(profile.ddg_budget)
+    try:
+        with budget.transport():
+            rows = _collect_snapshots(**kwargs)
+    finally:
+        budget.seal()
+    receipt = budget.receipt()
+    return [{**row, "facts": {**(row.get("facts") or {}), "_uzi_execution": {
+        "lane": "scoped_fetchers", "input_contract": "native-scoped-search-budget-v1",
+        "search_budget": deepcopy(receipt),
+    }}} for row in rows]
 
 
 def _collect_snapshots_with_uzi_root_router(
@@ -644,7 +756,7 @@ def _collect_snapshots_with_uzi_root_router(
                         # UZI's dedicated versus/portfolio runners hard-code
                         # resume=True.  Request-local no_resume belongs only to
                         # the single-stock root CLI route.
-                        resume=not no_resume if route_mode == "single" else True,
+                        resume=not no_resume if route_mode in {"single", "skill"} else True,
                         options=scoped_route_options,
                     )
                 normalized = normalize_json_value(symbol_result)
@@ -799,6 +911,8 @@ def _collect_snapshots(
     progress_callback=None,
     as_of_date: date | None = None,
     cutoff_at: datetime | None = None,
+    fixed_basic_by_symbol: Mapping[str, dict[str, Any]] | None = None,
+    fixed_materials_by_symbol: Mapping[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Collect the Finance Pack's declared snapshots through shared vendor adapters."""
     requested = list(
@@ -907,8 +1021,8 @@ def _collect_snapshots(
         # always run, while valid numbered dimensions are reused.
         cached = (
             None
-            if _uses_uzi_fetcher(snapshot_type)
-            and not _uses_uzi_resume_cache(snapshot_type)
+            if symbol in (fixed_basic_by_symbol or {})
+            or (_uses_uzi_fetcher(snapshot_type) and not _uses_uzi_resume_cache(snapshot_type))
             else _load_snapshot_cache(
                 cache_root=cache_root,
                 snapshot_type=snapshot_type,
@@ -932,14 +1046,15 @@ def _collect_snapshots(
             snapshot_type: str,
             result: dict[str, Any],
         ) -> None:
+            result = _bind_historical_failure(result, as_of_date=as_of_date, cutoff_at=cutoff_at)
             if _uses_uzi_fetcher(snapshot_type) and result.get("symbol") != symbol:
                 # Provider invocation follows UZI's canonical ticker returned
                 # by basic, while ArtifactBoard entity ownership remains the
                 # caller's requested symbol across every dimension.
                 result = {**result, "symbol": symbol}
             results[index] = result
-            if not _uses_uzi_fetcher(snapshot_type) or _uses_uzi_resume_cache(
-                snapshot_type
+            if symbol not in (fixed_basic_by_symbol or {}) and (
+                not _uses_uzi_fetcher(snapshot_type) or _uses_uzi_resume_cache(snapshot_type)
             ):
                 _save_snapshot_cache(
                     cache_root=cache_root,
@@ -981,12 +1096,27 @@ def _collect_snapshots(
             store_result(index, symbol, snapshot_type, result)
         pending_tasks = [task for task in pending_tasks if task[2] != "market"]
         basic_by_symbol = {
-            symbol: raw
+            symbol: {
+                **raw,
+                **({"_pit_context": dict(results[index]["historical_reconstruction"])}
+                   if as_of_date is not None
+                   and (results[index].get("historical_reconstruction") or {}).get("safe") is True
+                   and (results[index].get("historical_reconstruction") or {}).get("requested_as_of_date") == as_of_date.isoformat()
+                   else {}),
+            }
             for index, symbol, snapshot_type in tasks
             if snapshot_type == "market"
             and index in results
             and (raw := _uzi_raw_result(results[index])) is not None
         }
+        basic_by_symbol.update(deepcopy(dict(fixed_basic_by_symbol or {})))
+
+        def dependency_basic(symbol: str) -> dict[str, Any]:
+            raw = basic_by_symbol[symbol]
+            # One fixed revision may feed several concurrent dimensions. A
+            # native consumer cannot mutate another consumer's fixed input.
+            return deepcopy(raw) if fixed_basic_by_symbol is not None else raw
+
         invocation_symbol_by_symbol = {
             symbol: str(raw.get("ticker") or symbol).strip() or symbol
             for symbol, raw in basic_by_symbol.items()
@@ -1013,7 +1143,7 @@ def _collect_snapshots(
         ]
         for index, symbol, snapshot_type in serial_tasks:
             dependencies = (
-                {"0_basic": basic_by_symbol[symbol]}
+                {"0_basic": dependency_basic(symbol)}
                 if symbol in basic_by_symbol
                 else None
             )
@@ -1078,7 +1208,7 @@ def _collect_snapshots(
             for index, symbol, snapshot_type in other_wave2_tasks:
                 dependencies: dict[str, dict[str, Any]] = {}
                 if symbol in basic_by_symbol:
-                    dependencies["0_basic"] = basic_by_symbol[symbol]
+                    dependencies["0_basic"] = dependency_basic(symbol)
                 invocation_symbol = (
                     invocation_symbol_by_symbol.get(symbol, symbol)
                     if _uses_uzi_fetcher(snapshot_type)
@@ -1089,7 +1219,7 @@ def _collect_snapshots(
                     or _UZI_FETCHER_BY_SNAPSHOT_TYPE.get(snapshot_type)
                     in _UZI_INDIVIDUAL_DEADLINE_FETCHERS
                 ):
-                    future = executor.submit(
+                    future = submit_budget_context(executor,
                         _run_snapshot_skill_with_deadline,
                         query=query,
                         symbol=invocation_symbol,
@@ -1102,7 +1232,7 @@ def _collect_snapshots(
                         cutoff_at=cutoff_at,
                     )
                 else:
-                    future = executor.submit(
+                    future = submit_budget_context(executor,
                         _run_snapshot_skill,
                         query,
                         invocation_symbol,
@@ -1123,7 +1253,7 @@ def _collect_snapshots(
             ) -> dict[str, Any]:
                 dependencies: dict[str, dict[str, Any]] = {}
                 if symbol in basic_by_symbol:
-                    dependencies["0_basic"] = basic_by_symbol[symbol]
+                    dependencies["0_basic"] = dependency_basic(symbol)
                 material_snapshot = None
                 if material_future is not None:
                     material_snapshot = material_future.result()
@@ -1133,9 +1263,25 @@ def _collect_snapshots(
                     if _uses_uzi_fetcher("futures"):
                         material_raw = _uzi_raw_result(material_snapshot)
                         if material_raw is not None:
-                            dependencies["8_materials"] = material_raw
+                            dependencies["8_materials"] = {
+                                **material_raw,
+                                **({"_pit_context": deepcopy(material_snapshot["historical_reconstruction"])}
+                                   if as_of_date is not None
+                                   and (material_snapshot.get("historical_reconstruction") or {}).get("safe") is True
+                                   and material_snapshot["historical_reconstruction"].get("requested_as_of_date") == as_of_date.isoformat()
+                                   else {}),
+                            }
                     else:
                         dependencies["materials"] = material_snapshot
+                elif fixed_materials_by_symbol is not None and symbol in fixed_materials_by_symbol:
+                    dependencies["8_materials"] = deepcopy(fixed_materials_by_symbol[symbol])
+                if fixed_basic_by_symbol is not None and not isinstance(
+                    (dependencies.get("8_materials") or {}).get("data"), Mapping
+                ):
+                    result = _fetcher_failure_snapshot(query=query, symbol=invocation_symbol,
+                        snapshot_type="futures", exc=ValueError("fixed_materials_dependency_missing"))
+                    result["dependency_execution"] = {"status": "not_run", "reason_code": "fixed_materials_dependency_missing"}
+                    return result
                 return _run_snapshot_skill(
                     query,
                     invocation_symbol,
@@ -1147,7 +1293,7 @@ def _collect_snapshots(
                 )
 
             for index, symbol, snapshot_type in futures_tasks:
-                future = executor.submit(
+                future = submit_budget_context(executor,
                     run_futures_task,
                     symbol,
                     invocation_symbol_by_symbol.get(symbol, symbol),
@@ -1247,13 +1393,13 @@ def _collect_snapshots(
             futures = {}
             for index, symbol, snapshot_type in bonus_tasks:
                 dependencies = (
-                    {"0_basic": basic_by_symbol[symbol]}
+                    {"0_basic": dependency_basic(symbol)}
                     if symbol in basic_by_symbol
                     else None
                 )
                 invocation_symbol = invocation_symbol_by_symbol.get(symbol, symbol)
                 if as_of_date is not None:
-                    future = executor.submit(
+                    future = submit_budget_context(executor,
                         _run_snapshot_skill_with_deadline,
                         query=query,
                         symbol=invocation_symbol,
@@ -1266,7 +1412,7 @@ def _collect_snapshots(
                         cutoff_at=cutoff_at,
                     )
                 else:
-                    future = executor.submit(
+                    future = submit_budget_context(executor,
                         _run_snapshot_skill,
                         query,
                         invocation_symbol,
@@ -1368,7 +1514,7 @@ def _run_snapshot_skill_with_deadline(
         max_workers=1, thread_name_prefix="uzi-serial-fetcher"
     )
     context_args = (as_of_date, cutoff_at) if as_of_date is not None else ()
-    future = executor.submit(
+    future = submit_budget_context(executor,
         _run_snapshot_skill,
         query,
         symbol,
@@ -1390,14 +1536,14 @@ def _run_snapshot_skill_with_deadline(
 
         future.add_done_callback(release_lane)
         future.cancel()
-        return _fetcher_timeout_snapshot(
+        return _bind_historical_failure(_fetcher_timeout_snapshot(
             query=query,
             symbol=symbol,
             snapshot_type=snapshot_type,
             timeout_seconds=timeout_seconds,
             provider_registry=provider_registry,
             dependencies=dependencies,
-        )
+        ), as_of_date=as_of_date, cutoff_at=cutoff_at)
     finally:
         # Provider calls have their own transport deadlines but Python cannot
         # forcibly kill an in-flight thread.  Do not block the report response;
@@ -1483,12 +1629,22 @@ def _run_snapshot_skill(
             kwargs["dependencies"] = dependencies or {}
         return dict(normalize_json_value(skill.run(**kwargs)))
     except Exception as exc:
-        return _fetcher_failure_snapshot(
+        return _bind_historical_failure(_fetcher_failure_snapshot(
             query=query,
             symbol=symbol,
             snapshot_type=snapshot_type,
             exc=exc,
-        )
+        ), as_of_date=as_of_date, cutoff_at=cutoff_at)
+
+
+def _bind_historical_failure(snapshot, *, as_of_date, cutoff_at):
+    if as_of_date is None:
+        return snapshot
+    from research_system.market_data.historical import historical_failure_snapshot
+    dimension = _UZI_FETCHER_BY_SNAPSHOT_TYPE.get(snapshot.get("snapshot_type"), snapshot.get("snapshot_type"))
+    return historical_failure_snapshot(
+        snapshot, dimension=dimension, as_of_date=as_of_date, cutoff_at=cutoff_at,
+    ) or snapshot
 
 
 def _historical_capability_gap_snapshot(
@@ -1581,6 +1737,19 @@ def _annotate_point_in_time_snapshot(
     dimension = _UZI_FETCHER_BY_SNAPSHOT_TYPE.get(snapshot_type, snapshot_type)
     capability = capability_for_dimension(dimension)
     start = as_of_date - timedelta(days=max(0, capability.window_days))
+    # These adapters declare the actual request/filter window. A capability's
+    # maximum lookback must not be presented as a successfully queried range.
+    if snapshot_type in {"policy", "macro", "materials", "futures"} and isinstance(
+        facts.get("query_window"), dict
+    ):
+        window = facts["query_window"]
+        actual_start = date.fromisoformat(window["start"])
+        actual_end = date.fromisoformat(window["end"])
+        if not start <= actual_start <= actual_end == as_of_date:
+            raise ValueError(
+                f"{snapshot_type} query window does not match requested PIT range"
+            )
+        start = actual_start
     retrieved_at = datetime.now(timezone.utc).isoformat()
     availability = str(facts.get("availability") or "").strip().lower()
     if availability not in _UNAVAILABLE_QUALITY_STATUSES and projected:
@@ -1608,13 +1777,28 @@ def _annotate_point_in_time_snapshot(
         trace.append(
             {
                 **row,
-                "query_window": {
+                "query_window": row.get("query_window")
+                or {
                     "start": start.isoformat(),
                     "end": as_of_date.isoformat(),
                 },
                 "cutoff_at": cutoff_at.isoformat() if cutoff_at else None,
             }
         )
+    proof_basis = "source_bounded_point_in_time_query"
+    if snapshot_type in {"materials", "futures"}:
+        price_queries = [
+            row for row in trace if row.get("query_scope") == "futures_prices"
+        ]
+        if not any(row.get("request_executed") is True for row in price_queries):
+            proof_basis = "no_market_observations_without_query"
+        elif any(
+            row.get("retained_count") or row.get("bounded_query_completed")
+            for row in price_queries
+        ):
+            proof_basis = "date_filtered_provider_series"
+        else:
+            proof_basis = "failed_request_without_market_observations"
     prepared.update(
         {
             "snapshot_date": as_of_date.isoformat(),
@@ -1644,7 +1828,7 @@ def _annotate_point_in_time_snapshot(
                 "window_end": as_of_date.isoformat(),
                 "recoverable_fields": list(capability.recoverable_fields),
                 "current_only_fields": list(capability.current_only_fields),
-                "proof_basis": "source_bounded_point_in_time_query",
+                "proof_basis": proof_basis,
             },
             "field_coverage": {
                 "recoverable_fields": list(capability.recoverable_fields),
@@ -1658,6 +1842,14 @@ def _annotate_point_in_time_snapshot(
         }
     )
     return _apply_dimension_quality_contract(prepared)
+
+
+def _declared_ohlcv_adjustment(history: dict[str, Any]) -> str | None:
+    """Only an explicit raw request proves raw prices; absence proves nothing."""
+    adjustment = history.get("adjust")
+    if adjustment is None:
+        return None
+    return "none" if adjustment == "" else str(adjustment)
 
 
 def _point_in_time_uzi_projection(
@@ -1698,7 +1890,7 @@ def _point_in_time_uzi_projection(
         return {
             **_point_in_time_kline_indicators(bars),
             "ohlcv": bars,
-            "ohlcv_adjustment": str(history.get("adjust") or "none"),
+            "ohlcv_adjustment": _declared_ohlcv_adjustment(history),
         }
     if snapshot_type == "valuation":
         valuation = dict(facts.get("valuation") or {})
@@ -1929,6 +2121,12 @@ def _project_uzi_symbol_snapshot(
     raw_result = dimensions.get(fetcher_id)
     if not isinstance(raw_result, dict):
         raw_result = None
+    # SKILL wave 3 produces root lists, not numbered dimensions. Preserve its
+    # separately captured source envelope so [] on failure is not success.
+    bonus_results = symbol_result.get("_uzi_bonus_results") or {}
+    bonus_key = {"fund_holders": "fund_managers", "similar_stocks": "similar_stocks"}.get(snapshot_type)
+    if bonus_key and isinstance(bonus_results, dict) and isinstance(bonus_results.get(bonus_key), dict):
+        raw_result = bonus_results[bonus_key]
     execution = (
         dict(symbol_result.get("_uzi_execution") or {})
         if isinstance(symbol_result.get("_uzi_execution"), dict)
@@ -1938,6 +2136,8 @@ def _project_uzi_symbol_snapshot(
     execution = {
         "lane": lane,
         "fallback_reason": execution.get("fallback_reason"),
+        **({"input_contract": execution["input_contract"]} if execution.get("input_contract") else {}),
+        **({"search_budget": execution["search_budget"]} if isinstance(execution.get("search_budget"), dict) else {}),
     }
 
     top_level_fields = {
@@ -1972,27 +2172,36 @@ def _project_uzi_symbol_snapshot(
         if bonus_present:
             data[bonus_field] = bonus_value
 
+    bonus_result = (
+        bonus_value
+        if isinstance(bonus_value, dict)
+        and "data" in bonus_value
+        and ("source" in bonus_value or isinstance(bonus_value.get("_pipeline"), dict))
+        else None
+    )
+    diagnostic_result = raw_result if raw_result is not None else bonus_result
     pipeline_meta = (
-        raw_result.get("_pipeline")
-        if raw_result is not None and isinstance(raw_result.get("_pipeline"), dict)
+        diagnostic_result.get("_pipeline")
+        if diagnostic_result is not None and isinstance(diagnostic_result.get("_pipeline"), dict)
         else {}
     )
     error = str(
-        (raw_result or {}).get("error") or pipeline_meta.get("error") or ""
+        (diagnostic_result or {}).get("error") or pipeline_meta.get("error") or ""
     ).strip()
     if raw_result is not None:
         availability = "available" if data and not error else "data_gap"
         source_text = str(raw_result.get("source") or f"uzi:{fetcher_id}").strip()
         dimension_fallback = bool(raw_result.get("fallback"))
     elif bonus_field is not None:
-        # Legacy has no bonus dimension envelopes; pipeline also spills
-        # similar_stocks only at symbol-root.  Presence is therefore the only
-        # faithful signal.  Keep [] and None distinct in `_uzi_top_level_fields`.
+        # Legacy has no bonus dimension envelopes. Pipeline failures can spill
+        # a DimResult at symbol-root: preserve that original value, but expose
+        # its failure rather than mistaking a non-null envelope for success.
+        # Keep [] and None distinct in `_uzi_top_level_fields`.
         availability = (
-            "available" if bonus_present and bonus_value is not None else "data_gap"
+            "available" if bonus_present and bonus_value is not None and not error else "data_gap"
         )
-        source_text = f"uzi:{lane}:top_level:{bonus_field}"
-        dimension_fallback = False
+        source_text = str((bonus_result or {}).get("source") or f"uzi:{lane}:top_level:{bonus_field}")
+        dimension_fallback = bool((bonus_result or {}).get("fallback"))
     else:
         availability = "data_gap"
         source_text = f"uzi:{lane}:missing:{fetcher_id}"
@@ -2002,12 +2211,14 @@ def _project_uzi_symbol_snapshot(
     quality_floor, pipeline_gaps, pipeline_reasons = _uzi_pipeline_quality_floor(
         snapshot_type=snapshot_type,
         symbol=str(
-            root_fields.get("full") or root_fields.get("ticker") or requested_symbol
+            symbol_result.get("full") or symbol_result.get("ticker") or requested_symbol
         ),
         data=data,
         pipeline_meta=pipeline_meta,
         error=error,
     )
+    if bonus_field and (bonus_value is None or (raw_result or {}).get("_timeout")):
+        availability = "data_gap"
     availability = _apply_quality_floor(availability, quality_floor)
 
     fallback_reason = execution.get("fallback_reason")
@@ -2456,7 +2667,7 @@ def _run_recovery_with_deadline(
     timeout_seconds: float = _UZI_RECOVERY_TIMEOUT_SECONDS,
 ) -> tuple[dict[str, Any] | None, str | None]:
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="snapshot-recovery")
-    future = executor.submit(loader)
+    future = submit_budget_context(executor, loader)
     try:
         result = future.result(timeout=timeout_seconds)
         return (
@@ -2620,7 +2831,7 @@ def _recover_kline_snapshot(
         projected={
             "ohlcv": bars,
             "history": history,
-            "ohlcv_adjustment": str(history.get("adjust") or "none") or "none",
+            "ohlcv_adjustment": _declared_ohlcv_adjustment(history),
         },
         partial_reason="uzi_kline_display_window_recovered_as_full_unadjusted_history",
         force_fields={"ohlcv", "history", "ohlcv_adjustment"},

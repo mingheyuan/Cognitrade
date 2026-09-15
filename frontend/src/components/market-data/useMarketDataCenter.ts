@@ -438,10 +438,6 @@ export function useMarketDataCenter(
       && job.end_date >= urlState.as_of_date) || null
   }, [jobs.items, resolvedAssetFamily, resolvedInstrument, urlState.as_of_date])
 
-  const latestFundMissingSlots = latestFundJob?.portfolio_summary?.missing_slots
-    ?? latestFundJob?.expanded_holdings.reduce((sum, holding) => sum + (holding.missing_dimensions?.length || 0), 0)
-    ?? 0
-
   const coverageCanGenerate = Boolean(
     coverage?.report_ready || coverage?.report_generatable,
   )
@@ -449,8 +445,7 @@ export function useMarketDataCenter(
     ? coverageCanGenerate && coverage?.latest_bundle
     : coverage?.report_ready && (latestFundJob?.freeze_status === 'frozen' && latestFundJob?.parent_bundle_id
       && latestFundJob.expanded_holdings.length === 10
-      && latestFundMissingSlots === 0
-      && ['completed', 'succeeded'].includes(latestFundJob.status))))
+    )))
 
   const freezeBlockReason = useMemo(() => {
     if (!resolvedInstrument || !resolvedAssetFamily) return '请先解析一个受支持的股票或基金'
@@ -461,10 +456,8 @@ export function useMarketDataCenter(
     if (!latestFundJob) return '尚未创建该日期的基金前十大持仓采集任务'
     if (latestFundJob.freeze_status !== 'frozen' || !latestFundJob.parent_bundle_id) return '组合数据仍是草稿，请在采集任务中确认冻结 Bundle'
     if (latestFundJob.expanded_holdings.length !== 10) return `持仓只落库了 ${latestFundJob.expanded_holdings.length}/10 只股票`
-    if (latestFundMissingSlots) return `前十大股票仍缺 ${latestFundMissingSlots} 个 UZI 原生槽位`
-    if (!['completed', 'succeeded'].includes(latestFundJob.status)) return '组合采集任务尚未完成最终校验'
     return ''
-  }, [coverage?.latest_bundle, coverage?.report_generatable, coverage?.report_ready, latestFundJob, latestFundMissingSlots, resolvedAssetFamily, resolvedInstrument])
+  }, [coverage?.latest_bundle, coverage?.report_generatable, coverage?.report_ready, latestFundJob, resolvedAssetFamily, resolvedInstrument])
 
   const refreshAfterCollectionAction = useCallback(async (jobId: string) => {
     await Promise.all([

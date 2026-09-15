@@ -6,7 +6,6 @@ from threading import Thread
 from typing import Any
 from urllib.parse import urlparse
 
-
 TRUSTED_DOMAINS_BY_DIM: dict[str, tuple[str, ...]] = {
     "macro": (
         "stats.gov.cn", "pbc.gov.cn", "safe.gov.cn", "gov.cn",
@@ -63,6 +62,7 @@ class UziWebSearchAdapter:
         dimension: str,
         max_results: int = 8,
         trusted: bool = True,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         from ddgs import DDGS
 
@@ -70,7 +70,10 @@ class UziWebSearchAdapter:
         scoped_query = query
         if domains:
             scoped_query = f"({' OR '.join(f'site:{domain}' for domain in domains[:10])}) {query}"
-        timeout_seconds = max(int(os.environ.get("UZI_DDG_TIMEOUT", "10")), 1)
+        configured_timeout = max(int(os.environ.get("UZI_DDG_TIMEOUT", "10")), 1)
+        timeout_seconds = configured_timeout if timeout_seconds is None else min(configured_timeout, timeout_seconds)
+        if timeout_seconds <= 0:
+            raise TimeoutError("DDGS request deadline exceeded")
 
         def load():
             with DDGS(timeout=timeout_seconds) as client:

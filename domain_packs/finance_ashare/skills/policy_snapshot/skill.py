@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from typing import Any
 
+from research_system.adapters.vendors.akshare_catalyst_adapter import (
+    _safe_disclosure_error,
+)
 from research_system.adapters.vendors.akshare_policy_adapter import AkSharePolicyAdapter
-from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
 from research_system.adapters.vendors.provider_execution import failure_facts
+from research_system.adapters.vendors.provider_registry import VendorProviderRegistry
 from research_system.adapters.vendors.uzi_news_adapter import UziNewsAdapter
 from research_system.adapters.vendors.uzi_web_search_adapter import UziWebSearchAdapter
 from research_system.schemas.snapshots import SnapshotSource, VerifiedSnapshot
@@ -27,12 +31,28 @@ class PolicySnapshotSkill:
         symbol: str | None = None,
         as_of_date: date | None = None,
         cutoff_at: datetime | None = None,
+        dependencies: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        del cutoff_at
         snapshot_date = (as_of_date or date.today()).isoformat()
         theme = str(
             sector or " ".join(item for item in (symbol, query) if item) or ""
         ).strip()
+        if as_of_date is not None:
+            basic = (dependencies or {}).get("0_basic") or {}
+            from research_system.market_data.fixed_pit_inputs import (
+                fixed_historical_profile,
+            )
+            fixed = fixed_historical_profile(dependencies, symbol=symbol, day=as_of_date, cutoff=cutoff_at)
+            if fixed is not None:
+                basic = fixed
+            proof = basic.get("_pit_context") or {}
+            proved = proof.get("safe") is True and proof.get("requested_as_of_date") == as_of_date.isoformat()
+            data = (basic.get("data") or {}) if proved else {}
+            # Unknown historical industry stays unknown. The known requested
+            # stock code is still sufficient for a bounded disclosure query.
+            theme = str(sector or data.get("industry") or "").strip()
+            code = str(symbol or "").split(".")[0]
+            constituents = [{"code": code, "name": str(data.get("name") or "")}] if re.fullmatch(r"\d{6}", code) else []
         provider_chain = (
             self.provider_registry.get_provider_chain("policy", "cn_sector")
             if self.provider_registry
@@ -52,7 +72,7 @@ class PolicySnapshotSkill:
                 "status": "configured",
             }
         ]
-        if not theme:
+        if not theme and not (as_of_date is not None and constituents):
             primary_source = SnapshotSource(
                 skill=self.skill_name,
                 vendor=self.adapter.vendor_name,
@@ -89,16 +109,18 @@ class PolicySnapshotSkill:
                 {
                     "provider_id": "akshare_policy",
                     "source_id": "em_data",
-                    "status": "available",
+                    "status": "no_data" if facts.get("policy_query_status") == "empty" else "provider_unavailable" if facts.get("policy_query_status") == "failed" else "available",
+                    **({"query_window": facts["query_window"]} if facts.get("query_window") else {}),
                 }
             )
+            trace.extend({"provider_id": "akshare_policy", **row} for row in facts.get("provider_attempts") or [])
         except Exception as exc:
             trace.append(
                 {
                     "provider_id": "akshare_policy",
                     "source_id": "em_data",
                     "status": "provider_unavailable",
-                    "error_type": exc.__class__.__name__,
+                    **_safe_disclosure_error(exc),
                 }
             )
         try:
@@ -159,7 +181,8 @@ class PolicySnapshotSkill:
                     else exc.__class__.__name__,
                 }
             )
-        available = any(bool(value) for value in facts.values())
+        available = (bool(facts.get("policy_signals") or facts.get("regulatory_signals"))
+                     if as_of_date is not None else any(bool(value) for value in facts.values()))
         primary_source = SnapshotSource(
             skill=self.skill_name,
             vendor="uzi_policy",

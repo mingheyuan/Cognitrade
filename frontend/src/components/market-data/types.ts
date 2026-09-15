@@ -101,6 +101,7 @@ export interface MarketDataCoverage {
   structurally_complete: boolean
   report_ready: boolean
   report_generatable: boolean
+  company_profile_dependencies?: CompanyProfileDependencies
   resolved_dimension_count: number
   degraded_dimension_count: number
   quality: 'strict' | 'degraded' | 'blocked'
@@ -112,6 +113,20 @@ export interface MarketDataCoverage {
   uzi_integrity_by_profile?: Record<'lite' | 'medium' | 'deep', UziDataPrecheck>
   audit_ready_dimension_count?: number
   audit_ready?: boolean
+}
+
+export interface CompanyProfileDependencies {
+  version: string
+  status: string
+  can_freeze: boolean
+  input_basic_snapshot_id: string | null
+  input_basic_snapshot_hash: string | null
+  dependency_fingerprint: string | null
+  required_dimensions: string[]
+  direct_dimensions: string[]
+  review_dimensions: string[]
+  pending_dimensions: string[]
+  issues: Array<{ dimension: string; reason: string }>
 }
 
 interface UziDataPrecheck {
@@ -186,10 +201,21 @@ export interface MarketDataConflict {
 }
 
 export interface CollectionProgress {
+  native_postfetch?: {
+    status: string
+    attempted: number
+    succeeded: number
+    failed: number
+    persisted_snapshot_count: number
+    reason_code?: string
+  }
+  research_archive?: ResearchArchiveProgress
   total: number
   queued: number
   running: number
+  cancelling?: number
   completed: number
+  partial?: number
   failed: number
   skipped: number
   child_complete?: number
@@ -270,6 +296,19 @@ export interface FundPortfolioSummary {
   retryable_slots: number
   blocked_slots: number
   active_slots: number
+  unassessed_slots?: number
+  degraded_slots?: number
+  by_holding?: Array<{
+    symbol: string
+    total_slots: number
+    ready_slots: number
+    missing_slots: number
+    active_slots: number
+    unassessed_slots: number
+    degraded_slots: number
+    retryable_slots: number
+    blocked_slots: number
+  }>
   attempt: number
   current_child_job_ids: string[]
   by_error_code: CollectionDiagnosticBucket[]
@@ -325,6 +364,14 @@ export interface CollectionAgentRecovery {
   message?: string | null
 }
 
+export interface ResearchArchiveProgress {
+  status: string
+  total: number
+  completed: number
+  persisted_snapshot_count: number
+  active?: { symbol?: string; dimension?: string; as_of_date?: string; asof?: string } | null
+}
+
 export interface CollectionJob {
   job_id: string
   parent_job_id?: string | null
@@ -341,8 +388,10 @@ export interface CollectionJob {
   publish_when_complete: boolean
   freeze_status?: CollectionFreezeStatus
   can_confirm_freeze?: boolean
+  company_profile_dependencies?: CompanyProfileDependencies
   publication_candidate?: CollectionPublicationCandidate
   agent_recovery?: CollectionAgentRecovery
+  research_archive?: ResearchArchiveProgress
   scoped_retry_supported?: boolean
   progress: CollectionProgress
   requested_by?: string | null

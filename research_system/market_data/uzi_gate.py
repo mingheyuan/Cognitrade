@@ -6,8 +6,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from research_system.market_data.historical import is_safe_degradation_manifest
-
+from research_system.market_data.native_projection import (
+    PROJECTION_VERSION,
+    native_payload,
+    native_quality,
+    project_native_result,
+)
 
 _UZI_UNAVAILABLE_QUALITIES = frozenset(
     {
@@ -39,57 +43,6 @@ def _native_integrity_module():
     return importlib.import_module("lib.data_integrity")
 
 
-def native_quality(snapshot: Any) -> str:
-    query_manifest = dict(getattr(snapshot, "query_manifest_json", None) or {})
-    validation = dict(getattr(snapshot, "validation_json", None) or {})
-    quality = (
-        str(
-            query_manifest.get("native_quality_status")
-            or validation.get("native_quality_status")
-            or validation.get("requested_status")
-            or getattr(snapshot, "status", "")
-            or ""
-        )
-        .strip()
-        .lower()
-    )
-    return quality or "data_gap"
-
-
-def native_payload(snapshot: Any) -> dict[str, Any]:
-    payload = dict(getattr(snapshot, "payload_json", None) or {})
-    query_manifest = dict(getattr(snapshot, "query_manifest_json", None) or {})
-    outcome = str(query_manifest.get("collection_outcome") or "").strip().lower()
-    if outcome == "verified_empty":
-        observation = query_manifest.get("native_empty_observation")
-        return (
-            dict(observation)
-            if isinstance(observation, Mapping)
-            else {"observation_status": "verified_empty"}
-        )
-    if outcome in {"retryable_failure", "unavailable"}:
-        return {}
-    # ``raw`` is the persisted computation payload and may contain missing-only
-    # recovery fields. The envelope below is retained for native metadata and
-    # exact self-review error placement.
-    raw = payload.get("raw")
-    if isinstance(raw, Mapping):
-        return dict(raw)
-    envelope = payload.get("_uzi_raw_result")
-    if isinstance(envelope, Mapping) and isinstance(envelope.get("data"), Mapping):
-        return dict(envelope["data"])
-    if str(payload.get("availability") or "").strip().lower() in {
-        "historically_unavailable",
-        "provider_unavailable",
-    }:
-        return {}
-    return {
-        str(key): value
-        for key, value in payload.items()
-        if not str(key).startswith("_")
-    }
-
-
 def native_snapshot_usable(snapshot: Any) -> bool:
     validation = dict(getattr(snapshot, "validation_json", None) or {})
     quality = native_quality(snapshot)
@@ -100,24 +53,8 @@ def native_snapshot_usable(snapshot: Any) -> bool:
     return bool(native_payload(snapshot))
 
 
-def _native_result(snapshot: Any) -> dict[str, Any]:
-    quality = native_quality(snapshot)
-    payload = native_payload(snapshot)
-    stored_payload = dict(getattr(snapshot, "payload_json", None) or {})
-    envelope = stored_payload.get("_uzi_raw_result")
-    result = dict(envelope) if isinstance(envelope, Mapping) else {}
-    result["data"] = payload
-    result.setdefault(
-        "source", str(getattr(snapshot, "source_version", None) or "database")
-    )
-    query_manifest = dict(getattr(snapshot, "query_manifest_json", None) or {})
-    if query_manifest.get("collection_outcome") == "retryable_failure":
-        failure = query_manifest.get("provider_failure")
-        message = failure.get("message") if isinstance(failure, Mapping) else None
-        if not result.get("error"):
-            result["error"] = str(message or "historical provider failure")
-    result.setdefault("fallback", quality in _UZI_UNAVAILABLE_QUALITIES)
-    return result
+def _native_result(snapshot: Any, *, version: str = PROJECTION_VERSION) -> dict[str, Any]:
+    return project_native_result(snapshot, version=version)
 
 
 def evaluate_uzi_collection_gate(
@@ -125,6 +62,7 @@ def evaluate_uzi_collection_gate(
     *,
     profile: str = "medium",
     market: str | None = None,
+    projection_version: str = PROJECTION_VERSION,
 ) -> dict[str, Any]:
     """Evaluate the data-stage gates used by pinned UZI 3.9.4.
 
@@ -140,7 +78,7 @@ def evaluate_uzi_collection_gate(
 
     raw = {
         "dimensions": {
-            dimension: _native_result(snapshot)
+            dimension: _native_result(snapshot, version=projection_version)
             for dimension, snapshot in snapshots.items()
             if snapshot is not None and dimension != "similar_stocks"
         }
@@ -181,24 +119,19 @@ def evaluate_uzi_collection_gate(
         prefix = dimension.split("_", 1)[0]
         if prefix.isdigit() and int(prefix) not in enabled_numbers:
             continue
-        if native_payload(snapshot):
-            continue
         native_result = raw["dimensions"].get(dimension) or {}
+        if native_result.get("data"):
+            continue
         has_error = bool(native_result.get("_timeout") or native_result.get("error"))
-        safe_historical_gap = is_safe_degradation_manifest(
-            getattr(snapshot, "query_manifest_json", None)
-        )
         issues.append(
             {
                 "severity": (
-                    "warning" if has_error or safe_historical_gap else "critical"
+                    "warning" if has_error else "critical"
                 ),
                 "check": "empty_dims",
                 "dimension": dimension,
                 "message": (
-                    "维度历史数据不可恢复，已从评分排除"
-                    if safe_historical_gap
-                    else "维度数据为空" + ("（上游失败）" if has_error else "")
+                    "维度数据为空" + ("（上游失败）" if has_error else "")
                 ),
             }
         )
@@ -224,9 +157,7 @@ def evaluate_uzi_collection_gate(
             .upper()
         )
     if selected_market in {"H", "HK", "HK_EQUITY"}:
-        kline = (
-            native_payload(snapshots.get("2_kline")) if snapshots.get("2_kline") else {}
-        )
+        kline = (raw["dimensions"].get("2_kline") or {}).get("data") or {}
         kline_count = kline.get("kline_count", 0)
         stage = kline.get("stage", "—")
         if kline_count == 0:
@@ -247,11 +178,7 @@ def evaluate_uzi_collection_gate(
                     "message": "港股有 K 线数据但 stage 未分类",
                 }
             )
-        financials = (
-            native_payload(snapshots.get("1_financials"))
-            if snapshots.get("1_financials")
-            else {}
-        )
+        financials = (raw["dimensions"].get("1_financials") or {}).get("data") or {}
         if not financials:
             issues.append(
                 {

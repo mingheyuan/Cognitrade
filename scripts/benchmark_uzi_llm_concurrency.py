@@ -22,7 +22,7 @@ from domain_packs.finance_ashare.subagents.uzi_llm_support import (
     parse_uzi_structured,
 )
 from research_system.runtime.platform.settings import Settings
-from research_system.runtime.providers.openai_provider import OpenAIProvider
+from research_system.runtime.providers.codex_provider import CodexProvider
 
 
 class ProbePayload(BaseModel):
@@ -40,7 +40,7 @@ def _percentile(values: list[float], fraction: float) -> float:
     return ordered[index]
 
 
-def _request(provider: OpenAIProvider, probe_id: int) -> dict[str, object]:
+def _request(provider: CodexProvider, probe_id: int) -> dict[str, object]:
     started = monotonic()
     try:
         payload = parse_uzi_structured(
@@ -71,7 +71,7 @@ def _request(provider: OpenAIProvider, probe_id: int) -> dict[str, object]:
 
 def probe_level(settings: Settings, concurrency: int, waves: int) -> dict[str, object]:
     request_count = concurrency * waves
-    provider = OpenAIProvider(
+    provider = CodexProvider(
         settings.model_copy(
             update={
                 "uzi_llm_max_concurrency": concurrency,
@@ -121,11 +121,9 @@ def main() -> int:
     if args.waves <= 0 or any(level <= 0 for level in levels):
         parser.error("levels and waves must be positive")
     settings = Settings.from_env(Path.cwd())
-    if not settings.openai_api_key:
-        parser.error("OPENAI_API_KEY is required")
     summary = {
         "model": settings.default_model,
-        "service_tier": settings.openai_service_tier,
+        "provider": "codex",
         "waves": args.waves,
         "levels": [probe_level(settings, level, args.waves) for level in levels],
     }

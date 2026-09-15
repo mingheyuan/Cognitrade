@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections import defaultdict
-from datetime import date
 import math
+from collections import defaultdict
+from collections.abc import Iterable
+from datetime import date
 from statistics import fmean, pstdev
 from typing import Any
 
@@ -377,6 +378,7 @@ def run_holdings_portfolio(
     end_date: date,
     max_single_stock_pct: float,
     drift_pct_points: float,
+    fallback_trading_days: Iterable[date] = (),
 ) -> dict[str, Any]:
     bars_index = {
         symbol: {str(row["date"]): row for row in rows}
@@ -390,8 +392,14 @@ def run_holdings_portfolio(
             if start_date.isoformat() <= day <= end_date.isoformat()
         }
     )
+    if not trading_days and not instruments:
+        trading_days = sorted(
+            day.isoformat()
+            for day in fallback_trading_days
+            if start_date <= day <= end_date
+        )
     if not trading_days:
-        raise StrategyDomainError("market_history_unavailable", "持仓组合没有共同可交易日期")
+        raise StrategyDomainError("market_history_unavailable", "持仓组合在请求区间没有可交易行情")
     event_index = {
         symbol: {str(row["date"]): dict(row) for row in events}
         for symbol, events in events_by_symbol.items()
@@ -410,7 +418,7 @@ def run_holdings_portfolio(
     for day_text in trading_days:
         day = date.fromisoformat(day_text)
         available_symbols = [symbol for symbol in instruments if day_text in bars_index[symbol]]
-        if not available_symbols:
+        if instruments and not available_symbols:
             continue
         current_report = _latest_effective(report_schedule, day_text)
         targets = dict((current_report or {}).get("target_weights") or {})

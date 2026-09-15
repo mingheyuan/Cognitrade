@@ -31,6 +31,10 @@ class HistoricalCapability:
     window_days: int = 0
     recoverable_fields: tuple[str, ...] = ()
     current_only_fields: tuple[str, ...] = ()
+    # Some adapters can recover dated inputs, but do not yet derive the final
+    # UZI fields.  ``can_reconstruct`` permits that acquisition; it is not a
+    # promise that repeating it can complete the dimension.
+    implementation_status: Literal["implemented", "inputs_only"] = "implemented"
 
     @property
     def can_reconstruct(self) -> bool:
@@ -82,7 +86,14 @@ _CAPABILITIES: tuple[HistoricalCapability, ...] = (
     HistoricalCapability(
         "3_macro", "macro", "published_archive", 365, ("observations",)
     ),
-    HistoricalCapability("4_peers", "peers", "derived_from_pit", 550, ("peers",)),
+    HistoricalCapability(
+        "4_peers",
+        "peers",
+        "derived_from_pit",
+        550,
+        ("peers",),
+        implementation_status="inputs_only",
+    ),
     HistoricalCapability(
         "5_chain",
         "chain",
@@ -99,6 +110,7 @@ _CAPABILITIES: tuple[HistoricalCapability, ...] = (
         "derived_from_pit",
         550,
         ("classification", "valuation", "growth", "cycle"),
+        ("tam", "penetration"),
     ),
     HistoricalCapability(
         "8_materials", "materials", "dated_series", 550, ("exposure", "prices")
@@ -143,6 +155,7 @@ _CAPABILITIES: tuple[HistoricalCapability, ...] = (
         "derived_from_pit",
         3650,
         ("factors", "research_and_development"),
+        implementation_status="inputs_only",
     ),
     HistoricalCapability("15_events", "events", "published_archive", 180, ("events",)),
     HistoricalCapability("16_lhb", "lhb", "dated_series", 30, ("records",)),
@@ -154,7 +167,14 @@ _CAPABILITIES: tuple[HistoricalCapability, ...] = (
         ("items",),
         ("heat", "rank", "live_mentions"),
     ),
-    HistoricalCapability("18_trap", "trap", "derived_from_pit", 365, ("signals",)),
+    HistoricalCapability(
+        "18_trap",
+        "trap",
+        "derived_from_pit",
+        365,
+        ("signals",),
+        implementation_status="inputs_only",
+    ),
     HistoricalCapability(
         "19_contests",
         "contests",
@@ -180,6 +200,17 @@ _CAPABILITIES: tuple[HistoricalCapability, ...] = (
 )
 
 HISTORICAL_CAPABILITIES = {item.dimension: item for item in _CAPABILITIES}
+
+# A persisted failed task predates a provider implementation when its
+# checkpoint does not carry this revision.  Keeping the marker next to the PIT
+# capability avoids turning every old ``historical_unavailable`` result into a
+# permanent manual-retry loop after a provider upgrade.
+_HISTORICAL_PROVIDER_REVISIONS = {
+    "5_chain": "cninfo-zygc-pit-v1",
+    "7_industry": "cninfo-industry-pit-v1",
+    "6_research": "eastmoney-bounded-research-v1",
+    "6_fund_holders": "sina-holder-publication-v1",
+}
 
 _DATE_PREFIX = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})")
 _DATE_FIELDS = (
@@ -209,6 +240,10 @@ def capability_for_dimension(dimension: str) -> HistoricalCapability:
     )
 
 
+def historical_provider_revision(dimension: str) -> str | None:
+    return _HISTORICAL_PROVIDER_REVISIONS.get(str(dimension or "").strip())
+
+
 def is_safe_degradation_manifest(manifest: Mapping[str, Any] | None) -> bool:
     degradation = manifest.get("degradation") if isinstance(manifest, Mapping) else None
     return bool(
@@ -234,6 +269,9 @@ def reconstruct_historical_snapshot(
     capability = capability_for_dimension(dimension)
     if not capability.can_reconstruct:
         return None
+    failure = historical_failure_snapshot(snapshot, dimension=dimension, as_of_date=as_of_date)
+    if failure is not None:
+        return failure
     prepared = deepcopy(dict(snapshot))
     facts = dict(prepared.get("facts") or {})
     envelope = facts.get("_uzi_raw_result")
@@ -276,6 +314,55 @@ def reconstruct_historical_snapshot(
         "latest_record_date": latest.isoformat() if latest else None,
         "proof_basis": "date_bounded_structured_provider_response",
     }
+    return prepared
+
+
+def historical_failure_snapshot(
+    snapshot: Mapping[str, Any], *, dimension: str, as_of_date: date,
+    cutoff_at: datetime | None = None,
+) -> dict[str, Any] | None:
+    """Bind a facts-free provider failure to its *requested* historical day.
+
+    This is acquisition provenance, not historical market evidence. Never
+    salvage a current response containing observations through this path.
+    Original error/timeout and source trace remain intact; an additional
+    diagnostic trace classifies otherwise generic native failure envelopes.
+    """
+    facts = snapshot.get("facts") or {}
+    envelope = facts.get("_uzi_raw_result") if isinstance(facts, Mapping) else None
+    if not isinstance(envelope, Mapping) or envelope.get("data") not in ({}, None):
+        return None
+    if not (envelope.get("error") or envelope.get("_timeout")):
+        return None
+    metadata_keys = {"availability", "data_gap", "message", "_uzi_raw_result", "_uzi_fetcher_id", "_uzi_symbol_route_failed"}
+    if any(key not in metadata_keys and value not in (None, "", [], {}) for key, value in facts.items()):
+        return None
+    previous = snapshot.get("historical_reconstruction") or {}
+    if previous.get("requested_as_of_date") not in (None, as_of_date.isoformat()):
+        return None
+    prepared = deepcopy(dict(snapshot))
+    capability = capability_for_dimension(dimension)
+    trace = list(prepared.get("source_trace") or [])
+    failures = {"provider_unavailable", "rate_limited", "timeout", "parse_failed"}
+    if not any(row.get("status") in failures for row in trace):
+        trace.append({
+            "provider_id": (prepared.get("source") or {}).get("provider_id") or envelope.get("source"),
+            "source_id": envelope.get("source"),
+            "status": "timeout" if envelope.get("_timeout") else "provider_unavailable",
+            "error_type": "fetcher_wave_timeout" if envelope.get("_timeout") else "provider_error_envelope",
+            "stage": "historical_error_projection",
+        })
+    prepared.update(
+        snapshot_date=as_of_date.isoformat(), source_trace=trace,
+        historical_reconstruction={
+            "safe": True, "strategy": capability.strategy,
+            "requested_as_of_date": as_of_date.isoformat(),
+            "cutoff_at": cutoff_at.isoformat() if cutoff_at is not None else None,
+            "window_start": as_of_date.isoformat(), "window_end": as_of_date.isoformat(),
+            "proof_basis": "failed_request_without_market_observations",
+            "is_research_fact": False,
+        },
+    )
     return prepared
 
 
@@ -523,6 +610,7 @@ __all__ = [
     "HISTORICAL_CAPABILITIES",
     "HistoricalCapability",
     "capability_for_dimension",
+    "historical_provider_revision",
     "is_safe_degradation_manifest",
     "reconstruct_historical_snapshot",
 ]

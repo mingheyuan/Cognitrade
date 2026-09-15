@@ -20,8 +20,24 @@ function recoveryIsActive(job: CollectionJob) {
   return ['queued', 'pending', 'running', 'processing'].includes(String(job.agent_recovery?.status || '').toLowerCase())
 }
 
+function ResearchArchiveProgress({ job, childJobs }: { job: CollectionJob; childJobs: CollectionJob[] }) {
+  const parent = job.research_archive || job.progress.research_archive
+  const archives = parent ? [parent] : childJobs.flatMap((child) => child.research_archive || child.progress.research_archive || [])
+  if (!archives.length) return null
+  const completed = archives.reduce((sum, archive) => sum + archive.completed, 0)
+  const total = archives.reduce((sum, archive) => sum + archive.total, 0)
+  const active = archives.find((archive) => archive.status === 'running')
+  const persisted = archives.reduce((sum, archive) => sum + archive.persisted_snapshot_count, 0)
+  return <div className="report-stage-progress" aria-label="研究原文归档进度">
+    <strong>研究原文归档 {completed}/{total || '待解析'}{active ? ' · 运行中' : ''}</strong>
+    <small>{active ? '结构化槽位完成后，继续获取可引用原文。' : '归档阶段已结算。'} 已持久化 {persisted} 份研究快照</small>
+    {active?.active && <small>当前 {active.active.symbol} · {active.active.dimension} · {active.active.as_of_date || active.active.asof}</small>}
+  </div>
+}
+
 function freezeStatusMeta(job: CollectionJob) {
   if (job.freeze_status === 'frozen') return { label: 'Bundle 已冻结', tone: 'good' as const }
+  if (job.company_profile_dependencies?.can_freeze === false) return { label: '输入版本待补齐', tone: 'warning' as const }
   if (job.freeze_status === 'awaiting_confirmation') return { label: '待确认冻结', tone: 'info' as const }
   if (job.freeze_status === 'awaiting_recovery') return { label: '待 Agent 补采', tone: 'warning' as const }
   if (job.freeze_status === 'not_ready') return { label: '候选未就绪', tone: 'danger' as const }
@@ -34,11 +50,13 @@ function CollectionLifecycle({ job }: { job: CollectionJob }) {
   const nativeSettled = !collecting && !['draft', 'unknown'].includes(String(job.status).toLowerCase())
   const recoveryStatus = String(job.agent_recovery?.status || '').toLowerCase()
   const recoverySettled = ['succeeded', 'completed', 'partial', 'not_needed', 'skipped'].includes(recoveryStatus)
+  const portfolioGapCount = job.portfolio_summary?.missing_slots || 0
   const recoveryNotNeeded = !job.agent_recovery
     && Boolean(job.publication_candidate)
-    && !job.publication_candidate?.degraded
+    && portfolioGapCount === 0
   const frozen = job.freeze_status === 'frozen'
-  const candidateReady = job.can_confirm_freeze || job.freeze_status === 'awaiting_confirmation'
+  const inputVersionPending = job.company_profile_dependencies?.can_freeze === false
+  const candidateReady = !inputVersionPending && (job.can_confirm_freeze || job.freeze_status === 'awaiting_confirmation')
   return (
     <div className="mdc-collection-lifecycle" aria-label="采集、补采与冻结阶段">
       <article className={nativeSettled ? 'is-complete' : collecting ? 'is-active' : 'is-pending'}>
@@ -48,12 +66,12 @@ function CollectionLifecycle({ job }: { job: CollectionJob }) {
       </article>
       <article className={recoverySettled || recoveryNotNeeded ? 'is-complete' : recoveryActive ? 'is-active' : job.freeze_status === 'awaiting_recovery' || job.freeze_status === 'not_ready' || job.publication_candidate?.degraded ? 'is-warning' : 'is-pending'}>
         <span>{recoverySettled || recoveryNotNeeded ? <CheckCircle2 size={16} /> : recoveryActive ? <CircleDashed size={16} /> : <Bot size={16} />}</span>
-        <div><small>阶段 2</small><strong>Agent 缺口补采</strong><p>{recoveryActive ? 'Agent 正在逐缺口恢复' : recoverySettled ? `${job.agent_recovery?.succeeded || 0} 项已恢复，候选已重算` : recoveryNotNeeded ? 'UZI 原生检查无待补缺口' : '原生采集后按需显式启动'}</p></div>
+        <div><small>阶段 2</small><strong>缺口恢复</strong><p>{recoveryActive ? 'Agent 正在逐缺口恢复' : recoverySettled ? `${job.agent_recovery?.succeeded || 0} 项已恢复，候选已重算` : recoveryNotNeeded ? 'UZI 原生检查无待补缺口' : portfolioGapCount ? `仍有 ${portfolioGapCount} 个严格数据缺口，可手动重试数据源或启动 Agent` : '原生采集后按需显式启动'}</p></div>
         <b>{recoverySettled ? 'DONE' : recoveryNotNeeded ? 'SKIP' : recoveryActive ? 'RUN' : 'WAIT'}</b>
       </article>
       <article className={frozen ? 'is-complete' : candidateReady ? 'is-ready' : 'is-pending'}>
         <span>{frozen ? <CheckCircle2 size={16} /> : <LockKeyhole size={16} />}</span>
-        <div><small>阶段 3</small><strong>用户确认冻结 Bundle</strong><p>{frozen ? '不可变版本已发布' : candidateReady ? '发布候选已就绪，等待你的确认' : '不会自动发布 Bundle'}</p></div>
+        <div><small>阶段 3</small><strong>用户确认冻结 Bundle</strong><p>{frozen ? '不可变版本已发布' : inputVersionPending ? '输入版本待补齐' : candidateReady ? '发布候选已就绪，等待你的确认' : '不会自动发布 Bundle'}</p></div>
         <b>{frozen ? 'FROZEN' : candidateReady ? 'READY' : 'WAIT'}</b>
       </article>
     </div>
@@ -168,6 +186,7 @@ export function CollectionJobsPanel({ contract, urlState, jobs, jobDetails, load
                 || ['awaiting_recovery', 'not_ready'].includes(detailedJob.freeze_status || '')
                 || ['failed', 'partial', 'cancelled'].includes(recoveryStatus))
             const canConfirmFreeze = !active
+              && detailedJob.company_profile_dependencies?.can_freeze !== false
               && !agentRecoveryActive
               && detailedJob.freeze_status !== 'frozen'
               && /^[0-9a-f]{64}$/i.test(detailedJob.publication_candidate?.proposal_hash || '')
@@ -177,18 +196,25 @@ export function CollectionJobsPanel({ contract, urlState, jobs, jobDetails, load
               <JobDetails
                 key={job.job_id}
                 className={`mdc-job-card ${job.asset_family === 'fund' ? 'is-fund' : ''}`}
-                initiallyOpen={job.asset_family === 'fund' && index === 0 && ['partial', 'failed'].includes(job.status)}
+                initiallyOpen={job.asset_family === 'fund' && index === 0 && (
+                  ['partial', 'failed'].includes(job.status)
+                  || retryableTaskCount > 0
+                  || (job.portfolio_summary?.missing_slots || 0) > 0
+                )}
                 onOpen={job.asset_family === 'equity' ? () => { void onLoadDetail(job.job_id) } : undefined}
               >
                 <summary>
-                  <span><StatusBadge label={status.label} tone={status.tone} /><StatusBadge label={freezeMeta.label} tone={freezeMeta.tone} />{retryableTaskCount > 0 ? <span className="mdc-retry-available"><RotateCcw size={11} />可重试 {retryableTaskCount}</span> : null}{blockedTaskCount > 0 ? <span className="mdc-blocked-count">阻断 {blockedTaskCount}</span> : null}{degradedCount > 0 ? <span className="mdc-blocked-count">降级披露 {degradedCount}</span> : null}<code>{job.job_id}</code></span>
+                  <span><StatusBadge label={status.label} tone={status.tone} /><StatusBadge label={freezeMeta.label} tone={freezeMeta.tone} />{retryableTaskCount > 0 ? <span className="mdc-retry-available"><RotateCcw size={11} />可重试 {retryableTaskCount}</span> : null}{blockedTaskCount > 0 ? <span className="mdc-blocked-count">不可重试/已降级 {blockedTaskCount}</span> : null}{degradedCount > 0 ? <span className="mdc-blocked-count">降级披露 {degradedCount}</span> : null}<code>{job.job_id}</code></span>
                   <span><strong>{job.asset_family === 'fund' ? `基金 ${job.symbols.join('、')} · 前十大持仓` : job.symbols.join('、')}</strong><small>{job.start_date} — {job.end_date} · 并发 {job.max_concurrency}</small></span>
-                  {job.asset_family === 'fund' ? <FundCollectionProgress job={job} childJobs={childJobs} /> : <CollectionJobProgress progress={job.progress} />}
+                  <div>{job.asset_family === 'fund' ? <FundCollectionProgress job={job} childJobs={childJobs} /> : <CollectionJobProgress progress={job.progress} />}<ResearchArchiveProgress job={detailedJob} childJobs={childJobs} /></div>
                   <ChevronDown size={16} />
                 </summary>
                 <div className="mdc-job-card-body">
                   <div className="mdc-job-meta"><span>模式 {job.mode}</span><span>创建 {formatDateTime(job.created_at)}</span><span>排队 {durations.queue}</span><span>运行 {durations.run}</span><span>Bundle 发布：需用户确认</span></div>
                   <CollectionLifecycle job={detailedJob} />
+                  {detailedJob.company_profile_dependencies?.can_freeze === false && <p className="mdc-job-error">
+                    公司信息已更新，当前草稿的相关数据版本尚未对齐：{detailedJob.company_profile_dependencies.pending_dimensions.join('、') || '请核对公司信息依赖'}。需显式补齐后重新计算冻结候选；这不是新增的 UZI 关键问题。
+                  </p>}
                   {job.asset_family === 'fund' ? (
                     <FundCollectionOverview
                       job={job}
@@ -204,7 +230,7 @@ export function CollectionJobsPanel({ contract, urlState, jobs, jobDetails, load
                   {job.asset_family !== 'fund' && !!detailedJob.tasks?.length && (
                     <div className="mdc-table-scroll"><table className="mdc-table"><thead><tr><th>证券</th><th>槽位</th><th>状态</th><th>Attempt</th><th>说明</th></tr></thead><tbody>{detailedJob.tasks.map((task) => {
                       const outcome = collectionOutcomeMeta(task.collection_outcome, task.result_message)
-                      return <tr key={task.task_id}><td>{task.symbol}</td><td><code>{task.dimension_id}</code></td><td>{outcome?.label || (task.resolution_status === 'audit_only' ? 'UZI 可用' : jobStatusMeta(task.status).label)}</td><td>{task.attempt}{task.max_attempts ? ` / ${task.max_attempts}` : ''}</td><td>{outcome?.summary || (task.resolution_status === 'audit_only' ? '扩展契约仅作审计，不再阻断' : task.error_message || '—')}</td></tr>
+                      return <tr key={task.task_id}><td>{task.symbol}</td><td><code>{task.dimension_id}</code></td><td>{outcome?.label || (task.resolution_status === 'audit_only' ? 'UZI 数据检查可用' : jobStatusMeta(task.status).label)}</td><td>{task.attempt}{task.max_attempts ? ` / ${task.max_attempts}` : ''}</td><td>{outcome?.summary || (task.resolution_status === 'audit_only' ? '扩展检查结果保留披露；研究缺口仅作 Agent 输入提示，冻结安全校验与原生最终自审独立执行' : task.error_message || '—')}</td></tr>
                     })}</tbody></table></div>
                   )}
                   <div className="mdc-panel-actions">

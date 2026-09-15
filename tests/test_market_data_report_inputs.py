@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from domain_packs.finance_ashare.subagents.runtime import collect_snapshot
 from research_system.api.agent_os_run_service import AgentOSRunService
@@ -14,7 +15,10 @@ from research_system.api.fund_holding_report_service import (
     FundHoldingReportsUnavailable,
 )
 from research_system.market_data.bundles import BundlePublisher, bundle_manifest_hash
-from research_system.market_data.contracts import LEGACY_UZI_CONTRACT_VERSIONS
+from research_system.market_data.contracts import (
+    LEGACY_UZI_CONTRACT_VERSIONS,
+    canonical_hash,
+)
 from research_system.market_data.dimension_contracts import (
     DEFAULT_DIMENSION_REGISTRY,
     DimensionRegistry,
@@ -27,6 +31,7 @@ from research_system.market_data.fund_holdings_contracts import (
 )
 from research_system.market_data.ingestion import SnapshotIngestionService
 from research_system.market_data.models import (
+    MarketDataEvidence,
     ReportDataManifest,
     ReportDataManifestDependency,
     ReportDataManifestItem,
@@ -728,6 +733,23 @@ class DatabaseReportInputGatewayTests(unittest.TestCase):
                 user_id="user-1",
             )
             self.assertEqual(loaded["manifest_hash"], pinned["manifest_hash"])
+            reference_args = {
+                "fund_code": "020464", "expected_symbols": FUND_STOCK_CODES,
+                "tenant_id": "tenant-1", "user_id": "user-1",
+            }
+            compact_reference = {key: pinned[key] for key in ("manifest_id", "manifest_hash")}
+            with patch("research_system.market_data.bundles.BundleMaterializer.materialize", side_effect=AssertionError("status polling must not materialize")):
+                reference = ReportInputService(gateway).validate_fund_report_manifest_reference(
+                    compact_reference, **reference_args,
+                )
+                self.assertEqual(reference["manifest_hash"], pinned["manifest_hash"])
+                self.assertEqual(reference["validation_mode"], "immutable_reference")
+                self.assertTrue(all(not item["snapshots"] for item in reference["items"]))
+                with self.assertRaises(ReportInputError) as mismatch:
+                    ReportInputService(gateway).validate_fund_report_manifest_reference(
+                        compact_reference, **{**reference_args, "user_id": "another-user"},
+                    )
+                self.assertEqual(mismatch.exception.code, "report_manifest_not_found")
             child_symbol = pinned["items"][0]["symbol"]
             scoped = gateway.load_frozen_report_manifest_items(
                 manifest_id=pinned["manifest_id"],
@@ -804,6 +826,9 @@ class DatabaseReportInputGatewayTests(unittest.TestCase):
                     fund_bundle.id,
                     reason="parent disclosure revoked in regression",
                 )
+            with self.assertRaises(ReportInputError) as reference_revoked:
+                ReportInputService(gateway).validate_fund_report_manifest_reference(compact_reference, **reference_args)
+            self.assertEqual(reference_revoked.exception.code, "report_manifest_invalidated")
             with self.assertRaises(ReportInputError) as captured:
                 gateway.load_frozen_report_manifest(
                     manifest_id=pinned["manifest_id"],
@@ -823,6 +848,27 @@ class DatabaseReportInputGatewayTests(unittest.TestCase):
         try:
             for code in FUND_STOCK_CODES:
                 seed_strict_bundle(database, code)
+            # This test targets lineage/revocation, not missing research.
+            # Explicit fixture-only bodies satisfy full-Agent preflight.
+            with database.session() as session:
+                repository = MarketDataRepository(session)
+                for snapshot in repository.list_snapshots(as_of_date=as_of, limit=1000):
+                    if snapshot.dimension not in {"3_macro", "13_policy", "7_industry", "15_events", "8_materials", "9_futures"}:
+                        continue
+                    for number in range(2):
+                        body = f"仅测试样本：{snapshot.symbol} {snapshot.dimension} 来源 {number}；不代表真实市场事实。"
+                        proof = repository.add_evidence(MarketDataEvidence(
+                            evidence_key=canonical_hash({"fixture": body}),
+                            provider="revocation-test-fixture", source_kind="research_document",
+                            source_url=f"https://fixture.invalid/{snapshot.symbol}/{snapshot.dimension}/{number}",
+                            title=f"测试研究原文 {number}", inline_content=body,
+                            content_hash=canonical_hash(body), content_ref=f"fixture://{snapshot.id}/{number}",
+                            published_at=snapshot.published_at, observed_at=snapshot.observed_at,
+                            grade="A", immutable_proof=True,
+                            metadata_json={"fixture_only": True, "evidence_mode": "contemporaneous_archive"},
+                        ))
+                        repository.add_snapshot_evidence(snapshot_id=snapshot.id, evidence_id=proof.id,
+                            field_path="$research", purpose="research_context")
             with database.session() as session:
                 repository = MarketDataRepository(session)
                 fund_ingest = FundTopHoldingsSnapshotAdapter().adapt(

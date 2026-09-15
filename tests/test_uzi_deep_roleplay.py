@@ -7,7 +7,6 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 
-from pydantic import ValidationError
 
 from domain_packs.finance_ashare.subagents.uzi_agent_roleplay import (
     AgentRoleplayBatch,
@@ -172,19 +171,20 @@ class UziDeepRoleplayTests(unittest.TestCase):
 
         self.assertEqual(vote.signal, "skip")
 
-    def test_non_abstaining_vote_still_requires_grounded_evidence(self) -> None:
-        with self.assertRaises(ValidationError):
-            AgentRoleplayVote(
+    def test_non_abstaining_concrete_fact_does_not_require_host_keywords(self) -> None:
+        vote = AgentRoleplayVote(
                 investor_id="zhang_mz",
                 signal="bullish",
                 score=80,
-                headline="当前阶段可以积极参与",
-                reasoning="依照该评委的方法论，本轮形成明确的方向性判断并建议继续观察。",
+                headline="公司订单主要依赖晶圆厂扩产",
+                reasoning="公司主要销售刻蚀设备，客户资本开支影响订单兑现，产品验证与售后服务决定客户粘性。",
                 comment="保持原有观点。",
                 verdict="看多",
                 override_rule_engine=False,
                 override_reason=None,
             )
+        self.assertEqual(vote.score, 80)
+        self.assertEqual(vote.signal, "bullish")
 
     def test_group_code_alias_keeps_strict_membership_gate(self) -> None:
         batch = AgentRoleplayBatch(

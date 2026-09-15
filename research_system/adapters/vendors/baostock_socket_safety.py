@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import zlib
+from contextlib import contextmanager
 from importlib import import_module
 from threading import RLock
 from typing import Any
@@ -11,10 +12,57 @@ _MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 _MESSAGE_TERMINATOR = b"<![CDATA[]]>\n"
 _PATCH_LOCK = RLock()
 _IO_LOCK = RLock()
+_SESSION_CLIENT: Any = None
+_SESSION_SOCKET: Any = None
 
 
 class BaoStockTransportError(ConnectionError):
     """BaoStock's socket protocol ended before a complete response arrived."""
+
+
+@contextmanager
+def baostock_session(*, client: Any = None, lock_timeout_seconds: float = 30.0):
+    """Reuse one authenticated SDK socket and serialize complete query groups.
+
+    BaoStock has process-global connection state. Locking individual send/recv
+    operations alone still lets another adapter log out between result pages.
+    A failed socket is replaced on the next explicit call, never by a read path.
+    """
+    global _SESSION_CLIENT, _SESSION_SOCKET
+    injected = client is not None
+    if not injected:
+        install_baostock_socket_safety()
+        client = import_module("baostock")
+    if not _IO_LOCK.acquire(timeout=lock_timeout_seconds):
+        raise TimeoutError("baostock session is busy")
+    context = None
+    try:
+        if not injected:
+            context = import_module("baostock.common.context")
+        current_socket = getattr(context, "default_socket", None) if context else None
+        needs_login = _SESSION_CLIENT is not client or (
+            not injected
+            and (current_socket is None or current_socket is not _SESSION_SOCKET)
+        )
+        if needs_login:
+            result = client.login()
+            if str(getattr(result, "error_code", "")) != "0":
+                raise BaoStockTransportError("baostock login failed")
+            _SESSION_CLIENT = client
+            _SESSION_SOCKET = (
+                getattr(context, "default_socket", None) if context else None
+            )
+        yield client
+    except BaseException:
+        _SESSION_CLIENT = _SESSION_SOCKET = None
+        if context is not None:
+            current_socket = getattr(context, "default_socket", None)
+            if current_socket is not None:
+                _close_socket(current_socket)
+                context.default_socket = None
+        raise
+    finally:
+        _IO_LOCK.release()
 
 
 def _close_socket(sock: Any) -> None:
@@ -114,7 +162,13 @@ def install_baostock_socket_safety(
                     current.sendall((str(message) + "\n").encode("utf-8"))
                     response = _receive_response(current)
                     return _decode_response(response, constants)
-                except (BaoStockTransportError, OSError, UnicodeError, ValueError, zlib.error):
+                except (
+                    BaoStockTransportError,
+                    OSError,
+                    UnicodeError,
+                    ValueError,
+                    zlib.error,
+                ):
                     if getattr(context, "default_socket", None) is current:
                         context.default_socket = None
                     _close_socket(current)
@@ -132,4 +186,5 @@ __all__ = [
     "DEFAULT_BAOSTOCK_SOCKET_TIMEOUT_SECONDS",
     "BaoStockTransportError",
     "install_baostock_socket_safety",
+    "baostock_session",
 ]

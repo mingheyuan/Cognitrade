@@ -449,6 +449,7 @@ class TradeSignal(Base):
     as_of_date: Mapped[date] = mapped_column(Date, nullable=False)
     revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False)
+    execution_plan_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     score_lower_bound: Mapped[float] = mapped_column(Float, nullable=False)
     score_upper_bound: Mapped[float] = mapped_column(Float, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)

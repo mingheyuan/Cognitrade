@@ -90,7 +90,7 @@ export function MarketData({ state, setState, onResearch }: MarketDataProps) {
         <div className="mdc-hero-principles" aria-label="数据中心原则">
           <span><Database size={15} />数据库唯一事实源</span>
           <span><ShieldCheck size={15} />A / B 级时点证据</span>
-          <span><Layers3 size={15} />{controller.resolvedAssetFamily === 'fund' ? '基金单槽 → 十大股票' : '报告阶段零外部调用'}</span>
+          <span><Layers3 size={15} />{controller.resolvedAssetFamily === 'fund' ? '基金单槽 → 十大股票' : '报告阶段不联网补数'}</span>
         </div>
       </section>
 

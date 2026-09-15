@@ -693,7 +693,9 @@ DEFAULT_DIMENSION_CONTRACTS: tuple[DimensionContract, ...] = (
         "最新已披露输入",
         field_values=(
             _value("factors", "object"),
-            _value("research_and_development", "number", "object"),
+            # Fixed UZI fetch_moat emits a textual rd_summary. Retain that
+            # evidence form rather than requiring a fabricated numeric ratio.
+            _value("research_and_development", "number", "object", "string"),
         ),
     ),
     _contract(

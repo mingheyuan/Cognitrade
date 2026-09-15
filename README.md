@@ -9,15 +9,32 @@ Cognitrade 是以 Agent OS、DomainPack 和 ArtifactBoard 为核心的 A 股研�
 - 可追踪运行：Turn/Task、ExecutionGraph、事件流、子 Agent、Artifact、指标和重跑。
 - Finance Workspace：证券解析与数据库优先的 Point-in-Time 行情数据中心；覆盖、快照/证据、采集任务、Bundle 修订、归档订阅和 provider 能力均可审计。
 - 策略工作台：`/strategies` 从零创建或复制系统模板，编辑、发布不可变版本、绑定基金、生成日报、预演四态信号、回测、验证和晋级；旧 `/methodology` 与 `/backtesting` 前端入口已删除。
-- 报告与信号：一天一份 point-in-time 基金报告，前十大持仓必须生成可复用的 canonical UZI 个股子报告；基金本体、持仓 UZI 与结构质量共同生成可配置复合信号，缺失数据不重权也不伪造中性值。Lite / Medium / Deep、持仓和日报只消费已冻结 Bundle/manifest，报告阶段不联网补数。
-- 基金回测：`/strategy-backtests/**` 是唯一公开回测入口，仅接受已发布的不可变策略版本；默认执行最近 30 天的 `fund_only` 基金本体净值回测，`holdings_portfolio` 仅保留为高级穿透研究。“检查并启动回测”会内联预检，满足条件时在同一次操作中入队；历史区基于当前已加载的最近 200 次原始运行，默认展示最近 3 个逻辑回测，也可展开这些已加载的原始尝试；展示折叠不会删除审计记录。
+- 报告与信号：基金 Bundle 固定十大持仓、顺序和披露权重，直接启动完整 Agent 的 canonical UZI 子报告，不依赖旧基金运行。Lite / Medium / Deep 只消费冻结 Bundle/Manifest，报告阶段不联网补数。新 V2 策略读取原生评级与综合作战计划；旧 V1 复合评分继续兼容，历史信号不改写。
+- 基金回测：`/strategy-backtests/**` 是唯一公开回测入口，仅接受已发布的不可变策略版本。新 V2 默认 `holdings_portfolio / report_conditions_v1`，按报告条件收盘判断、次日真实开盘成交，不叠加 MA5/MA20 或基金综合评分；旧 V1 保留 `fund_only` 和旧均线模式。预检仅使用已落库行情，缺失返回补采范围。历史折叠不删除审计记录。
 - 模拟交易：VeighNa PaperAccount 到价撮合，服务端现金/持仓账本、限价挂单、资金冻结、撤单、费用、T+1 和幂等订单；只有人工确认的 Verified 版本可晋级 Promoted 并通过策略链路下单。
 - DomainPack：`finance_ashare` 与 `legal_contract` 通过声明式能力、工具、Gate 和报告合同接入。
 - UZI 报告：研究工作台可从 ArtifactBoard 直接打开与上游 v3.9.4 分析及呈现层逐文件对齐的原生 HTML，或下载同源 PDF；旧 UZI 文件数据缓存不迁移、不回退、不作为新报告的事实源。
 - 行情数据中心基金入口：基金只作为“前十大持仓股票分析”父入口；从冻结公开披露中固定解析精确 10 只 A 股，再为每只股票准备完整 22 槽 Bundle 和 canonical UZI 报告。支持失败节点重试、完整重跑、暂停/恢复、历史补跑与 late revision；同一股票同一日期跨基金复用 canonical UZI Artifact。ETF 联接只使用已取得的穿透持仓，不推断缺失数据。
 - 治理：Bearer 鉴权、作用域隔离、高风险审批、质量 Gate、来源引用和分层记忆。
 
-## 2.0 核心升级：可审计的策略回测闭环
+## 当前链路：冻结数据 → 原生报告 → 条件回放
+
+数据中心负责证据，原生 UZI 负责研判，回测负责执行与核算。本轮仍固定 UZI 3.9.4，
+新增 StrategyDocument **V2** 不等于升级上游或改写历史 V1。新回放仅使用原始评级许可与
+`dashboard.battle_plan`，按原披露权重的 50% 首批预算、费用、整手及 T+1 执行，不自动加仓。
+已成交仓位锁定建仓报告的退出条件。仅支持人民币 A 股未复权价格；口径或公司行动证明
+不足时明确拒绝准确回放。V2 暂不接纸面委托，不会落入旧执行规则。
+
+实现契约、使用步骤、迁移和限制见 [《UZI 冻结报告与条件回放 V2》](./docs/uzi-report-replay-v2.md)。
+
+真实执行记录见 [《2026-09-06 E2E 验收》](./docs/uzi-report-replay-e2e-20260906.md)：
+采集和冻结已验证，但样本股票报告仍受输入缺口阻断，不代表完整报告或成交链路已通过。
+已有数据库先备份，再运行 Alembic `upgrade head`（当前 `20260906_0006`）；旧信号新增列保持 NULL。
+数据可冻结、报告输入预检、最终原生自审及实际成交分别验收，不以全现金或降门禁制造通过。
+
+## 2.0 初版升级回顾：可审计的策略回测闭环
+
+以下保留 1.0 → 2.0 初版（StrategyDocument V1）的演进记录；当前新建 V2 的行为以上节为准。
 
 1.0 已有独立的 A 股手工模拟盘，支持服务端现金/持仓账本、FIFO、T+1、费用、
 整手校验和幂等订单；它不是一个版本化策略回测系统。2.0 在保留这条能力的基础上，
@@ -72,7 +89,8 @@ Bundle 仍可只读物化和冻结 report manifest，但不会再被新任务写
   -> 统一证券身份解析
   -> UZI 原生 provider 采集 22 维并按日写入可修订 Snapshot 草稿
   -> UZI Stage 1：原生 provider → MX/DDGS → Playwright 自动兜底
-  -> 用户按需启动 UZI Agent：suggested-fix 缺口循环 → 三组定性 Agent evidence → 重审
+  -> 完整数据任务：研究原文发现 → 发布时间/历史版本核验 → 正文/PDF 按 hash 归档
+  -> 用户按需定向重试缺口，复用其他合格数据
   -> 股票生成精确冻结候选；基金生成 1 个父槽 + 10 只 A 股 × 22 槽的组合候选
   -> 用户核对 proposal hash 与缺口披露后，显式确认发布不可变日级 Bundle
   -> 冻结单股/组合 report manifest
@@ -96,10 +114,13 @@ collector（`6_fund_holders`、`similar_stocks`）”。`20_valuation_models`、
 这些旧文档需要在再次执行前显式迁移，系统不会静默改写其历史内容。
 
 股票可用性与报告门严格跟随 UZI：provider 返回的原生 `DimResult`
-决定该维是否有可用数据；`required_fields`、A/B 证据、PIT、过期与冲突
-只进入独立审计，不再把 UZI 认为有数据的维度改判为“不可用”。
+决定该维是否有可用数据；本地字段、证据等级、过期与冲突检查独立披露，
+不再把 UZI 认为有数据的维度改判为原生“不可用”。PIT 合法性仍是独立输入安全门槛。
 `report_generatable` 表示 22 个结果槽均已有原生结果或明确缺口，可交给完整 Agent 恢复流程；
-`report_ready` 是 UZI Medium 数据阶段预检。最终是否能输出 HTML/PDF，仍由
+采集候选中的 `report_ready` 仅为数据阶段摘要；正式 Manifest 按实际档位生成输入诊断，
+数据和研究引用缺口交给 Agent 分析，不额外作为启动硬门禁。六维定性研究按产出的证据条目检查，
+同一 URL 可支持不同事实，不要求两个不同 URL；未知项须明确披露，不得编造引文。
+冻结 hash、权限、撤销、执行版本及 PIT 检查仍可阻止不安全输入。最终是否能输出 HTML/PDF，仍由
 UZI 完整 Agent 流程结束后的原生 self-review 决定：有 critical 阻断，
 warning 允许出报告并披露。超时、未配置、无权限、解析失败或开放搜索
 无命中会如实落为 `data_gap`，不会被填成中性分。
@@ -131,7 +152,7 @@ checkpoint；基金父快照一旦成功落库，重试会复用它并只补尚�
 没有历史档案的字段不会回填。每个槽明确区分 `available`、`partial`、
 `verified_empty`、`retryable_failure` 与 `unavailable`：部分恢复保留 UZI 评分资格并披露
 可选缺口，查证为空是合法观测，上游临时失败可定向重试，只有真正没有历史档案的字段
-才排除评分。只要 22 个槽
+才记为不可恢复缺口；评分是否可用由原生 UZI 决定，本地不擅自改变权重。只要 22 个槽
 都已有原生结果或明确缺口记录，就可形成 `quality=degraded` 的冻结候选；用户可先让
 UZI Agent 尝试恢复并重新生成候选，也可确认缺口披露后冻结；`report_ready`、`report_generatable`
 与 `audit_ready` 始终分别展示。
@@ -139,8 +160,8 @@ UZI Agent 尝试恢复并重新生成候选，也可确认缺口披露后冻结�
 历史财报在冻结前会按 UZI 原生计算合同规范化：营业收入、净利润历史序列统一为“亿元”
 数值，ROE 等比例序列统一为百分数值。上游页面的 `6.10亿`、`2991.87万`、`7.48%`
 等展示字符串不会直接进入评分函数，避免在增长率计算中触发字符串减法并被误诊断为
-数据缺口。没有历史档案而明确 `_excluded_from_scoring` 的安全槽只形成 warning，不会被
-第二层自审再次升级为 critical。
+数据缺口。不再以 `_excluded_from_scoring` 等本地历史标记把原生 critical 降为 warning；
+PIT 合法性与原生交付门分别检查。
 
 基金历史 Job 会优先复用已落库、且能证明在 cutoff 前可见的快照/Bundle；缺失时只走
 历史持仓专用重建路径。该路径按目标日筛选官方定期报告，实际下载并哈希 PDF，
@@ -155,15 +176,34 @@ UZI Agent 尝试恢复并重新生成候选，也可确认缺口披露后冻结�
 [《历史 PIT 误降级修复计划与验收记录》](./plan/historical-pit-recovery-fix-plan.md)。
 Agent OS 正式研究可用 ISO 日期约束 `analysis_as_of_date=YYYY-MM-DD` 精确选择历史
 Bundle；未解决槽、无 Bundle 或 cutoff 晚于评估时点仍会失败，安全降级槽则随
-manifest 冻结、从 UZI 维度加权中剔除，并进入报告数据缺口区，绝不回退当前值。
-报告的节点级定向重试继续绑定原 attempt 的不可变 manifest，以保证重放一致；只有用户
-明确确认的 `full_rerun` 才重新选择当前最新、满足目标日 cutoff 的 Bundle revision 并冻结
-一个新 manifest。补采后若希望报告采用新数据，应选择完整重跑，而不是节点重试。
+Manifest 冻结并进入报告数据缺口区，绝不回退当前值，也不自行把维度权重置零。
+报告的普通节点重试继续绑定原 attempt 的不可变 Manifest。补采完成并确认冻结后，可在
+日报任务点击“使用已补采数据重试”，或显式调用
+`POST /api/v2/finance/report-jobs/{id}/retry`，传入
+`{"symbols":["688012"],"refresh_inputs":true,"confirmed":true}`。
+这会在排队前固定选定股票的新 Manifest；未选股票的 Bundle、证据集合及基金持仓保持
+原值，输入/版本匹配的合格结果继续复用。未提供 `symbols` 时仅选择失败股票。
+没有新输入返回明确 409；普通分析重试、输入修订和 `full_rerun` 不再混为同一操作。
+恢复同一 attempt 不会重新选择“最新”。运行代码/模型已升级时，应发布新策略版本并创建
+新报告，不能将新版执行标为旧版重放。
+
+`GET /api/v2/finance/report-jobs/{id}/repair-plan` 提供逐股补采清单、历史能力限制及
+可直接提交的数据中心 `collection_request`；读取不会启动采集。显式补采只刷新选定维度，
+不重采基金持仓，完成后仍需确认冻结。旧“查无记录”快照若未保留原生响应，补缺时会
+重新获取有历史能力的来源；不会凭零条标记编造原生字段，也不会改写已冻结快照。
+引用不足不再等同于输入缺失：有冻结来源时定向修复研究输出，无来源时才转补采；
+引用不完整的组不进入成功缓存，合格组继续复用。原生最终自审要求不变。
+历史研报补采按股票裸代码和截止日查询，保留原始文档 ID、发布日期与 PDF 链接；
+不会把当前滚动盈利预测当作历史研报事实。旧适配器产生的零条结果会在显式补缺时重新
+核验。基金持有人接口仅有“持仓截止日期”时，不能作为历史公开披露日期；缺少历史版本
+证明会明确披露，不能判成“历史无持仓”。研报目录获取也不等同于正文归档完成。
 基金报告冻结时，10 个股票 Bundle 之外还会把父基金 Bundle ID、
 Bundle manifest hash 以及父快照 hash 写入 report manifest 依赖和最终 hash；
 父披露变更或失效时，原报告输入不会被静默复用。每个持仓子 Agent 启动前仍会重验父
-Manifest hash、全部 Bundle 引用和基金父依赖，但只物化当前股票的 22 个 Snapshot，
+Manifest hash、Bundle 引用和基金父依赖，但只物化当前股票的 22 个 Snapshot，
 避免把十股 Manifest 完整扫描十次；这只是校验粒度优化，不放宽撤销、冲突或完整性门禁。
+新 Manifest 还固定证据 ID、原文 hash、引用关系及实际模型/提示词/投影版本。
+完整输入只写一次，批次状态保存引用与 hash；进度刷新不反复序列化全部原文。
 升级环境需在备份后
 显式执行 Alembic `20260820_0003_market_data_point_in_time.py` 和
 `20260820_0004_fund_holding_inputs.py`；API 进程启动不会隐式改库。
@@ -280,21 +320,51 @@ Compose 的默认 SQLite 与对象目录位于 `cognitrade_workspace` 命名卷�
 需要由平台执行快照/备份策略，外部对象目录也必须显式挂载进容器。生产预检会拒绝未迁移
 数据库、不可写对象目录或 `COGNITRADE_DATABASE_AUTO_BOOTSTRAP=true`。
 
-模型能力需要：
+模型能力使用官方 Python Codex SDK（`openai-codex==0.154.0`，随包运行时同版本）。
+旧 API-key Provider 已删除；`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`
+不再用于生成模型，不会在 Codex 失败时切回旧 API。配置如下：
 
 ```dotenv
-OPENAI_API_KEY=<key>
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-5.6-luna
-OPENAI_REASONING_EFFORT=low
-OPENAI_SERVICE_TIER=default
-OPENAI_DISABLE_RESPONSE_STORAGE=true
+PROVIDER_NAME=codex
+CODEX_MODEL=gpt-5.6-luna
+CODEX_REASONING_EFFORT=low
 UZI_LLM_REQUEST_TIMEOUT_SECONDS=480
 UZI_LLM_MAX_CONCURRENCY=2
-UZI_LLM_TRANSIENT_RETRIES=6
+UZI_LLM_TRANSIENT_RETRIES=2
 UZI_LLM_RETRY_BASE_SECONDS=2
 UZI_LLM_RETRY_MAX_SECONDS=60
 ```
+
+先在实际运行后端的环境中完成 Codex 的 ChatGPT 登录。宿主机登录不会自动传入 Docker；
+容器凭据由 Codex 管理并保存在独立 `cognitrade_codex` 卷，不打进镜像、不复制桌面 token：
+
+```bash
+# 新镜像构建后，用同一个非特权服务用户完成设备登录（按终端提示操作）
+docker compose run --rm --no-deps api python scripts/codex_login.py
+docker compose run --rm --no-deps api python scripts/codex_login.py --status
+# 显式真实模型探针；输出文件必须是未使用过的新路径
+docker compose run --rm --no-deps api python scripts/probe_codex_provider.py \
+  --allow-model-call --output workspace/reports/codex-sdk-first-probe.json
+```
+
+本地直接运行时将上述 `docker compose run --rm --no-deps api python` 换成 `.venv/bin/python`。
+`CODEX_MODEL` 必须是该登录账户实际有权使用的模型，探针会检查模型列表及真实返回。
+SDK 不是旧 Responses API 的参数别名：不传 `temperature`、`service_tier` 或 HTTP 存储开关；
+`CODEX_REASONING_EFFORT` 是默认值，原有 UZI 阶段/档位显式推理强度优先，并记录每次实际值。
+会话设为 ephemeral，Codex 自身仍管理认证与运行日志。每次调用使用独立会话、禁用浏览器、
+搜索、Shell、MCP、个人 Skills 和记忆；业务工具仍由 Agent OS 校验与执行。结构化结果保留
+原 Pydantic 校验；开放字典使用 JSON 提示输出，不能强行关闭字典键而丢掉维度。
+
+六维定性研究通过受控动态工具读取本次 Manifest 已物化的资料：先分页查看目录，再检索、
+按字符位置分段读取（单次最多 6,000 字符），不再把所有原文拼成一次巨型请求。
+这些工具只能读取当前股票的固定输入，不能联网、读取任意路径或写文件；正文按内容 hash
+寻址，缓存绑定完整资料集，原生研究问题及输出校验不变。宿主记录工具调用与实际读取范围，
+不会把“资料已归档”表述为“模型已通读全文”。这只修复输入方式，不保证模型内容自审通过。
+实现和验收范围见 [冻结资料读取修复方案](plan/uzi-frozen-reader-repair-20260914.md)。
+
+新策略/Manifest 固定 SDK、运行时、适配器 hash、模型及推理档位，旧报告输入不原地改写。
+Codex 不提供 Embedding，本链路显式使用词法检索，不用哈希向量冒充语义向量。
+基础 SDK 探针通过不代表 medium 报告自审或真实回测已通过，须分别查看 E2E 验收工件。
 
 UZI 报告不再给所有请求套同一个 480 秒上限：Lite、Medium、Deep 的结构化阶段
 分别使用 240、600、900 秒；内容较短的四个买入区间始终最多使用 300 秒。
@@ -302,7 +372,7 @@ UZI 报告不再给所有请求套同一个 480 秒上限：Lite、Medium、Deep
 在原生 UZI 中是 bonus fetcher，但在数据中心契约中是 22 个原始 collector 之一。
 直接/legacy 路径的单次 HTTP 默认 5 秒，v3 spawn 路径由上游进程调度器执行
 30 秒硬终止；当前日超时会如实记录为可重试 `data_gap` 并阻止严格 Bundle 发布；
-历史查询穷尽后可转成排除评分的终态披露，不伪造同行数据。
+历史查询穷尽后保留具体缺口披露，不伪造同行数据或自行排除评分。
 
 十大持仓批次的外层等待同样按档位区分：Lite 60 分钟、Medium 120 分钟、Deep 180 分钟；
 多日历史补跑仍至少使用独立的 6 小时单日批次预算。外层超时只负责终止真正失控的批次，
@@ -314,11 +384,17 @@ UZI 报告不再给所有请求套同一个 480 秒上限：Lite、Medium、Deep
 机构方法和 Deep 独有多空辩论；“快速模式”只由独立 `quick_scan` 意图进入，不会再把
 正式 Lite/Medium 报告静默降级成规则引擎骨架。
 
-历史报告不会用当前网页补造目标日证据。若冻结 Bundle 的六类定性维度有结构化 PIT 数据，
-但目标日没有至少两条可审计 URL，Agent 证据预检会明确记为“目标日无 PIT-safe URL”，
-将这六维定性扩展降为 warning 并写入报告缺口；编号维度、66 席评审和 UZI 核心数值门禁
-仍照常执行。只有纯粹的 URL 证据缺失可这样终态披露，模型失败、来源无效或其他自检
-critical 仍会阻止报告。当前日研究继续按 UZI 原生标准要求定性引用，不适用该历史例外。
+历史报告不会用当前网页补造目标日证据。六类定性研究的输入引用缺口作为 Agent 提示及
+手动数据中心补采清单，不在报告阶段联网，也不因输入 URL 数量不足提前拒绝分析。
+未知事实保留缺口；最终原生 critical 不会被自动改成 warning。
+仅有旧日期 URL、当前内容 hash 或报告期不足以证明历史版本。成功回溯生成的 HTML
+会披露报告截止日及实际生成日期，不冒充当日实际发布的报告。
+
+新输入使用 `uzi-dim-result-v3`，保留采集器实际返回的 `data/error/_timeout/source`，
+不因本地可用性标签清空原始结果，也不凭标签伪造原生错误字段。旧 Manifest 保留 v1/v2
+投影及原输入 hash；旧任务的研究预检失败可在读取时重新解释，但不会原地更换执行版本。
+已经固定旧模型/提示词/投影版本的任务须使用对应运行环境，或新建报告修订。
+本次对齐范围与验证结果见 [预检修复记录](docs/uzi-native-preflight-alignment.md)。
 
 完整 Agent 阶段使用冻结快照并按 `UZI_LLM_MAX_CONCURRENCY` 调度：角色评审与六维研究
 同波并行，维度评论按 5 维一组并发，四类买入区间并发。失败恢复刻意优于原生 CLI 的
@@ -334,8 +410,8 @@ critical 仍会阻止报告。当前日研究继续按 UZI 原生标准要求定
 日报重试/恢复开始时会清空本次日期上一 attempt 的错误和完成时间；历史报告集与 attempt
 仍完整保留供审计，但旧超时不会继续污染新 attempt 的状态、错误摘要或前端提示。
 
-没有模型 Key 时，系统仍可执行确定性 Pack 能力，但需要模型合成的最终答复可能以
-`completed_partial` 结束。`COGNITRADE_API_ALLOW_UNAUTHENTICATED=true` 只允许
+未完成 Codex 登录时仍可运行确定性数据能力，但需要模型的阶段会明确报告登录缺失，
+不能把降级答复当作原生报告成功。`COGNITRADE_API_ALLOW_UNAUTHENTICATED=true` 只允许
 回环地址的隔离本地开发，生产部署脚本始终启用认证。
 
 可选真实数据源配置：

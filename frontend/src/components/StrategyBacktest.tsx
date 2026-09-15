@@ -278,6 +278,7 @@ export function BackfillProgress({ job, onPreflight }: { job: ReportJob; onPrefl
       <header><div><strong>日报补跑 · {job.status.toUpperCase()}</strong><code>{job.id}</code></div><span>{progress.processed}/{progress.total} · {progress.percent}%</span></header>
       <ProgressTrack progress={progress} label="日报补跑进度" />
       <p>{progressSummary(job, progress, true)}</p>
+      <ReportStageProgress job={job} />
       {job.error_summary && <p className="strategy-inline-error">{job.error_summary}</p>}
       {terminal && <button className="secondary-button" onClick={() => void onPreflight()}><ShieldCheck size={13} />重新执行预检</button>}
     </div>
@@ -290,8 +291,32 @@ export function ReportJobProgressMeter({ job }: { job: ReportJob }) {
     <div className="report-job-progress">
       <div><span>{progress.processed}/{progress.total} · {progress.percent}%</span><small>{progressSummary(job, progress, false)}</small></div>
       <ProgressTrack progress={progress} label={`日报任务进度 ${job.id}`} />
+      <ReportStageProgress job={job} />
     </div>
   )
+}
+
+function ReportStageProgress({ job }: { job: ReportJob }) {
+  const progress = job.progress
+  const batches = progress.batches && typeof progress.batches === 'object'
+    ? Object.entries(progress.batches) : []
+  const phase = String(progress.request_phase || '')
+  const phaseLabel: Record<string, string> = { queued: '等待模型槽位', requesting: '模型请求中', backoff: '瞬时错误退避', queue_timeout: '模型准入超时', completed: '模型响应已返回，阶段仍需校验', failed: '模型请求失败', stage_deadline: '阶段预算已耗尽', cancelled: '模型请求已取消' }
+  const stage = String(progress.current_action || progress.current_stage || '')
+  const timing = progress.request_timing && typeof progress.request_timing === 'object'
+    ? progress.request_timing as Record<string, unknown> : null
+  if (!batches.length && !stage && !phase) return null
+  return <div className="report-stage-progress">
+    <p>{stage || (['queued', 'running'].includes(job.status) ? '持仓报告执行中，日报完成度将在结算后更新' : '持仓报告批次已记录')}{phase ? ` · ${phaseLabel[phase] || phase}` : ''}</p>
+    {progress.holding_total !== undefined && <small>持仓完成 {Number(progress.holding_completed || 0)}/{Number(progress.holding_total)}</small>}
+    {progress.progress_scope === 'stock_agent_stages' && <small>本股 Agent 已校验 {Number(progress.workflow_completed_stages || 0)}/{Number(progress.workflow_total_stages || 0)} 阶段（不代表整份报告通过交付）</small>}
+    {timing && <small>{typeof timing.executor_wait_seconds === 'number' ? `执行器排队 ${timing.executor_wait_seconds.toFixed(1)}s · ` : ''}模型槽位排队 {Number(timing.queue_seconds || 0).toFixed(1)}s · 请求 {Number(timing.http_seconds || 0).toFixed(1)}s · 退避 {Number(timing.backoff_seconds || 0).toFixed(1)}s</small>}
+    {timing && typeof timing.stage_elapsed_seconds === 'number' && <small>本阶段已耗时 {timing.stage_elapsed_seconds.toFixed(1)}s{typeof timing.remaining_budget_seconds === 'number' ? ` · 剩余预算 ${timing.remaining_budget_seconds.toFixed(1)}s` : ''}（包含入队等待，不代表整份报告完成度）</small>}
+    {typeof progress.persistence_seconds === 'number' && <small>持仓累计持久化 {progress.persistence_seconds.toFixed(1)}s（不含复用报告）</small>}
+    {progress.render_status === 'not_executed_in_job' && <small>任务内 HTML 渲染未执行（导出时按需计时）</small>}
+    {Number(progress.cache_hit_count || 0) > 0 && <small>复用 {Number(progress.cache_hit_count)} 份报告 · {progress.cache_reason === 'fixed_manifest_and_pins_match' ? '冻结 Manifest 与版本约束一致' : String(progress.cache_reason || '已通过缓存匹配')}</small>}
+    {batches.map(([day, id]) => <small key={day}>{day} · 批次 <code>{String(id)}</code></small>)}
+  </div>
 }
 
 type ReportJobProgress = ReturnType<typeof reportJobProgress>

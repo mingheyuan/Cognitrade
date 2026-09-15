@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import importlib
 import os
-from pathlib import Path
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from domain_packs.finance_ashare.skills.policy_snapshot.skill import PolicySnapshotSkill
 from domain_packs.finance_ashare.subagents.uzi_methodology import select_profile
-from domain_packs.finance_ashare.subagents.uzi_panel_context import YOUZI_FIT_RULES, YOUZI_SEAT_KEYWORDS
+from domain_packs.finance_ashare.subagents.uzi_panel_context import (
+    YOUZI_FIT_RULES,
+    YOUZI_SEAT_KEYWORDS,
+)
 from domain_packs.finance_ashare.subagents.uzi_panel_profiles import PROFILES
 from domain_packs.finance_ashare.subagents.uzi_panel_registry import PANEL_REGISTRY
 from domain_packs.finance_ashare.subagents.uzi_panel_rules import (
@@ -15,23 +20,25 @@ from domain_packs.finance_ashare.subagents.uzi_panel_rules import (
     coverage_stats,
     evaluate_investor,
 )
-from domain_packs.finance_ashare.vendor.uzi_3_9_2 import Uzi392FetcherRuntime
+from domain_packs.finance_ashare.tools.snapshot_collector import (
+    _bundle_result,
+    _recovery_summary,
+)
 from domain_packs.finance_ashare.tools.uzi_data_recovery import (
     assess_integrity,
     collect_qualitative_agent_evidence,
     recover_playwright_snapshots,
     recover_qualitative_snapshots,
 )
-from domain_packs.finance_ashare.skills.policy_snapshot.skill import PolicySnapshotSkill
-from domain_packs.finance_ashare.tools.snapshot_collector import _bundle_result, _recovery_summary
+from domain_packs.finance_ashare.vendor.uzi_3_9_2 import Uzi392FetcherRuntime
 from research_system.adapters.vendors.uzi_qualitative_fallback import (
     UziQualitativeFallback,
     is_junk_fallback_text,
 )
 from research_system.runtime.agent_os import AgentOS
+from research_system.runtime.platform.settings import Settings
 from research_system.schemas.core_runtime import RequestIntakeDecision
 from research_system.schemas.protocol import RequestEnvelope
-from research_system.runtime.platform.settings import Settings
 
 
 def _settings(**updates) -> Settings:
@@ -303,6 +310,11 @@ class UziRuleSourceParityTests(unittest.TestCase):
 
 
 class UziFallbackParityTests(unittest.TestCase):
+    def setUp(self):
+        temporary = TemporaryDirectory(prefix="uzi-postfetch-parity-")
+        self.addCleanup(temporary.cleanup)
+        self.workspace_root = Path(temporary.name)
+
     def test_policy_dimension_is_collected_per_symbol_without_sector_scope(self) -> None:
         skill = PolicySnapshotSkill()
         with patch.object(skill.adapter, "get_policy_snapshot", return_value={"policy_items": []}), patch(
@@ -373,14 +385,15 @@ class UziFallbackParityTests(unittest.TestCase):
             "snapshot_type": "macro", "symbol": "600519", "facts": {"availability": "data_gap"}, "degraded": True,
         }]
         with patch(
-            "domain_packs.finance_ashare.tools.uzi_data_recovery.UziQualitativeFallback.collect",
+            "domain_packs.finance_ashare.tools.uzi_data_recovery.UziWebSearchAdapter.search",
             return_value={
-                "status": "available", "source_id": "ddgs", "text": "真实宏观数据与利率周期公开信息",
+                "results": [{"title": "真实宏观数据与利率周期公开信息", "body": "", "url": "https://example.test/source"}],
                 "query": "q", "source_trace": [{"source_id": "ddgs", "status": "available"}],
             },
         ) as collect:
             result = recover_qualitative_snapshots(
-                snapshots, query="研究茅台", symbols=["600519"], profile="deep", settings=_settings(),
+                snapshots, query="研究茅台", symbols=["600519"], profile="deep",
+                settings=_settings(mx_api_key=None, workspace_root=self.workspace_root),
             )
         self.assertEqual(result["order"], ["mx_api", "ddgs"])
         self.assertNotIn("allow_browser", collect.call_args.kwargs)
@@ -449,18 +462,9 @@ class UziFallbackParityTests(unittest.TestCase):
         snapshots = [{
             "snapshot_type": "peers", "symbol": "600519", "facts": {"availability": "data_gap"}, "degraded": True,
         }]
-        browser_payload = {
-            "evidence": {
-                "xueqiu_f10": {
-                    "text_excerpt": "同行股票",
-                    "links": [{"text": "五粮液", "url": "https://xueqiu.com/S/SZ000858"}],
-                }
-            },
-            "source_trace": [{"source_id": "xueqiu_f10", "strategy_id": "xueqiu_f10", "status": "available"}],
-        }
         with patch(
-            "domain_packs.finance_ashare.tools.uzi_data_recovery.UziBrowserAdapter.collect_many",
-            return_value=browser_payload,
+            "domain_packs.finance_ashare.tools.uzi_data_recovery.UziBrowserAdapter.fetch_native_html",
+            return_value='<a href="/S/SZ000858">五粮液</a>',
         ):
             result = recover_playwright_snapshots(
                 snapshots,
@@ -468,6 +472,7 @@ class UziFallbackParityTests(unittest.TestCase):
                 symbols=["600519"],
                 profile="medium",
                 settings=_settings(
+                    workspace_root=self.workspace_root,
                     browser_sources_enabled=True,
                     sensitive_sources_enabled=True,
                     sensitive_source_allowlist=["xueqiu"],
@@ -476,7 +481,9 @@ class UziFallbackParityTests(unittest.TestCase):
             )
         self.assertEqual(result["succeeded"], 1)
         self.assertEqual(snapshots[0]["facts"]["peer_table_playwright"][0]["code"], "000858.SZ")
-        self.assertIn("xueqiu_f10", snapshots[0]["facts"]["browser_evidence"])
+        observation = snapshots[0]["facts"]["_uzi_postfetch"]["observations"][0]
+        self.assertEqual(observation["source_id"], "xueqiu_f10")
+        self.assertIn("/S/SZ000858", observation["response"])
 
     def test_integrity_keeps_recovery_tasks_and_never_fills_fake_values(self) -> None:
         snapshots = [{

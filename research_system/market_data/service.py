@@ -19,6 +19,7 @@ from research_system.market_data.bundles import (
     BundleIntegrityError,
     BundleMaterializer,
     BundlePublisher,
+    CompanyProfileDependencyError,
     IncompleteBundleError,
 )
 from research_system.market_data.collection import (
@@ -26,6 +27,9 @@ from research_system.market_data.collection import (
     CollectionJobError,
     MarketDataCollectionCoordinator,
     market_scope,
+)
+from research_system.market_data.company_profile_dependencies import (
+    check_company_profile_dependencies,
 )
 from research_system.market_data.contracts import EvidenceInput, SnapshotIngestInput
 from research_system.market_data.dimension_contracts import (
@@ -51,6 +55,8 @@ from research_system.market_data.instruments import (
     SecurityIdentityResolver,
 )
 from research_system.market_data.job_diagnostics import (
+    fund_gap_dimensions,
+    project_fund_parent_status,
     summarize_fund_portfolio,
     summarize_tasks,
 )
@@ -73,6 +79,7 @@ from research_system.market_data.report_inputs import (
     ReportInputError,
 )
 from research_system.market_data.repository import MarketDataRepository
+from research_system.market_data.research_archive import research_publication_projection
 from research_system.market_data.resolver import SnapshotResolver
 from research_system.market_data.subscriptions import (
     MarketDataSubscriptionScheduler,
@@ -160,7 +167,7 @@ class MarketDataCenterService:
                 getattr(settings, "market_data_auto_collection_enabled", False)
             ),
         )
-        self.report_gateway = DatabaseReportInputGateway(database)
+        self.report_gateway = DatabaseReportInputGateway(database, runtime_settings=settings)
 
     # Read-only contract and coverage -------------------------------------------------
     def get_contract(self, *, market: str = "CN_EQUITY") -> dict[str, Any]:
@@ -206,6 +213,11 @@ class MarketDataCenterService:
                 contract_version=registry.contract_version,
             )
             result = coverage.model_dump(mode="json")
+            if resolved_market != FUND_MARKET:
+                result["company_profile_dependencies"] = check_company_profile_dependencies([
+                    repository.require_snapshot(item.snapshot_id)
+                    for item in coverage.dimensions if item.snapshot_id
+                ])
             result["counts"] = {
                 "available": coverage.available_count,
                 "verified_empty": coverage.verified_empty_count,
@@ -443,6 +455,12 @@ class MarketDataCenterService:
                     status_code=422,
                 )
             if resolved_family == "fund":
+                if request.get("include_research_archive") is not None or request.get("research_document_requests"):
+                    raise MarketDataServiceError(
+                        "fund_research_archive_option_unsupported",
+                        "原文归档选项适用于股票任务；基金入口继续使用完整持仓采集工作流",
+                        status_code=422,
+                    )
                 if len(identities) != 1:
                     raise MarketDataServiceError(
                         "fund_collection_single_parent_required",
@@ -492,6 +510,8 @@ class MarketDataCenterService:
                 mode=str(request.get("mode") or "missing_or_stale"),
                 max_concurrency=concurrency,
                 publish_when_complete=False,
+                include_research_archive=request.get("include_research_archive"),
+                **({"research_document_requests": request["research_document_requests"]} if request.get("research_document_requests") else {}),
             )
         except CollectionJobError as exc:
             raise MarketDataServiceError(exc.code, exc.message, status_code=exc.status_code) from exc
@@ -620,7 +640,9 @@ class MarketDataCenterService:
             for row in rows:
                 if row.parent_job_id:
                     children_by_parent.setdefault(row.parent_job_id, []).append(row)
+            results_by_task = {result.task_id: result for result in latest_results.values()}
 
+            profile_scope_cache = {}
             items = [
                 self._collection_job_summary_payload(
                     row,
@@ -628,6 +650,11 @@ class MarketDataCenterService:
                     resolution_counts=resolution_by_job.get(row.id, {}),
                     child_rows=children_by_parent.get(row.id, []),
                     tasks_by_job=tasks_by_job,
+                    results_by_task=results_by_task,
+                    checkpoint_override=(FundHoldingCollectionCoordinator.project_profile_dependency_gaps(
+                        session, row, dict(row.checkpoint_json or {}), registry=self.registry,
+                        scope_cache=profile_scope_cache)
+                        if row.job_type == FUND_HOLDING_JOB_TYPE else None),
                 )
                 for row in rows
             ]
@@ -646,8 +673,10 @@ class MarketDataCenterService:
         resolution_counts: Mapping[str, int],
         child_rows: list[MarketDataCollectionJob],
         tasks_by_job: Mapping[str, list[MarketDataCollectionTask]],
+        results_by_task: Mapping[str, MarketDataCollectionTaskResult] | None = None,
+        checkpoint_override: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        checkpoint = dict(job.checkpoint_json or {})
+        checkpoint = dict(checkpoint_override if checkpoint_override is not None else job.checkpoint_json or {})
         compact_checkpoint = (
             {
                 "parent_bundle_id": checkpoint.get("parent_bundle_id"),
@@ -660,6 +689,27 @@ class MarketDataCenterService:
         task_summary = summarize_tasks(tasks)
         task_summary["by_error_code"] = []
         task_summary["by_dimension"] = []
+        child_tasks = [
+            task
+            for child in child_rows
+            for task in tasks_by_job.get(child.id, [])
+        ]
+        strict_missing = (
+            fund_gap_dimensions(checkpoint, child_tasks=child_tasks)
+            if job.job_type == FUND_HOLDING_JOB_TYPE
+            else {}
+        )
+        expanded_holdings = [
+            {
+                **holding,
+                "missing_dimensions": list(
+                    strict_missing.get(
+                        str(holding.get("symbol") or "").upper(), []
+                    )
+                ),
+            }
+            for holding in list(checkpoint.get("holdings") or [])
+        ]
         payload = {
             "id": job.id,
             "job_id": job.id,
@@ -668,7 +718,15 @@ class MarketDataCenterService:
             "subscription_id": job.subscription_id,
             "parent_job_id": job.parent_job_id,
             "mode": job.mode,
-            "status": job.status,
+            "status": (
+                project_fund_parent_status(
+                    status=job.status,
+                    checkpoint=checkpoint,
+                    child_tasks=child_tasks,
+                )
+                if job.job_type == FUND_HOLDING_JOB_TYPE
+                else job.status
+            ),
             "asset_family": (
                 "fund" if job.job_type == FUND_HOLDING_JOB_TYPE else "equity"
             ),
@@ -684,13 +742,16 @@ class MarketDataCenterService:
             "checkpoint": compact_checkpoint,
             "agent_recovery": checkpoint.get("agent_recovery"),
             **_collection_publication_fields(job, checkpoint),
+            **({"company_profile_dependencies": checkpoint["publication"]["company_profile_dependencies"]}
+               if isinstance(checkpoint.get("publication"), Mapping)
+               and isinstance(checkpoint["publication"].get("company_profile_dependencies"), Mapping) else {}),
             "cancel_requested": bool(job.cancel_requested),
             "error_summary": job.error_summary,
             "created_at": _iso(job.created_at),
             "started_at": _iso(job.started_at),
             "completed_at": _iso(job.completed_at),
             "expanded_holdings": (
-                list(checkpoint.get("holdings") or [])
+                expanded_holdings
                 if job.job_type == FUND_HOLDING_JOB_TYPE
                 else []
             ),
@@ -713,15 +774,12 @@ class MarketDataCenterService:
             "tasks": [],
         }
         if job.job_type == FUND_HOLDING_JOB_TYPE:
-            child_tasks = [
-                task
-                for child in child_rows
-                for task in tasks_by_job.get(child.id, [])
-            ]
             payload["portfolio_summary"] = summarize_fund_portfolio(
                 checkpoint=checkpoint,
                 child_tasks=child_tasks,
+                child_results=[results_by_task[task.id] for task in child_tasks if task.id in (results_by_task or {})],
                 dimensions_per_holding=len(self.registry.dimension_ids),
+                dimension_ids=self.registry.dimension_ids,
                 top_n=10,
             )
         return payload
@@ -784,7 +842,9 @@ class MarketDataCenterService:
                 acknowledge_degraded=acknowledge_degraded,
             )
         except CollectionJobError as exc:
-            raise MarketDataServiceError(exc.code, exc.message, status_code=exc.status_code) from exc
+            raise MarketDataServiceError(
+                exc.code, exc.message, status_code=exc.status_code, details=exc.details
+            ) from exc
 
     def start_collection_agent_recovery(
         self,
@@ -1195,6 +1255,13 @@ class MarketDataCenterService:
                     published_by=actor_id,
                 )
                 return self._bundle_payload(session, row, include_items=True)
+        except CompanyProfileDependencyError as exc:
+            raise MarketDataServiceError(
+                "market_data_input_version_pending",
+                "输入版本待补齐：公司信息已更新，相关数据尚未按同一版本重建",
+                status_code=409,
+                details={"company_profile_dependencies": exc.company_profile_dependencies},
+            ) from exc
         except IncompleteBundleError as exc:
             raise MarketDataServiceError(
                 "market_data_bundle_incomplete",
@@ -1573,6 +1640,7 @@ class MarketDataCenterService:
                         "field_paths": [association.field_path],
                         "purpose": association.purpose,
                         "metadata": dict(evidence.metadata_json or {}),
+                        **research_publication_projection(evidence),
                     }
                 )
             conflict_rows = list(

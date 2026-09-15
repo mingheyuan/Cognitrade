@@ -13,14 +13,14 @@ def build_environment_checks(settings: Settings, env_path: Path) -> list[dict]:
             "path": str(env_path),
         },
         {
-            "name": "openai_api_key",
-            "status": "passed" if bool(settings.openai_api_key) else "failed",
-            "detail": "configured" if settings.openai_api_key else "missing",
+            "name": "codex_provider",
+            "status": "passed" if settings.provider_name == "codex" else "failed",
+            "detail": "Codex SDK; login/model readiness requires explicit provider health",
         },
         {
-            "name": "openai_base_url",
-            "status": "passed" if settings.openai_base_url is not None else "skipped",
-            "detail": settings.openai_base_url or "not_set",
+            "name": "codex_authentication",
+            "status": "skipped",
+            "detail": "Run the explicit Codex health check; no API-key fallback",
         },
         {
             "name": "llm_request_timeout_seconds",

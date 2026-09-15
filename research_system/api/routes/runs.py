@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from time import monotonic
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, Query, Response
@@ -8,12 +9,12 @@ from starlette.concurrency import run_in_threadpool
 
 from domain_packs.finance_ashare.reporting import (
     ReportArtifactMissingError,
-    ReportPdfUnavailableError,
     ReportImageUnavailableError,
+    ReportPdfUnavailableError,
     render_uzi_native_html,
-    render_uzi_native_pdf,
     render_uzi_native_image,
     render_uzi_native_one_liner,
+    render_uzi_native_pdf,
 )
 from research_system.api.dependencies import (
     ApiPrincipal,
@@ -32,9 +33,8 @@ from research_system.api.route_support import (
     research_validation_capabilities,
 )
 from research_system.api.validation import safe_identifier, validate_research_request
-from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
 from research_system.runtime.presentation.display import localize_public_error_fields
-
+from research_system.schemas.protocol import RequestEnvelope, ResponseEnvelope
 
 RunStatusFilter = Literal[
     "received",
@@ -209,6 +209,7 @@ async def export_run_report(
         status="active",
         principal=principal,
     )
+    render_started_at = monotonic()
     try:
         rendered = await run_in_threadpool(
             render_uzi_native_html,
@@ -230,6 +231,7 @@ async def export_run_report(
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "DENY",
         "X-Cognitrade-Source-Artifact-Count": str(len(rendered.source_artifact_ids)),
+        "Server-Timing": f"uzi_html_render;dur={max(0.0, monotonic() - render_started_at) * 1000:.3f}",
     }
     if format == "html":
         return Response(

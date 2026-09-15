@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ReportJob, StrategyBacktest, StrategyDocument, StrategyRecord } from '../strategy-contracts'
+import type { ReportJob, StrategyBacktest, StrategyDocumentV1, StrategyDocumentV2, StrategyRecord } from '../strategy-contracts'
 import { Strategies } from './Strategies'
 
 vi.mock('../CognitradeContext', () => ({
@@ -10,7 +10,7 @@ vi.mock('../CognitradeContext', () => ({
   }),
 }))
 
-const documentFixture: StrategyDocument = {
+const documentFixture: StrategyDocumentV1 = {
   metadata: { schema_version: '1', description: '基金报告复合策略' },
   pins: {
     uzi_methodology_version: '3.9.2', uzi_source_commit: 'commit-a', model_id: 'model-a',
@@ -47,6 +47,23 @@ const documentFixture: StrategyDocument = {
     otc_fund: { subscription_fee_rate_fallback: 0.0015, redemption_fee_rate_fallback: 0.005, subscription_confirmation_days: 1, redemption_confirmation_days: 2, require_open_status: true, missing_open_status_policy: 'assume_open_degraded', max_position_pct: 100, entry_tranche_pct: 100, max_entry_tranches: 1, minimum_entry_interval_days: 0 },
   },
   schedule_defaults: { enabled: false, timezone: 'Asia/Shanghai', local_time: '16:30', settlement_cutoff: '08:30', skip_non_trading_days: true },
+}
+
+function nativeDocumentFixture(): StrategyDocumentV2 {
+  return {
+    metadata: { schema_version: '2', description: '原生报告条件回放测试' },
+    pins: documentFixture.pins,
+    report_inputs: { ...documentFixture.report_inputs, research_profile: 'medium', enabled_backtest_modes: ['holdings_portfolio'] },
+    report_signal: {
+      model: 'report_conditions_v1', source: 'dashboard.battle_plan', extractor_version: 'uzi-battle-plan-v1',
+      entry_fraction: 0.5, entry_valid_trading_days: 3, evaluation: 'daily_close_next_open',
+      position_plan: 'lock_on_entry', gap_policy: 'cancel_outside_stop_target', weight_policy: 'original_disclosed_no_normalization',
+    },
+    quality_gates: documentFixture.quality_gates,
+    execution: { max_single_stock_pct: 20 },
+    asset_execution: documentFixture.asset_execution,
+    schedule_defaults: documentFixture.schedule_defaults,
+  }
 }
 
 const version = {
@@ -208,6 +225,107 @@ describe('Strategies', () => {
     vi.unstubAllGlobals()
   })
 
+  it('renders and publishes V2 without accessing legacy scoring or MA fields', async () => {
+    current = strategyFixture({
+      draft: { ...strategyFixture().draft!, document: nativeDocumentFixture() },
+      latest_version: { ...version, schema_version: '2' },
+      versions: [{ ...version, schema_version: '2' }],
+    })
+    render(<Strategies />)
+    expect(await screen.findByText('原生 UZI 报告条件回放 V2')).toBeInTheDocument()
+    expect(screen.queryByLabelText('买入阈值')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('快均线')).not.toBeInTheDocument()
+    expect(screen.getByText('原始披露权重 × 50%')).toBeInTheDocument()
+    expect(screen.getByText(/数据与研究引用缺口交给 Agent 按原生规则判断/)).toHaveTextContent('不单独禁止启动')
+    expect(screen.getByText(/数据与研究引用缺口交给 Agent 按原生规则判断/)).toHaveTextContent('冻结 hash、来源权限与 PIT 安全校验保持独立')
+    expect(screen.queryByText(/缺少原生必需证据时明确阻断/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '发布版本' }))
+    expect(screen.getByRole('dialog', { name: '确认发布不可变版本' })).toHaveTextContent('V2 · 原生报告条件回放')
+    expect(screen.queryByText('复合权重')).not.toBeInTheDocument()
+  })
+
+  it('restricts V2 backtests to holdings and preserves explicitly selected V1 modes', async () => {
+    const nativeVersion = { ...version, id: 'v2', version_number: 2, schema_version: '2' as const }
+    current = strategyFixture({
+      draft: { ...strategyFixture().draft!, document: nativeDocumentFixture() },
+      latest_version: nativeVersion,
+      versions: [nativeVersion, { ...version, schema_version: '1' }],
+    })
+    window.history.replaceState({}, '', '/strategies?tab=backtests&strategy_id=s1&mode=fund_only')
+    render(<Strategies />)
+    expect(await screen.findByLabelText('回测模式')).toHaveValue('holdings_portfolio')
+    fireEvent.click(screen.getByLabelText('回测模式'))
+    expect(screen.queryByRole('option', { name: /基金本体/ })).not.toBeInTheDocument()
+    fireEvent.keyDown(screen.getByLabelText('回测模式'), { key: 'Escape' })
+    fireEvent.change(screen.getByLabelText('策略版本'), { target: { value: 'v1' } })
+    expect(screen.getByLabelText('回测模式')).toHaveTextContent('基金本体（旧策略）')
+  })
+
+  it('renders native report prices and lineage when the preview has no fund signal', async () => {
+    current = strategyFixture({ draft: { ...strategyFixture().draft!, document: nativeDocumentFixture() } })
+    const originalFetch = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/finance/signal-previews')) return json({
+        persisted: false, assignment_id: 'a1', strategy_version_id: 'v2', report_set_id: 'r1',
+        fund_signal: null, stock_signals: [{
+          subject_code: '688012.SH', state: 'ALLOW_BUY', score_lower_bound: 81, score_upper_bound: 81,
+          coverage: 1, confidence: 1, reasons: ['native_positive_verdict'], execution_plan: {
+            native_verdict: '买入', native_verdict_label: '买入 · 原生评审', prices: { entry: 100, stop: 90, target: 120 },
+            entry_permitted: true, executable: true, errors: [], source_report_revision: 2,
+            source_field: 'synthesis.dashboard.battle_plan', source_artifact_id: 'artifact-native-1', source_content_hash: 'native-content-hash',
+          },
+        }],
+      })
+      return originalFetch(input, init)
+    })
+    window.history.replaceState({}, '', '/strategies?tab=signals&strategy_id=s1&assignment_id=a1&report_set_id=r1')
+    render(<Strategies />)
+    fireEvent.click(await screen.findByRole('button', { name: '预演报告信号' }))
+    expect(await screen.findByText('个股 · 688012.SH')).toBeInTheDocument()
+    expect(screen.queryByText('基金 · 110011')).not.toBeInTheDocument()
+    expect(screen.getByText(/入场 100.*止损 90.*目标 120/)).toBeInTheDocument()
+    expect(screen.getByText('artifact-native-1')).toBeInTheDocument()
+    expect(screen.getByText('native-content-hash')).toBeInTheDocument()
+  })
+
+  it('does not launch backtests when the readonly market data preflight finds gaps', async () => {
+    backtestPreflight = {
+      ...backtestPreflight, signal_count: 6, available_report_count: 6, missing_report_dates: [],
+      can_run: false, market_data_checked: true, signal_coverage: 1,
+      market_data_missing: [{ symbol: '688012.SH', code: 'bars_missing', message: '缺少目标区间行情' }],
+    }
+    window.history.replaceState({}, '', '/strategies?tab=backtests&strategy_id=s1')
+    render(<Strategies />)
+    fireEvent.click(await screen.findByRole('button', { name: '检查并启动回测' }))
+    expect(await screen.findByText('688012.SH · 缺少目标区间行情')).toBeInTheDocument()
+    expect(backtestCreates).toHaveLength(0)
+  })
+
+  it('shows native plan readiness without promoting unnecessary daily reports', async () => {
+    current = strategyFixture({
+      draft: { ...strategyFixture().draft!, document: nativeDocumentFixture() },
+      latest_version: { ...version, schema_version: '2' },
+      versions: [{ ...version, schema_version: '2' }],
+    })
+    backtestPreflight = {
+      ...backtestPreflight, signal_model: 'report_conditions_v1', ready: true, can_run: true,
+      signal_count: 10, available_report_count: 1, trading_day_count: 3,
+      missing_report_dates: ['2026-09-03', '2026-09-04'],
+      executable_plan_count: 10, executable_plan_coverage: 2 / 3,
+    }
+    window.history.replaceState({}, '', '/strategies?tab=backtests&strategy_id=s1')
+    render(<Strategies />)
+    fireEvent.click(await screen.findByRole('button', { name: '检查报告条件' }))
+    expect(await screen.findByText('报告条件可回放')).toBeInTheDocument()
+    expect(screen.getByText(/无需每天生成新报告/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '估算补跑成本' })).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('报告获取策略'), { target: { value: 'require_complete' } })
+    expect(screen.getByRole('button', { name: '估算补跑成本' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '检查并启动回测' }))
+    await waitFor(() => expect(screen.getByText(/缺失 2 天/)).toBeInTheDocument())
+    expect(backtestCreates).toHaveLength(0)
+  })
+
   it('restores a real shared report and persisted signal from the URL context', async () => {
     window.history.replaceState({}, '', '/strategies?tab=signals&strategy_id=s1&fund_code=110011&assignment_id=a1&report_set_id=r1&mode=holdings_portfolio')
     render(<Strategies />)
@@ -259,13 +377,14 @@ describe('Strategies', () => {
     })
   })
 
-  it('defaults new bindings to the fund itself', async () => {
+  it('defaults new bindings to holdings but keeps legacy fund mode available', async () => {
     window.history.replaceState({}, '', '/strategies?tab=assignments&strategy_id=s1')
     render(<Strategies />)
 
     expect(await screen.findByText('创建基金绑定')).toBeInTheDocument()
-    expect(screen.getByLabelText('回测模式')).toHaveValue('fund_only')
-    expect(screen.getByLabelText('回测模式')).toHaveTextContent('基金本体（推荐）')
+    expect(screen.getByLabelText('回测模式')).toHaveValue('holdings_portfolio')
+    fireEvent.click(screen.getByLabelText('回测模式'))
+    expect(screen.getByRole('option', { name: '基金本体（旧策略）' })).toBeInTheDocument()
   })
 
   it('scopes history to the strategy and compacts identical fund runs', async () => {
@@ -313,11 +432,34 @@ describe('Strategies', () => {
     await waitFor(() => expect(backtestActions).toContain('retry:bt-old'))
   })
 
+  it('explicitly revises failed report inputs without a full rerun or acquisition', async () => {
+    reportJobs = [{
+      id: 'job-backfill-1', status: 'completed_partial', job_type: 'historical_backfill',
+      request: { assignment_id: 'a1', start_date: '2026-08-07', end_date: '2026-08-07' },
+      progress: { total: 1, completed: 1, failed: 0, failed_symbols: ['688012'] },
+      pause_requested: false, cancel_requested: false, attempts: [],
+      created_at: '2026-08-14T10:00:00Z', updated_at: '2026-08-14T10:01:00Z',
+    }]
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    window.history.replaceState({}, '', '/strategies?tab=signals&strategy_id=s1&fund_code=110011&assignment_id=a1')
+    render(<Strategies />)
+    const button = await screen.findByRole('button', { name: '使用已补采数据重试' })
+    fireEvent.click(button)
+    const retryCalls = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/report-jobs/job-backfill-1/retry'))
+    expect(retryCalls()).toHaveLength(0)
+    confirm.mockReturnValue(true)
+    fireEvent.click(button)
+    await waitFor(() => expect(retryCalls()).toHaveLength(1))
+    expect(JSON.parse(String(retryCalls()[0][1]?.body))).toEqual({ refresh_inputs: true, confirmed: true })
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('collection-jobs'))).toBe(false)
+    confirm.mockRestore()
+  })
+
   it('shows persisted progress on a running report task card', async () => {
     reportJobs = [{
       id: 'job-backfill-1', status: 'running', job_type: 'historical_backfill',
       request: { assignment_id: 'a1', strategy_version_id: 'v1', start_date: '2026-08-07', end_date: '2026-08-14' },
-      progress: { total: 6, completed: 2, failed: 1, complete_report_days: 1, partial_report_days: 1, blocked_report_days: 0, current_date: '2026-08-11' },
+      progress: { total: 6, completed: 2, failed: 1, complete_report_days: 1, partial_report_days: 1, blocked_report_days: 0, current_date: '2026-08-11', batches: { '2026-08-11': 'batch-live-1' }, current_stage: 'holding_analysis', current_action: '正在执行持仓 688012.SH', holding_completed: 2, holding_total: 10, request_phase: 'queued', request_timing: { executor_wait_seconds: 40, queue_seconds: 12, http_seconds: 0, backoff_seconds: 0, stage_elapsed_seconds: 52, remaining_budget_seconds: 1148 }, persistence_seconds: 3.25, render_status: 'not_executed_in_job', cache_hit_count: 1, cache_reason: 'fixed_manifest_and_pins_match' },
       pause_requested: false, cancel_requested: false, attempts: [{ attempt: 1 }],
       created_at: '2026-08-14T10:00:00Z', updated_at: '2026-08-14T10:01:00Z',
     }]
@@ -330,6 +472,14 @@ describe('Strategies', () => {
     const progress = screen.getByRole('progressbar', { name: '日报任务进度 job-backfill-1' })
     expect(progress).toHaveAttribute('aria-valuenow', '3')
     expect(progress).toHaveAttribute('aria-valuemax', '6')
+    expect(screen.getByText('batch-live-1')).toBeInTheDocument()
+    expect(screen.getByText(/正在执行持仓 688012.SH · 等待模型槽位/)).toBeInTheDocument()
+    expect(screen.getByText('持仓完成 2/10')).toBeInTheDocument()
+    expect(screen.getByText('执行器排队 40.0s · 模型槽位排队 12.0s · 请求 0.0s · 退避 0.0s')).toBeInTheDocument()
+    expect(screen.getByText('本阶段已耗时 52.0s · 剩余预算 1148.0s（包含入队等待，不代表整份报告完成度）')).toBeInTheDocument()
+    expect(screen.getByText('持仓累计持久化 3.3s（不含复用报告）')).toBeInTheDocument()
+    expect(screen.getByText('任务内 HTML 渲染未执行（导出时按需计时）')).toBeInTheDocument()
+    expect(screen.getByText('复用 1 份报告 · 冻结 Manifest 与版本约束一致')).toBeInTheDocument()
   })
 
   it('shows report backfill progress beside the backtest preflight', async () => {
@@ -348,7 +498,7 @@ describe('Strategies', () => {
     fireEvent.change(screen.getByLabelText('结束日期'), { target: { value: '2026-08-14' } })
     fireEvent.change(screen.getByLabelText('报告获取策略'), { target: { value: 'require_complete' } })
     fireEvent.click(screen.getByRole('button', { name: '检查并启动回测' }))
-    expect(await screen.findByText(/6 个基金信号 · 0\/6 个日报交易日/)).toBeInTheDocument()
+    expect(await screen.findByText(/6 个报告信号 · 0\/6 个日报交易日/)).toBeInTheDocument()
     expect(backtestCreates).toHaveLength(0)
 
     fireEvent.click(screen.getByRole('button', { name: '估算补跑成本' }))
@@ -397,7 +547,7 @@ describe('Strategies', () => {
     expect(screen.getByLabelText('策略版本')).toHaveTextContent('v2 · 最新')
     fireEvent.click(screen.getByRole('button', { name: '检查并启动回测' }))
 
-    expect(await screen.findByText('0 个基金信号 · 6/6 个日报交易日')).toBeInTheDocument()
+    expect(await screen.findByText('0 个报告信号 · 6/6 个日报交易日')).toBeInTheDocument()
     expect(backtestCreates).toHaveLength(0)
     expect(screen.getByText(/不会重新运行持仓 UZI 分析/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '生成 v2 信号' }))
@@ -474,7 +624,8 @@ describe('Strategies', () => {
   it('saves a server draft with optimistic revision and then reviews publication', async () => {
     render(<Strategies />)
     const name = await screen.findByLabelText('策略名称')
-    fireEvent.change(screen.getByLabelText('持仓分析强度'), { target: { value: 'lite' } })
+    fireEvent.click(screen.getByLabelText('持仓分析强度'))
+    fireEvent.click(screen.getByRole('option', { name: 'Lite · 快速回测补跑' }))
     fireEvent.change(screen.getByLabelText('基金最大仓位 (%)'), { target: { value: '60' } })
     fireEvent.change(screen.getByLabelText('单次建仓比例 (%)'), { target: { value: '20' } })
     fireEvent.change(screen.getByLabelText('最大建仓次数'), { target: { value: '3' } })

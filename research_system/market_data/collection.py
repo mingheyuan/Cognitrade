@@ -22,6 +22,7 @@ from research_system.market_data.agent_recovery import (
 from research_system.market_data.bundles import (
     BundleIntegrityError,
     BundlePublisher,
+    CompanyProfileDependencyError,
     IncompleteBundleError,
 )
 from research_system.market_data.contracts import (
@@ -36,6 +37,7 @@ from research_system.market_data.dimension_contracts import (
 )
 from research_system.market_data.historical import (
     capability_for_dimension,
+    historical_provider_revision,
     is_safe_degradation_manifest,
     reconstruct_historical_snapshot,
 )
@@ -44,6 +46,11 @@ from research_system.market_data.ingestion import (
     SnapshotIngestionService,
 )
 from research_system.market_data.job_diagnostics import classify_collection_failure
+from research_system.market_data.kline_price_evidence import (
+    BaoStockPriceEvidenceCollector,
+    enrich_kline_snapshot,
+    has_complete_price_evidence,
+)
 from research_system.market_data.models import (
     MarketDataCollectionJob,
     MarketDataCollectionTask,
@@ -52,6 +59,7 @@ from research_system.market_data.models import (
     MarketDataSubscription,
 )
 from research_system.market_data.repository import MarketDataRepository
+from research_system.market_data.research_collection import recover_research_documents
 from research_system.market_data.resolver import SnapshotResolver
 from research_system.market_data.uzi_adapter import UziSnapshotAdapter
 from research_system.runtime.core.id_utils import generate_ulid
@@ -81,11 +89,13 @@ TERMINAL_COLLECTION_STATUSES = frozenset(
 
 
 class CollectionJobError(RuntimeError):
-    def __init__(self, code: str, message: str, *, status_code: int = 400) -> None:
+    def __init__(self, code: str, message: str, *, status_code: int = 400,
+                 details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
+        self.details = dict(details or {})
 
 
 class _CancellationView:
@@ -123,11 +133,26 @@ class MarketDataCollectionCoordinator:
         registry: DimensionRegistry = DEFAULT_DIMENSION_REGISTRY,
         settings: Settings | None = None,
         max_background_jobs: int = 1,
+        archive_collector: Any | None = None,
+        price_evidence_collector: Any | None = None,
+        research_provider: Any | None = None,
+        quant_auxiliary_source: Any | None = None,
+        postfetch_sources: Any | None = None,
     ) -> None:
         self.database = database
         self.collector = collector
         self.registry = registry
         self.settings = settings
+        self.archive_collector = archive_collector
+        self.research_provider = research_provider
+        self.quant_auxiliary_source = quant_auxiliary_source
+        self.postfetch_sources = postfetch_sources
+        self.price_evidence_collector = price_evidence_collector or (
+            BaoStockPriceEvidenceCollector() if collector is collect_snapshots else None
+        )
+        # Custom transports must opt in to their own archive transport; never
+        # unexpectedly bypass an injected/offline provider with live HTTP.
+        self.research_archive_enabled = archive_collector is not None or collector is collect_snapshots
         self.adapter = UziSnapshotAdapter(registry=registry)
         self._executor = ThreadPoolExecutor(
             max_workers=max(1, int(max_background_jobs)),
@@ -157,6 +182,8 @@ class MarketDataCollectionCoordinator:
         subscription_claim_until: datetime | None = None,
         parent_job_id: str | None = None,
         submit: bool = True,
+        include_research_archive: bool | None = None,
+        research_document_requests: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         normalized_symbols = self._symbols(symbols)
         normalized_dimensions = self._dimensions(dimensions)
@@ -235,6 +262,27 @@ class MarketDataCollectionCoordinator:
             "subscription_id": str(subscription_id or "").strip() or None,
             "parent_job_id": str(parent_job_id or "").strip() or None,
         }
+        if research_document_requests:
+            from research_system.market_data.research_requests import ResearchDocumentRequest
+            try:
+                if (len(research_document_requests) > 12 or len(normalized_symbols) != 1
+                        or start_date != end_date or normalized_origin != "manual"
+                        or include_research_archive is not True or not self.research_archive_enabled):
+                    raise ValueError("explicit single-stock/day archive scope required")
+                leads = [ResearchDocumentRequest.model_validate(row) for row in research_document_requests]
+                if any(row.dimension not in normalized_dimensions for row in leads):
+                    raise ValueError("source dimension outside collection scope")
+            except (ValueError, TypeError):
+                raise CollectionJobError("research_document_scope_invalid",
+                    "定向补证需要单股单日、明确启用原文归档，且 URL 和维度必须属于支持范围", status_code=422) from None
+            request["research_document_requests"] = list({(row.dimension, row.url): row.model_dump() for row in leads}.values())
+        if self.research_archive_enabled and (
+            include_research_archive is True or (
+                include_research_archive is None and normalized_origin == "manual"
+                and set(normalized_dimensions) == set(self.registry.dimension_ids)
+            )
+        ):
+            request["include_research_archive"] = True
         expected_job_type = (
             "current_refresh"
             if start_date == end_date
@@ -1336,6 +1384,9 @@ class MarketDataCollectionCoordinator:
             update(MarketDataCollectionJob)
             .where(*conditions)
             .values(updated_at=MarketDataCollectionJob.updated_at)
+            # SQL owns the lease comparison, including when SQLite loaded a
+            # naive datetime into this session during an earlier fence check.
+            .execution_options(synchronize_session=False)
         )
         return owned.rowcount == 1
 
@@ -1431,6 +1482,13 @@ class MarketDataCollectionCoordinator:
                 recovery = dict(checkpoint.get("agent_recovery") or {})
                 if recovery.get("status") != "queued":
                     return
+                # Explicit Agent recovery is job-scoped. Capture its authority
+                # at claim, separately from ordinary narrowed retry waves.
+                recovery_task_ids = tuple(session.scalars(
+                    select(MarketDataCollectionTask.id).where(
+                        MarketDataCollectionTask.job_id == job_id,
+                    )
+                ))
                 recovery.update(
                     {
                         "status": "running",
@@ -1464,6 +1522,11 @@ class MarketDataCollectionCoordinator:
                     collector=self.collector,
                     max_workers=self._job_concurrency(job_id),
                     cancellation=worker_cancellation,
+                    archive_collector=self.archive_collector,
+                    research_pipeline=lambda: self._run_research_archive_stage(
+                        job_id, worker_id=worker_id, cancellation=worker_cancellation,
+                        recovery=True, task_ids=recovery_task_ids,
+                    ),
                 )
             if cancellation.is_set() or lease_signals.cancel_requested.is_set():
                 self._cancel_agent_recovery(job_id, worker_id=worker_id)
@@ -1663,6 +1726,7 @@ class MarketDataCollectionCoordinator:
             cancel_before_start = False
             task_specs: list[dict[str, Any]] = []
             job_mode = "missing_or_stale"
+            job_origin = None
             with self.database.session() as session:
                 job = session.get(MarketDataCollectionJob, job_id)
                 if (
@@ -1719,6 +1783,7 @@ class MarketDataCollectionCoordinator:
                         for task in tasks
                     ]
                     job_mode = job.mode
+                    job_origin = job.origin
                     for task in tasks:
                         task.status = CollectionStatus.RUNNING.value
                         task.attempt_count += 1
@@ -1729,14 +1794,6 @@ class MarketDataCollectionCoordinator:
             if cancel_before_start:
                 self._finish_job(job_id, cancelled=True)
                 return
-            if not task_specs:
-                self._finish_job(
-                    job_id,
-                    cancelled=cancellation.is_set(),
-                    worker_id=worker_id,
-                )
-                return
-
             lease_signals = leases.enter_context(
                 self._lease_heartbeat(
                     job_id,
@@ -1752,6 +1809,9 @@ class MarketDataCollectionCoordinator:
             )
             by_key: dict[tuple[str, str, date], dict[str, Any]] = {}
             provider_errors: dict[date, Exception] = {}
+            # One budget for explicit historical native derivation and any
+            # later archive stages. No per-stock native timer reset.
+            research_deadline = None
             requested_dates = sorted(
                 {
                     as_of
@@ -1760,10 +1820,41 @@ class MarketDataCollectionCoordinator:
                 }
             )
             for as_of in requested_dates:
+                derivation_specs = [
+                    spec for spec in task_specs
+                    if job_origin == "manual" and spec["dimension"] in {"3_macro", "14_moat"}
+                    and spec["start_date"] <= as_of <= spec["end_date"]
+                    and as_of != self._local_today(spec["exchange_timezone"])
+                ]
+                for spec in derivation_specs:
+                    if worker_cancellation.is_set() or not self._needs_provider(
+                        spec, mode=job_mode, as_of_date=as_of,
+                    ):
+                        continue
+                    if spec["dimension"] == "3_macro":
+                        from research_system.market_data.macro_derivation import (
+                            prepare_macro_derivation as prepare,
+                        )
+                    else:
+                        from research_system.market_data.moat_derivation import (
+                            prepare_moat_derivation as prepare,
+                        )
+                    if research_deadline is None:
+                        research_deadline = monotonic() + 600
+                    prepared = prepare(
+                        self.database, spec=spec, as_of_date=as_of, registry=self.registry,
+                        deadline_at=research_deadline, cancellation=worker_cancellation,
+                    )
+                    snapshot_type = self.registry.get(spec["dimension"]).snapshot_type
+                    by_key[(symbol_key(spec["symbol"]), snapshot_type, as_of)] = {
+                        "snapshot_type": snapshot_type, "quality_status": "available",
+                        "_pit_native_derivation": prepared,
+                    }
                 provider_specs = [
                     spec
                     for spec in task_specs
                     if spec["start_date"] <= as_of <= spec["end_date"]
+                    and spec not in derivation_specs
                     and self._needs_provider(spec, mode=job_mode, as_of_date=as_of)
                     and (
                         as_of == self._local_today(spec["exchange_timezone"])
@@ -1797,6 +1888,8 @@ class MarketDataCollectionCoordinator:
                 provider_progress_state: dict[str, Any] = {
                     "completed": -1,
                     "persisted_at": 0.0,
+                    "started_tick": monotonic(),
+                    "started_at": iso(datetime.now(timezone.utc)),
                 }
                 provider_total = len(provider_specs)
                 provider_as_of = as_of
@@ -1808,41 +1901,61 @@ class MarketDataCollectionCoordinator:
                     _as_of: date = provider_as_of,
                     _lock: Lock = provider_progress_lock,
                     _state: dict[str, Any] = provider_progress_state,
+                    _symbols: tuple[str, ...] = tuple(symbols),
                 ) -> None:
                     completed = max(0, int(progress.get("completed") or 0))
                     total = max(1, int(progress.get("total") or _total))
                     phase = str(progress.get("phase") or "collecting")
                     snapshot_type = str(progress.get("snapshot_type") or "") or None
+                    reported_symbol = str(progress.get("symbol") or "")
+                    symbol = reported_symbol if reported_symbol in _symbols else (
+                        _symbols[0] if len(_symbols) == 1 else None
+                    )
                     tick = monotonic()
                     with _lock:
                         previous_completed = int(_state.get("completed") or 0)
                         previous_tick = float(_state.get("persisted_at") or 0.0)
+                        activity_changed = (
+                            phase != _state.get("phase")
+                            or symbol != _state.get("symbol")
+                        )
                         # Five symbol pipelines emit concurrently.  Persist a
                         # useful heartbeat without turning every fetch event
-                        # into a database write.
+                        # into a database write. Phase transitions are not a
+                        # heartbeat: starting -> collecting can happen before
+                        # one dimension has returned and must be visible now.
                         if (
-                            completed < total
+                            not activity_changed
+                            and completed < total
                             and completed <= previous_completed
                             and tick - previous_tick < 1.0
                         ):
                             return
                         if (
-                            completed < total
+                            not activity_changed
+                            and completed < total
                             and completed > previous_completed
                             and completed - previous_completed < 2
                             and tick - previous_tick < 0.75
                         ):
                             return
-                        _state.update({"completed": completed, "persisted_at": tick})
-                    self._record_provider_progress(
-                        job_id,
-                        worker_id=worker_id,
-                        as_of_date=_as_of,
-                        completed=completed,
-                        total=total,
-                        phase=phase,
-                        snapshot_type=snapshot_type,
-                    )
+                        # Keep checkpoint writes in callback order; a delayed
+                        # earlier DB write must not overwrite a newer phase.
+                        self._record_provider_progress(
+                            job_id,
+                            worker_id=worker_id,
+                            as_of_date=_as_of,
+                            completed=completed,
+                            total=total,
+                            phase=phase,
+                            snapshot_type=snapshot_type,
+                            symbol=symbol,
+                            scope_symbols=_symbols,
+                            started_at=_state["started_at"],
+                            elapsed_seconds=max(0.0, tick - _state["started_tick"]),
+                        )
+                        _state.update({"completed": completed, "persisted_at": tick,
+                                       "phase": phase, "symbol": symbol})
 
                 record_provider_progress(
                     {
@@ -1867,12 +1980,13 @@ class MarketDataCollectionCoordinator:
                         cache_root=None,
                         research_profile="deep",
                         max_workers=self._job_concurrency(job_id),
-                        # A complete 22-dimension run follows native UZI's root
-                        # Agent workflow.  A scoped retry must call only the
+                        # A complete run retains SKILL main() envelopes inside
+                        # the isolated scheduler, not root-CLI normalization.
+                        # A scoped retry must call only the
                         # requested dimension (+ market dependency), otherwise
                         # retrying one failed slot silently reruns all fetchers.
                         uzi_root_route=use_uzi_root_route,
-                        uzi_root_route_mode="single",
+                        uzi_root_route_mode="skill",
                         no_resume=use_uzi_root_route,
                         cancellation=worker_cancellation,
                         progress_callback=record_provider_progress,
@@ -1943,6 +2057,12 @@ class MarketDataCollectionCoordinator:
                         if reconstructed is None:
                             continue
                         prepared = reconstructed
+                    if dimension == "2_kline" and self.price_evidence_collector is not None and not worker_cancellation.is_set():
+                        # This is the explicit provider wave, outside database
+                        # transactions. Report generation/replay cannot reach it.
+                        prepared = enrich_kline_snapshot(
+                            prepared, as_of_date=as_of, collector=self.price_evidence_collector,
+                        )
                     key = (
                         symbol_key(str(prepared.get("symbol") or "")),
                         snapshot_type,
@@ -1973,6 +2093,15 @@ class MarketDataCollectionCoordinator:
                         job_id=job_id,
                         worker_id=worker_id,
                     )
+            # Source slots settle before document/research work. Persist their
+            # actual counts now without making the whole job terminal or
+            # allowing publication while later stages are still running.
+            if not self._checkpoint_source_settlement(job_id, worker_id=worker_id):
+                return
+            if not worker_cancellation.is_set():
+                self._run_research_archive_stage(job_id, worker_id=worker_id,
+                    cancellation=worker_cancellation, deadline_at=research_deadline,
+                    task_ids=tuple(spec["id"] for spec in task_specs))
             leases.close()
             if lease_signals.lost.is_set():
                 return
@@ -1989,6 +2118,189 @@ class MarketDataCollectionCoordinator:
                 self._fail_job(job_id, exc, worker_id=worker_id)
         finally:
             leases.close()
+
+    def _checkpoint_source_settlement(self, job_id: str, *, worker_id: str) -> bool:
+        with self.database.session() as session:
+            if not self._fence_collection_worker(
+                session, job_id, worker_id, allow_cancel_requested=True,
+            ):
+                return False
+            job = session.get(MarketDataCollectionJob, job_id)
+            tasks = list(session.scalars(select(MarketDataCollectionTask).where(
+                MarketDataCollectionTask.job_id == job_id,
+            )))
+            self._set_job_progress(job, tasks)
+            job.updated_at = datetime.now(timezone.utc)
+            return True
+
+    def _run_research_archive_stage(
+        self, job_id: str, *, worker_id: str, cancellation, recovery: bool = False,
+        deadline_at: float | None = None, task_ids: Iterable[str] = (),
+    ) -> dict[str, dict[str, Any]]:
+        task_ids = tuple(task_ids)
+        def owns_worker(session):
+            return (
+                self._fence_agent_worker(session, job_id, worker_id)
+                if recovery else self._fence_collection_worker(
+                    session, job_id, worker_id, allow_cancel_requested=True,
+                )
+            )
+
+        with self.database.session() as session:
+            # Fence before loading SQLite's naive datetime into the identity
+            # map. SQL owns the lease comparison; ORM synchronize-evaluate
+            # must not compare it to an aware UTC datetime in Python.
+            if not owns_worker(session) or cancellation.is_set():
+                return {}
+            job = session.get(MarketDataCollectionJob, job_id)
+            # A claimed explicit Agent-recovery action is its own opt-in.
+            if job is None or not (recovery or (job.request_json or {}).get("include_research_archive")):
+                return {}
+            targeted_documents = bool((job.request_json or {}).get("research_document_requests"))
+        pipeline_started_at = iso(datetime.now(timezone.utc))
+        # Archive, evidence-backed revision and auxiliary acquisition share the
+        # old archive budget. A later phase never starts a fresh 600s timer.
+        deadline = deadline_at if deadline_at is not None else monotonic() + 600
+        results: dict[str, dict[str, Any]] = {}
+        stage_started_at: dict[str, str | None] = {}
+
+        def persist(progress, *, status="running", stage_name="research_archive"):
+            with self.database.session() as session:
+                if not owns_worker(session):
+                    return
+                job = session.get(MarketDataCollectionJob, job_id)
+                now = datetime.now(timezone.utc)
+                # Progress updates retain this stage's own first start, not
+                # the origin of the shared-budget pipeline. A skipped stage
+                # must not appear to have spent time executing.
+                if stage_name not in stage_started_at:
+                    stage_started_at[stage_name] = None if status == "not_run" else iso(now)
+                stage = {
+                    "status": status,
+                    **progress,
+                    "pipeline_started_at": pipeline_started_at,
+                    "started_at": stage_started_at[stage_name],
+                }
+                if status != "running":
+                    stage["completed_at"] = iso(now)
+                results[stage_name] = stage
+                job.checkpoint_json = {**dict(job.checkpoint_json or {}), stage_name: stage}
+                job.progress_json = {**dict(job.progress_json or {}), stage_name: stage}
+                job.updated_at = now
+
+        # The first collection used to return raw snapshots before reaching
+        # the legacy tool bundle's post-fetch recovery. Run it here, before
+        # document discovery, under the same explicit opt-in and deadline.
+        # Explicit Agent recovery has already performed this native source
+        # stage; do not repeat it when its research pipeline calls back here.
+        if not recovery and not targeted_documents:
+            from research_system.market_data.native_postfetch import (
+                run_collection_postfetch,
+            )
+
+            live_postfetch = self.collector is collect_snapshots and self.archive_collector is None
+            enabled = live_postfetch or self.postfetch_sources is not None
+            reason = ("collection_cancelled" if cancellation.is_set() else
+                      "research_deadline_exceeded" if monotonic() >= deadline else
+                      "injected_transport_not_configured" if not enabled else None)
+            if reason:
+                persist({"reason_code": reason}, status="not_run", stage_name="native_postfetch")
+            else:
+                persist({}, stage_name="native_postfetch")
+                try:
+                    result = run_collection_postfetch(self.database, job_id=job_id,
+                        registry=self.registry, settings=self.settings or Settings.from_env(),
+                        task_ids=task_ids, deadline_at=deadline, cancellation=cancellation,
+                        write_fence=owns_worker, sources=self.postfetch_sources,
+                        progress_callback=lambda progress: persist(progress, stage_name="native_postfetch"))
+                    persist(result, status=str(result.get("status") or "partial"), stage_name="native_postfetch")
+                except Exception as exc:  # noqa: BLE001 - preserve structured collection and disclose source failures
+                    persist({"reason_code": getattr(exc, "code", type(exc).__name__),
+                             "message": str(exc)}, status="failed", stage_name="native_postfetch")
+        with self.database.session() as session:
+            if not owns_worker(session):
+                return results
+        archive_stop = ("collection_cancelled" if cancellation.is_set() else
+                        "research_deadline_exceeded" if monotonic() >= deadline else None)
+        if archive_stop:
+            persist({"reason_code": archive_stop}, status="not_run")
+        else:
+            persist({"completed": 0, "active": None})
+            try:
+                result = recover_research_documents(self.database, job_id=job_id,
+                    settings=self.settings or Settings.from_env(), registry=self.registry,
+                    cancellation=cancellation, archive_collector=self.archive_collector,
+                    progress_callback=persist, max_duration_seconds=max(0, deadline - monotonic()),
+                    task_ids=task_ids)
+                persist(result, status="cancelled" if cancellation.is_set() else "partial" if result["failed"] else "succeeded")
+            except Exception as exc:  # noqa: BLE001 - retain structured data and disclose archive failure
+                persist({"reason_code": getattr(exc, "code", type(exc).__name__), "message": str(exc)}, status="failed")
+
+        from research_system.market_data.company_profile_rebuild import (
+            has_company_profile_rebuild,
+            run_company_profile_dependency_rebuild,
+        )
+        if targeted_documents:
+            # This explicit action acquires originals, not another model's
+            # fact rewrite or unrelated source sweep. The revised report reads
+            # the new archive under a new Manifest after user confirmation.
+            return results
+        from research_system.market_data.quant_auxiliary import (
+            collect_job_quant_auxiliary_inputs,
+        )
+        from research_system.market_data.research_enrichment import (
+            run_research_enrichment,
+        )
+
+        live_transport = self.collector is collect_snapshots and self.archive_collector is None
+        provider = self.research_provider
+        if provider is None and live_transport and self.settings is not None:
+            from research_system.runtime.providers.provider_registry import (
+                ProviderRegistry,
+            )
+            provider = ProviderRegistry(self.settings).default()
+
+        def run_stage(stage_name, callback, *, enabled):
+            with self.database.session() as session:
+                if not owns_worker(session):
+                    return
+            reason = (
+                "collection_cancelled" if cancellation.is_set() else
+                "research_deadline_exceeded" if monotonic() >= deadline else
+                "injected_transport_not_configured" if not enabled else None
+            )
+            if reason:
+                persist({"reason_code": reason}, status="not_run", stage_name=stage_name)
+                return
+            persist({}, stage_name=stage_name)
+            try:
+                result = callback(lambda progress: persist(progress, stage_name=stage_name))
+                persist(result, status=str(result.get("status") or "partial"), stage_name=stage_name)
+            except Exception as exc:  # noqa: BLE001 - one evidence stage cannot erase other successful stages
+                persist({"reason_code": getattr(exc, "code", type(exc).__name__),
+                         "message": str(exc)}, status="failed", stage_name=stage_name)
+
+        run_stage("research_enrichment", lambda progress: run_research_enrichment(
+            self.database, job_id=job_id, registry=self.registry, provider=provider,
+            deadline_at=deadline, cancellation=cancellation, progress_callback=progress,
+            write_fence=owns_worker, task_ids=task_ids,
+        ), enabled=provider is not None)
+        # Only a selected, explicit profile revision activates this extra
+        # stage. It shares the archive deadline and cannot recollect basic.
+        if has_company_profile_rebuild(self.database, job_id=job_id, registry=self.registry,
+                                      task_ids=task_ids):
+            run_stage("company_profile_dependency_rebuild", lambda progress: run_company_profile_dependency_rebuild(
+                self.database, job_id=job_id, registry=self.registry, collector=self.collector,
+                settings=self.settings, deadline=deadline, cancellation=cancellation,
+                write_fence=owns_worker, progress_callback=progress,
+                task_ids=task_ids,
+            ), enabled=True)
+        run_stage("native_quant_auxiliary", lambda progress: collect_job_quant_auxiliary_inputs(
+            self.database, job_id=job_id, registry=self.registry, deadline=deadline,
+            cancellation=cancellation, source=self.quant_auxiliary_source, progress_callback=progress,
+            recovery=recovery, task_ids=task_ids,
+        ), enabled=live_transport or self.quant_auxiliary_source is not None)
+        return results
 
     def _process_task(
         self,
@@ -2039,30 +2351,12 @@ class MarketDataCollectionCoordinator:
                     if existing_item.snapshot_id is not None
                     else None
                 )
-                existing_outcome = str(
-                    (
-                        (existing_snapshot.query_manifest_json or {}).get(
-                            "collection_outcome"
-                        )
-                    )
-                    if existing_snapshot is not None
-                    else ""
-                ).strip()
-                historical_recovery_due = bool(
-                    historical
-                    and capability.can_reconstruct
-                    and existing_outcome
-                    in {"partial", "retryable_failure", "unavailable"}
-                )
-                if (
-                    existing_item.snapshot_id is not None
-                    and not historical_recovery_due
-                    and (
-                        existing_item.eligible
-                        or (existing_item.degraded and not capability.can_reconstruct)
-                    )
-                    and job is not None
-                    and job.mode == "missing_or_stale"
+                if self._can_reuse_existing(
+                    existing_item, existing_snapshot,
+                    dimension=task.dimension, historical=historical,
+                    as_of_date=as_of, mode=job.mode if job is not None else "force_all",
+                    dependency_pending=task.dimension in self._profile_dependencies_pending(
+                        session, existing_coverage),
                 ):
                     session.add(
                         MarketDataCollectionTaskResult(
@@ -2127,7 +2421,11 @@ class MarketDataCollectionCoordinator:
                     results.append("degraded")
                     finished_dates.append(as_of.isoformat())
                     continue
-                provider_error = provider_errors.get(as_of)
+                derivation_type = self.registry.get(task.dimension).snapshot_type
+                derivation_packet = (by_key.get((symbol_key(task.symbol), derivation_type, as_of)) or {}).get(
+                    "_pit_native_derivation"
+                ) if task.dimension in {"3_macro", "14_moat"} else None
+                provider_error = None if derivation_packet else provider_errors.get(as_of)
                 if provider_error is not None:
                     gap = self.adapter.disclosed_gap(
                         symbol=task.symbol,
@@ -2258,17 +2556,41 @@ class MarketDataCollectionCoordinator:
                     # savepoint keeps one malformed native result from poisoning the
                     # task session or leaking a half-persisted snapshot.
                     with session.begin_nested():
-                        ingest = self.adapter.adapt(
-                            native,
-                            symbol=task.symbol,
-                            market=task.market,
-                            exchange_timezone=task.exchange_timezone,
-                            as_of_date=as_of,
-                            collection_task_id=task.id,
-                            provider_attempt_id=f"{task.id}:{attempt}",
-                        )
+                        if derivation_packet:
+                            if task.dimension == "3_macro":
+                                from research_system.market_data.macro_derivation import (
+                                    macro_derivation_ingest as derive_ingest,
+                                )
+                            else:
+                                from research_system.market_data.moat_derivation import (
+                                    moat_derivation_ingest as derive_ingest,
+                                )
+                            ingest = derive_ingest(
+                                repository, packet=derivation_packet, task=task,
+                                as_of_date=as_of, registry=self.registry,
+                            )
+                        else:
+                            ingest = self.adapter.adapt(
+                                native,
+                                symbol=task.symbol,
+                                market=task.market,
+                                exchange_timezone=task.exchange_timezone,
+                                as_of_date=as_of,
+                                collection_task_id=task.id,
+                                provider_attempt_id=f"{task.id}:{attempt}",
+                            )
                         stage = "ingestion"
                         persisted = ingestion.ingest(ingest)
+                        if derivation_packet:
+                            if task.dimension == "3_macro":
+                                from research_system.market_data.macro_derivation import (
+                                    validate_persisted_macro as validate_derived,
+                                )
+                            else:
+                                from research_system.market_data.moat_derivation import (
+                                    validate_persisted_moat as validate_derived,
+                                )
+                            validate_derived(repository, persisted, derivation_packet)
                         complete = persisted.status in {
                             SnapshotStatus.AVAILABLE.value,
                             SnapshotStatus.VERIFIED_EMPTY.value,
@@ -2311,6 +2633,25 @@ class MarketDataCollectionCoordinator:
                         )
                         outcome_reason = outcome_disclosure.get("reason_code")
                         outcome_message = outcome_disclosure.get("message")
+                        result_error_code = (
+                            None
+                            if result_status == "succeeded"
+                            else "historical_partial"
+                            if result_status == "partial"
+                            else outcome_reason
+                            if outcome_reason
+                            in {
+                                "normalization_or_derivation_missing",
+                                "bounded_archive_gap",
+                                "moat_basic_dependency_missing",
+                                "moat_archive_dependency_missing",
+                                "macro_basic_dependency_missing",
+                                "macro_archive_dependency_missing",
+                            }
+                            else "historical_unavailable"
+                            if safe_degradation
+                            else outcome_reason or "provider_data_gap"
+                        )
                         if not outcome_message and result_status != "succeeded":
                             outcome_message = "; ".join(
                                 semantic_errors or audit_errors
@@ -2368,16 +2709,12 @@ class MarketDataCollectionCoordinator:
                                     or {},
                                     "source_trace": query_manifest.get("source_trace")
                                     or [],
+                                    **({f"{derivation_type}_derivation": {
+                                        key: value for key, value in query_manifest.get(f"{derivation_type}_derivation", {}).items()
+                                        if key not in {"recording"}
+                                    }} if derivation_packet else {}),
                                 },
-                                error_code=(
-                                    None
-                                    if result_status == "succeeded"
-                                    else "historical_partial"
-                                    if result_status == "partial"
-                                    else "historical_unavailable"
-                                    if safe_degradation
-                                    else outcome_reason or "provider_data_gap"
-                                ),
+                                error_code=result_error_code,
                                 error_message=(
                                     None
                                     if result_status == "succeeded"
@@ -2388,19 +2725,33 @@ class MarketDataCollectionCoordinator:
                             )
                         )
                 except Exception as exc:  # noqa: BLE001 - persist a per-date failure
-                    error_code, error_message, can_retry = self._exception_details(
-                        exc, stage=stage
+                    from research_system.market_data.macro_derivation import (
+                        MacroDependencyError,
                     )
+                    from research_system.market_data.moat_derivation import (
+                        MoatDependencyError,
+                    )
+                    derivation_refusal = bool(derivation_packet and isinstance(exc, (MoatDependencyError, MacroDependencyError)))
+                    if derivation_refusal:
+                        error_code, error_message, can_retry = (
+                            exc.reason, "历史原生派生依赖或重放绑定验证未通过；本次未写入派生结果，修复依赖后可显式重试。", False,
+                        )
+                    else:
+                        error_code, error_message, can_retry = self._exception_details(
+                            exc, stage=stage
+                        )
                     session.add(
                         MarketDataCollectionTaskResult(
                             task_id=task.id,
                             as_of_date=as_of,
                             attempt=attempt,
                             status="failed",
-                            provider_status=f"{stage}_error",
+                            provider_status="derivation_refused" if derivation_refusal else f"{stage}_error",
                             error_code=error_code,
                             error_message=error_message,
                             retryable=can_retry,
+                            metrics_json=({"missing_dependency": True, "reason_code": error_code,
+                                           "refresh_on_dependency_change": True} if derivation_refusal else {}),
                             started_at=started_at,
                         )
                     )
@@ -2414,13 +2765,7 @@ class MarketDataCollectionCoordinator:
                 finished_dates.append(as_of.isoformat())
                 retryable = retryable or can_retry
                 if result_status != "succeeded":
-                    last_error_code = (
-                        "historical_partial"
-                        if result_status == "partial"
-                        else "historical_unavailable"
-                        if safe_degradation
-                        else outcome_reason or "provider_data_gap"
-                    )
+                    last_error_code = result_error_code
                     last_error_message = outcome_message
             task.retryable = retryable
             if results and all(
@@ -2453,6 +2798,15 @@ class MarketDataCollectionCoordinator:
             task.checkpoint_json = {
                 "attempt": attempt,
                 "finished_dates": finished_dates,
+                **(
+                    {"historical_provider_revision": provider_revision}
+                    if (
+                        provider_revision := historical_provider_revision(
+                            task.dimension
+                        )
+                    )
+                    else {}
+                ),
             }
             task.lease_owner = None
             task.lease_until = None
@@ -2464,30 +2818,155 @@ class MarketDataCollectionCoordinator:
     ) -> bool:
         """Return false before the provider wave when a fresh slot already exists."""
 
-        if mode == "force_all":
-            return True
+        return bool(
+            self.dimensions_needing_collection(
+                symbol=spec["symbol"],
+                market=spec["market"],
+                exchange_timezone=spec["exchange_timezone"],
+                as_of_date=as_of_date,
+                dimensions=[spec["dimension"]],
+                mode=mode,
+            )
+        )
+
+    def dimensions_needing_collection(
+        self,
+        *,
+        symbol: str,
+        market: str,
+        exchange_timezone: str,
+        as_of_date: date,
+        dimensions: Iterable[str],
+        mode: str = "missing_or_stale",
+        now: datetime | None = None,
+        cutoff_at: datetime | None = None,
+    ) -> list[str]:
+        """Resolve one stock once for single-stock and fund provider dispatch.
+
+        This selects acquisition/input derivation work, not native report
+        eligibility. An inputs-only source can be requested, but its outcome
+        still decides whether missing derived fields are actually retryable.
+        """
+        requested = list(dict.fromkeys(dimensions))
+        if mode == "force_all" or not requested:
+            return requested
+        today = (
+            now.astimezone(ZoneInfo(exchange_timezone)).date()
+            if now
+            else self._local_today(exchange_timezone)
+        )
         with self.database.session() as session:
             coverage = SnapshotResolver(
                 MarketDataRepository(session), registry=self.registry
             ).coverage(
-                symbol=spec["symbol"],
-                market=spec["market"],
+                symbol=symbol,
+                market=market,
                 as_of_date=as_of_date,
-                exchange_timezone=spec["exchange_timezone"],
+                exchange_timezone=exchange_timezone,
+                now=now,
+                cutoff_at=cutoff_at,
             )
-            existing = next(
-                item
-                for item in coverage.dimensions
-                if item.dimension == spec["dimension"]
-            )
-            if existing.eligible:
-                return False
-            if (
-                existing.degraded
-                and not capability_for_dimension(spec["dimension"]).can_reconstruct
+            by_dimension = {item.dimension: item for item in coverage.dimensions}
+            dependency_pending = self._profile_dependencies_pending(session, coverage)
+            missing = []
+            for dimension in requested:
+                existing = by_dimension.get(dimension)
+                snapshot = (
+                    session.get(MarketDataSnapshot, existing.snapshot_id)
+                    if existing and existing.snapshot_id
+                    else None
+                )
+                if existing is None or not self._can_reuse_existing(
+                    existing,
+                    snapshot,
+                    dimension=dimension,
+                    historical=as_of_date != today,
+                    as_of_date=as_of_date,
+                    mode=mode,
+                    dependency_pending=dimension in dependency_pending,
+                ):
+                    missing.append(dimension)
+            return missing
+
+    @staticmethod
+    def _profile_dependencies_pending(session, coverage) -> set[str]:
+        """Use the same selected immutable rows as the acquisition decision.
+
+        No marker means legacy reuse is unchanged. This is dependency freshness,
+        not an additional native quality rule or authority to expand task scope.
+        """
+        basic_item = next((row for row in coverage.dimensions if row.dimension == "0_basic"), None)
+        basic = session.get(MarketDataSnapshot, basic_item.snapshot_id) if basic_item and basic_item.snapshot_id else None
+        if basic is None or "company_profile_revision" not in (basic.query_manifest_json or {}):
+            return set()
+        from research_system.market_data.company_profile_dependencies import (
+            check_company_profile_dependencies,
+        )
+        selected = [session.get(MarketDataSnapshot, row.snapshot_id)
+                    for row in coverage.dimensions if row.snapshot_id]
+        check = check_company_profile_dependencies([row for row in selected if row is not None])
+        return set(check["pending_dimensions"]) if check["status"] == "pending" else set()
+
+    def _can_reuse_existing(
+        self, coverage, snapshot, *, dimension: str, historical: bool,
+        as_of_date: date, mode: str, dependency_pending: bool = False,
+    ) -> bool:
+        """One reuse decision for both provider dispatch and result persistence.
+
+        Native report usability is not acquisition completeness: a nonempty
+        partial/error envelope can be usable while still needing explicit
+        historical recovery. Dispatch and persistence must agree on that case.
+        """
+        if mode != "missing_or_stale" or snapshot is None or dependency_pending:
+            return False
+        capability = capability_for_dimension(dimension)
+        outcome = str(
+            (snapshot.query_manifest_json or {}).get("collection_outcome") or ""
+        )
+        if snapshot.status == SnapshotStatus.VERIFIED_EMPTY.value and (
+            not historical or capability.can_reconstruct
+        ):
+            from research_system.market_data.native_projection import stored_native_payload
+
+            # Prior adapters discarded real reports by date alias or treated
+            # a fund's reporting period as a publication date. Such old zero
+            # claims must be rechecked even if their empty envelope survived.
+            if historical and dimension in {"6_research", "6_fund_holders"} and (
+                (snapshot.query_manifest_json or {}).get("historical_provider_revision")
+                != historical_provider_revision(dimension)
             ):
                 return False
+            # Old zero-count markers cannot recreate the upstream envelope.
+            # Explicit acquisition must refresh them, never fabricate data or
+            # rewrite the immutable snapshot used by an earlier report.
+            try:
+                if not stored_native_payload(snapshot):
+                    return False
+            except ValueError:
+                return False
+        if (dimension == "2_kline" and self.price_evidence_collector is not None
+                and not has_complete_price_evidence(snapshot, as_of_date)):
+            return False
+        if (
+            dimension == "11_governance"
+            and coverage.eligible
+            and snapshot.status == SnapshotStatus.AVAILABLE.value
+            and outcome == "partial"
+        ):
+            # Governance's usable audit partial is not a provider gap. Real
+            # failed refreshes still have data_gap/retryable_failure below.
             return True
+        if snapshot.status == SnapshotStatus.DATA_GAP.value and (
+            not historical or capability.can_reconstruct
+        ):
+            # Legacy rows may lack collection_outcome. Native eligibility of
+            # their nonempty envelope must not hide an acquisition gap.
+            return False
+        if historical and capability.can_reconstruct and outcome in {
+            "partial", "retryable_failure", "unavailable",
+        }:
+            return False
+        return bool(coverage.eligible or (coverage.degraded and not capability.can_reconstruct))
 
     def _finish_job(
         self,
@@ -2822,6 +3301,10 @@ class MarketDataCollectionCoordinator:
         total: int,
         phase: str,
         snapshot_type: str | None,
+        symbol: str | None = None,
+        scope_symbols: tuple[str, ...] = (),
+        started_at: str | None = None,
+        elapsed_seconds: float = 0.0,
     ) -> None:
         """Expose acquisition progress before task results are persisted.
 
@@ -2836,6 +3319,13 @@ class MarketDataCollectionCoordinator:
             "as_of_date": as_of_date.isoformat(),
             "phase": str(phase or "collecting"),
             "snapshot_type": str(snapshot_type or "") or None,
+            # The native root callback currently identifies a wave, not every
+            # active stock. Infer only an unambiguous single-stock wave.
+            "symbol": symbol,
+            "scope_symbols": list(scope_symbols),
+            "activity_scope": "symbol" if symbol else "provider_wave",
+            "started_at": started_at,
+            "elapsed_seconds": round(max(0.0, elapsed_seconds), 3),
             "completed": max(0, int(completed)),
             "total": max(0, int(total)),
             "updated_at": iso(now),
@@ -2873,6 +3363,10 @@ class MarketDataCollectionCoordinator:
         provider_progress = dict(job.progress_json or {}).get("provider")
         if isinstance(provider_progress, Mapping):
             progress["provider"] = dict(provider_progress)
+        for stage_name in ("native_postfetch", "research_archive", "research_enrichment", "company_profile_dependency_rebuild", "native_quant_auxiliary"):
+            research_progress = dict(job.progress_json or {}).get(stage_name)
+            if isinstance(research_progress, Mapping):
+                progress[stage_name] = dict(research_progress)
         job.progress_json = progress
         checkpoint = dict(job.checkpoint_json or {})
         checkpoint["finished_task_ids"] = finished
@@ -2961,10 +3455,12 @@ class MarketDataCollectionCoordinator:
                 ValueError,
             ) as exc:
                 checkpoint.pop("publication_candidate", None)
+                dependency_failure = isinstance(exc, CompanyProfileDependencyError)
                 checkpoint["publication"] = {
                     "status": "blocked",
-                    "error_code": "collection_freeze_candidate_incomplete",
-                    "error_message": str(exc),
+                    "error_code": "collection_input_version_pending" if dependency_failure else "collection_freeze_candidate_incomplete",
+                    "error_message": "输入版本待补齐：公司信息已更新，相关数据尚未按同一版本重建" if dependency_failure else str(exc),
+                    **({"company_profile_dependencies": exc.company_profile_dependencies} if dependency_failure else {}),
                     "updated_at": iso(datetime.now(timezone.utc)),
                 }
                 job.checkpoint_json = checkpoint
@@ -3115,7 +3611,15 @@ class MarketDataCollectionCoordinator:
                     status_code=409,
                 )
             baseline = checkpoint.get("publication_candidate")
-            candidate = self._publication_candidate(session, job, baseline=baseline)
+            try:
+                candidate = self._publication_candidate(session, job, baseline=baseline)
+            except CompanyProfileDependencyError as exc:
+                raise CollectionJobError(
+                    "collection_input_version_pending",
+                    "输入版本待补齐：公司信息已更新，相关数据尚未按同一版本重建",
+                    status_code=409,
+                    details={"company_profile_dependencies": exc.company_profile_dependencies},
+                ) from exc
             expected_hash = str(proposal_hash)
             if expected_hash != candidate["proposal_hash"]:
                 raise CollectionJobError(
@@ -3159,6 +3663,13 @@ class MarketDataCollectionCoordinator:
                             "manifest_hash": bundle.manifest_hash,
                         }
                     )
+            except CompanyProfileDependencyError as exc:
+                raise CollectionJobError(
+                    "collection_input_version_pending",
+                    "输入版本待补齐：公司信息已更新，相关数据尚未按同一版本重建",
+                    status_code=409,
+                    details={"company_profile_dependencies": exc.company_profile_dependencies},
+                ) from exc
             except (IncompleteBundleError, BundleIntegrityError, ValueError) as exc:
                 raise CollectionJobError(
                     "collection_freeze_proposal_changed",
@@ -3328,13 +3839,6 @@ class MarketDataCollectionCoordinator:
                 latest_result_by_task[result.task_id] = result
 
         def task_failure(task: MarketDataCollectionTask) -> dict[str, Any]:
-            if not task.last_error_code and not task.last_error_message:
-                return {
-                    "failure_kind": None,
-                    "failure_stage": None,
-                    "failure_label": None,
-                    "raw_data_present": False,
-                }
             result = latest_result_by_task.get(task.id)
             metrics = dict(result.metrics_json or {}) if result is not None else {}
             diagnostic_message = task.last_error_message
@@ -3346,6 +3850,14 @@ class MarketDataCollectionCoordinator:
             if snapshot is not None:
                 raw_payload = dict(snapshot.payload_json or {}).get("raw")
                 metrics["raw_data_present"] = bool(raw_payload)
+            if not task.last_error_code and not task.last_error_message:
+                return {
+                    "failure_kind": None,
+                    "failure_stage": None,
+                    "failure_label": None,
+                    "raw_data_present": bool(metrics.get("raw_data_present")),
+                }
+            if snapshot is not None:
                 validation = dict(snapshot.validation_json or {})
                 detailed_errors = list(validation.get("semantic_errors") or [])
                 if detailed_errors and diagnostic_message in {
@@ -3408,6 +3920,10 @@ class MarketDataCollectionCoordinator:
             "progress": dict(job.progress_json or {}),
             "checkpoint": checkpoint,
             "agent_recovery": checkpoint.get("agent_recovery"),
+            "research_archive": checkpoint.get("research_archive"),
+            **({"company_profile_dependencies": checkpoint["publication"]["company_profile_dependencies"]}
+               if isinstance(checkpoint.get("publication"), Mapping)
+               and isinstance(checkpoint["publication"].get("company_profile_dependencies"), Mapping) else {}),
             **self._publication_fields(job, checkpoint),
             "cancel_requested": job.cancel_requested,
             "error_summary": job.error_summary,

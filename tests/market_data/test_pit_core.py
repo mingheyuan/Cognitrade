@@ -885,6 +885,136 @@ def test_materializer_rejects_legacy_uzi_bundle_crossing_pit_cutoff(
         BundleMaterializer(repository).materialize(bundle.id)
 
 
+@pytest.mark.parametrize(
+    "pit_manifest",
+    [
+        {"pit_safe": False},
+        {
+            "pit_safe": True,
+            "pit_mode": "live_observation",
+            "requested_as_of_date": AS_OF.isoformat(),
+            "observed_local_date": "2026-08-22",
+        },
+    ],
+)
+def test_resolver_rejects_explicit_pit_violations_even_with_bounded_timestamps(
+    session: Session, pit_manifest: dict,
+) -> None:
+    repository = MarketDataRepository(session)
+    row = SnapshotIngestionService(repository).ingest(
+        _input("0_basic", query_manifest=pit_manifest)
+    )
+    assert _database_utc(row.observed_at) < cutoff_at_for_date(AS_OF, "Asia/Shanghai")
+    basic = SnapshotResolver(repository).coverage(
+        "600519.SH", "CN_EQUITY", AS_OF, now=NOW,
+    ).dimensions[0]
+    assert basic.snapshot_id is None
+    assert basic.eligible is False
+
+
+@pytest.mark.parametrize("pit_safe", [True, False])
+def test_historical_gap_fallback_cannot_bypass_explicit_pit_rejection(
+    session: Session, pit_safe: bool,
+) -> None:
+    from research_system.market_data.uzi_adapter import UziSnapshotAdapter
+
+    repository = MarketDataRepository(session)
+    gap = UziSnapshotAdapter().disclosed_gap(
+        symbol="600519.SH", market="CN_EQUITY", exchange_timezone="Asia/Shanghai",
+        dimension="19_contests", as_of_date=AS_OF,
+        reason_code="historical_archive_unavailable", message="没有目标日期归档",
+    )
+    gap = gap.model_copy(update={
+        "query_manifest": {**gap.query_manifest, "pit_safe": pit_safe},
+    })
+    row = SnapshotIngestionService(repository).ingest(gap)
+    contest = next(
+        item
+        for item in SnapshotResolver(repository).coverage(
+            "600519.SH", "CN_EQUITY", AS_OF, now=gap.observed_at,
+        ).dimensions
+        if item.dimension == "19_contests"
+    )
+    assert contest.snapshot_id == (row.id if pit_safe else None)
+
+
+@pytest.mark.parametrize(
+    "projection_version", ["legacy-v1", "uzi-dim-result-v2", "uzi-dim-result-v3"]
+)
+def test_materializer_rejects_explicit_pit_flag_before_any_projection(
+    session: Session, projection_version: str,
+) -> None:
+    repository, _ = _ingest_complete_set(session)
+    bundle = BundlePublisher(repository).publish(
+        symbol="600519.SH", market="CN_EQUITY", as_of_date=AS_OF, now=NOW,
+    )
+    basic_item = repository.list_bundle_items(bundle.id)[0]
+    # Model an old persisted Bundle whose snapshot already declares rejection;
+    # the safety failure must precede projection, not be softened into a gap.
+    session.execute(
+        update(MarketDataSnapshot)
+        .where(MarketDataSnapshot.id == basic_item.snapshot_id)
+        .values(query_manifest_json={"pit_safe": False})
+        .execution_options(synchronize_session=False)
+    )
+    session.flush()
+    session.expire_all()
+    with pytest.raises(BundleIntegrityError, match="explicitly marked PIT unsafe"):
+        BundleMaterializer(repository).materialize(
+            bundle.id, projection_version=projection_version,
+        )
+
+
+def test_pit_collection_date_does_not_require_a_same_day_market_bar(
+    session: Session,
+) -> None:
+    repository = MarketDataRepository(session)
+    row = SnapshotIngestionService(repository).ingest(
+        _input("0_basic", query_manifest={
+            "pit_safe": True,
+            "pit_mode": "live_observation",
+            "requested_as_of_date": AS_OF.isoformat(),
+            "observed_local_date": AS_OF.isoformat(),
+            "latest_trading_date": "2026-08-19",
+        })
+    )
+    basic = SnapshotResolver(repository).coverage(
+        "600519.SH", "CN_EQUITY", AS_OF, now=NOW,
+    ).dimensions[0]
+    assert basic.snapshot_id == row.id
+
+
+@pytest.mark.parametrize("pit_safe", [True, False])
+def test_historical_reconstruction_still_needs_proof_and_no_explicit_rejection(
+    session: Session, pit_safe: bool,
+) -> None:
+    repository = MarketDataRepository(session)
+    reconstructed_at = datetime(2026, 8, 22, 1, tzinfo=timezone.utc)
+    row = SnapshotIngestionService(repository).ingest(
+        _input(
+            "0_basic",
+            observed_at=reconstructed_at,
+            ingested_at=reconstructed_at + timedelta(minutes=1),
+            query_manifest={
+                "pit_safe": pit_safe,
+                "pit_mode": "historical_reconstruction",
+                "requested_as_of_date": AS_OF.isoformat(),
+                "observed_local_date": "2026-08-22",
+            },
+            evidence=_evidence(
+                "0_basic", grade=EvidenceGrade.B, published_at=PUBLISHED,
+                observed_at=reconstructed_at, manual=True,
+            ),
+            origin="manual",
+        )
+    )
+    basic = SnapshotResolver(repository).coverage(
+        "600519.SH", "CN_EQUITY", AS_OF,
+        now=reconstructed_at + timedelta(minutes=1),
+    ).dimensions[0]
+    assert basic.snapshot_id == (row.id if pit_safe else None)
+
+
 def test_grade_b_reconstruction_is_eligible_only_with_immutable_proof(
     session: Session,
 ) -> None:
@@ -947,6 +1077,57 @@ def test_grade_b_reconstruction_is_eligible_only_with_immutable_proof(
             immutable_proof=False,
             is_manual=True,
         )
+
+
+def test_valid_reconstruction_is_not_poisoned_by_legacy_late_a_evidence(
+    session: Session,
+) -> None:
+    repository = MarketDataRepository(session)
+    ingestion = SnapshotIngestionService(repository)
+    reconstructed_at = datetime(2026, 8, 22, 1, tzinfo=timezone.utc)
+    row = ingestion.ingest(
+        _input(
+            "0_basic",
+            observed_at=reconstructed_at,
+            ingested_at=reconstructed_at + timedelta(minutes=1),
+            evidence=_evidence(
+                "0_basic",
+                grade=EvidenceGrade.B,
+                published_at=PUBLISHED,
+                observed_at=reconstructed_at,
+                manual=True,
+            ),
+            origin="manual",
+        )
+    )
+    legacy = repository.add_evidence(
+        MarketDataEvidence(
+            evidence_key="legacy-late-grade-a",
+            provider="official-archive",
+            source_url="https://example.test/archive",
+            source_kind="official_disclosure",
+            content_hash="e" * 64,
+            published_at=PUBLISHED,
+            observed_at=reconstructed_at,
+            grade=EvidenceGrade.A.value,
+            immutable_proof=True,
+        )
+    )
+    repository.add_snapshot_evidence(snapshot_id=row.id, evidence_id=legacy.id)
+
+    basic = (
+        SnapshotResolver(repository)
+        .coverage(
+            "600519.SH",
+            "CN_EQUITY",
+            AS_OF,
+            now=datetime(2026, 8, 25, tzinfo=timezone.utc),
+        )
+        .dimensions[0]
+    )
+
+    assert basic.snapshot_id == row.id
+    assert basic.eligible is True
 
 
 def test_verified_empty_requires_bounded_success_not_timeout(session: Session) -> None:

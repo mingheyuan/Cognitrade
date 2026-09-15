@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import nullcontext
@@ -23,11 +24,16 @@ from research_system.strategies.contracts import (
     JobStatus,
     ReportSetStatus,
     StrategyDocumentV1,
+    is_report_conditions,
     next_weekday,
+    parse_strategy_document,
 )
 from research_system.strategies.database import StrategyDatabase
 from research_system.strategies.errors import StrategyConflict, StrategyDomainError
-from research_system.strategies.factors import extract_uzi_score, point_in_time_available
+from research_system.strategies.factors import (
+    extract_uzi_score,
+    point_in_time_available,
+)
 from research_system.strategies.models import (
     CanonicalUziAnalysis,
     DailyReportNode,
@@ -47,6 +53,238 @@ class _JobControlRequested(RuntimeError):
     def __init__(self, status: str) -> None:
         super().__init__(status)
         self.status = status
+
+
+def frozen_analysis_input_hashes(manifest: dict | None, symbols: Iterable[str]) -> dict[str, str]:
+    """Cache the actual fixed research input, not just its structural Bundle.
+
+    Evidence may be appended to an unchanged snapshot before a new Manifest is
+    frozen. Only the exact evidence set and projection pinned by that Manifest
+    may participate in canonical stock-analysis reuse.
+    """
+    symbols = list(symbols)
+    hashes = bundle_hashes_for_symbols(manifest, symbols)
+    if not manifest:
+        return hashes
+    pins = dict(manifest.get("workflow_pins") or {})
+    items = {str(item.get("symbol") or "").split(".")[0]: item for item in manifest.get("items") or []}
+    for symbol, bundle_hash in list(hashes.items()):
+        context = dict(items.get(symbol.split(".")[0], {}).get("context") or {})
+        if "evidence_bindings" not in context:
+            continue  # Legacy cache namespace retains its original semantics.
+        payload = {
+            "version": "frozen-analysis-input-v2",
+            "bundle_manifest_hash": bundle_hash,
+            "evidence_bindings": context["evidence_bindings"],
+            "workflow_pins": pins,
+        }
+        hashes[symbol] = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+    return hashes
+
+
+def frozen_reference_price_evidence(
+    manifest: dict | None, symbol: str, native_content: dict
+) -> dict[str, Any]:
+    """Prove the actual native basic price from this batch's fixed input only."""
+    proof: dict[str, Any] = {
+        "status": "unavailable",
+        "subject_code": symbol.split(".")[0],
+        "source_field": "0_basic.data.price",
+        "suggested_collection": {
+            "symbol": symbol,
+            "dimensions": ["0_basic"],
+            "reason": "verify_native_reference_price",
+        },
+    }
+
+    def missing(reason):
+        return {**proof, "reason": reason}
+
+    def number(value):
+        if isinstance(value, bool):
+            return None
+        try:
+            parsed = float(value)
+            return parsed if math.isfinite(parsed) and parsed > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    def day(value):
+        text = str(value or "")
+        try:
+            if len(text) == 8 and text.isdigit():
+                return date(int(text[:4]), int(text[4:6]), int(text[6:]))
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            return None
+
+    def digest(value):
+        return (
+            isinstance(value, str)
+            and len(value) == 64
+            and all(char in "0123456789abcdef" for char in value.lower())
+        )
+
+    # Input-preflight failures have no native analysis output to compare.
+    # Missing output is not evidence of a price mismatch or a 0_basic data gap.
+    native_rows = native_content.get("results") or [native_content]
+    native_rows = [
+        row
+        for row in native_rows
+        if isinstance(row, dict)
+        and (
+            not row.get("symbol")
+            or str(row["symbol"]).split(".")[0] == symbol.split(".")[0]
+        )
+    ]
+    if not any(row.get("raw") or row.get("synthesis") for row in native_rows):
+        proof.pop("suggested_collection", None)
+        return {**proof, "status": "not_evaluated", "reason": "missing_native_report"}
+
+    if not manifest:
+        return missing("frozen_report_manifest_missing")
+    selected = [
+        row
+        for row in manifest.get("items") or []
+        if str(row.get("symbol") or "").split(".")[0] == symbol.split(".")[0]
+    ]
+    if len(selected) != 1:
+        return missing("frozen_stock_bundle_missing")
+    item = selected[0]
+    bundle = dict(item.get("bundle") or {})
+    basic = next(
+        (
+            row
+            for row in item.get("snapshots") or []
+            if (row.get("dimension_id") or row.get("dimension")) == "0_basic"
+        ),
+        None,
+    )
+    if not basic:
+        return missing("frozen_basic_snapshot_missing")
+    proof.update(
+        bundle_id=item.get("bundle_id"),
+        bundle_manifest_hash=item.get("bundle_manifest_hash")
+        or bundle.get("manifest_hash"),
+        snapshot_id=basic.get("snapshot_id"),
+        snapshot_content_hash=basic.get("content_hash"),
+        report_manifest_id=manifest.get("manifest_id"),
+        report_manifest_hash=manifest.get("manifest_hash"),
+        as_of_date=manifest.get("as_of_date"),
+    )
+    binding = next(
+        (
+            row
+            for row in bundle.get("items") or []
+            if (row.get("dimension_id") or row.get("dimension")) == "0_basic"
+        ),
+        {},
+    )
+    if (
+        not proof["bundle_id"]
+        or not proof["snapshot_id"]
+        or not all(
+            digest(proof[key])
+            for key in (
+                "bundle_manifest_hash",
+                "snapshot_content_hash",
+                "report_manifest_hash",
+            )
+        )
+        or binding.get("snapshot_id") != proof["snapshot_id"]
+        or binding.get("content_hash") != proof["snapshot_content_hash"]
+    ):
+        return missing("frozen_reference_hash_or_binding_missing")
+    facts = dict(basic.get("facts") or {})
+    envelope = dict(facts.get("_uzi_raw_result") or {})
+    basic_data = dict(envelope.get("data") or {})
+    identities = [
+        bundle.get("symbol"),
+        basic.get("symbol"),
+        basic_data.get("code") or envelope.get("ticker"),
+    ]
+    if any(
+        not identity or str(identity).split(".")[0] != symbol.split(".")[0]
+        for identity in identities
+    ):
+        return missing("frozen_basic_stock_identity_mismatch")
+    if bundle.get("as_of_date") != manifest.get("as_of_date") or basic.get(
+        "snapshot_date"
+    ) != manifest.get("as_of_date"):
+        return missing("frozen_basic_as_of_date_mismatch")
+    frozen_price = number(basic_data.get("price"))
+    if len(native_rows) != 1:
+        return missing("native_basic_price_missing")
+    native_dimensions = dict((native_rows[0].get("raw") or {}).get("dimensions") or {})
+    native_basic = dict(native_dimensions.get("0_basic") or {})
+    native_price = number((native_basic.get("data") or {}).get("price"))
+    if native_price is None:
+        return missing("native_basic_price_missing")
+    if frozen_price is None:
+        return missing("frozen_basic_price_missing")
+    if abs(frozen_price - native_price) > 1e-9:
+        return missing("native_basic_price_differs_from_frozen_input")
+    proof.update(
+        price=native_price,
+        native_anchor_price=native_price,
+        native_source_path="results[].raw.dimensions.0_basic.data.price",
+    )
+    normalized = dict(
+        (facts.get("_market_data_audit") or {}).get("normalized_payload") or {}
+    )
+    raw = dict(normalized.get("raw") or facts)
+    history = dict(raw.get("market_hist") or {})
+    latest = dict(history.get("latest_bar") or {})
+    adjustment = history.get("adjust")
+    if adjustment is None or str(adjustment).strip().lower() not in {
+        "",
+        "none",
+        "raw",
+        "unadjusted",
+        "raw_unadjusted",
+    }:
+        return missing("basic_price_unadjusted_basis_unproven")
+    actual_day = day(latest.get("date") or latest.get("trade_date"))
+    as_of = day(manifest.get("as_of_date"))
+    if actual_day is None or as_of is None or actual_day > as_of:
+        return missing("basic_price_trade_date_unproven")
+    actual_close = number(latest.get("close"))
+    if actual_close is None or abs(actual_close - native_price) > 1e-9:
+        return missing("basic_native_price_not_backed_by_raw_bar")
+    query = dict(basic.get("query_manifest") or {})
+    provider = str(query.get("provider") or "")
+    refs = [
+        row
+        for row in basic.get("source_refs") or []
+        if row.get("provider") == provider
+        and row.get("id")
+        and digest(row.get("content_hash"))
+    ]
+    if not provider or not refs or query.get("pit_safe") is not True:
+        return missing("basic_price_provider_or_pit_proof_missing")
+    market = str(bundle.get("market") or item.get("market") or "").upper()
+    currency = str(raw.get("currency") or normalized.get("currency") or "").upper()
+    if market != "CN_EQUITY" or currency != "CNY":
+        return missing("basic_price_currency_or_share_unit_unproven")
+    proof.update(
+        status="verified",
+        trade_date=actual_day.isoformat(),
+        as_of_date=as_of.isoformat(),
+        provider=provider,
+        basis="raw_unadjusted",
+        currency=currency,
+        price_unit="per_share",
+        currency_basis="source_declared"
+        if raw.get("currency")
+        else "CN_EQUITY_instrument_contract",
+        price_unit_basis="CN_EQUITY.market_hist.close",
+        source_evidence=[
+            {"evidence_id": row["id"], "content_hash": row["content_hash"]}
+            for row in refs
+        ],
+    )
+    proof.pop("suggested_collection", None)
+    return proof
 
 
 class ReportOrchestrationService:
@@ -118,8 +356,11 @@ class ReportOrchestrationService:
         start_date: date,
         end_date: date,
         source_run_id: str | None = None,
+        fund_bundle_id: str | None = None,
     ) -> dict[str, Any]:
         dates = self._trading_dates(start_date, end_date)
+        if fund_bundle_id and start_date != end_date:
+            raise StrategyDomainError("fund_bundle_single_date_required", "指定基金 Bundle 仅支持单日任务")
         if len(dates) > 60:
             raise StrategyDomainError("backfill_range_too_large", "单个补跑任务最多 60 个交易日")
         with self.database.session() as session:
@@ -131,7 +372,27 @@ class ReportOrchestrationService:
             )
         symbols: list[str] = []
         source_available = False
-        if source_run_id:
+        bundle_available = False
+        input_error = None
+        has_bundle_boundary = bool(getattr(self.holding_report_service, "_has_fund_report_lineage", lambda: False)())
+        resolve_fund_input = getattr(self.holding_report_service, "resolve_fund_input", None)
+        if callable(resolve_fund_input):
+            try:
+                resolved = resolve_fund_input(
+                    fund_code=assignment.fund_code,
+                    as_of_date=start_date,
+                    fund_bundle_id=fund_bundle_id,
+                    **self._runtime_scope(scope),
+                )
+                if resolved is not None:
+                    symbols = [str(row["symbol"]) for row in resolved["frozen"]["holdings"]]
+                    bundle_available = True
+                    fund_bundle_id = str(resolved["frozen"].get("fund_bundle_id") or fund_bundle_id or "") or None
+            except ValueError as exc:
+                if fund_bundle_id:
+                    raise
+                input_error = str(exc)
+        if source_run_id and not bundle_available and not has_bundle_boundary:
             try:
                 artifacts = self._run_artifacts(source_run_id, scope, artifact_type="fund_snapshot")
                 frozen = freeze_fund_holdings(
@@ -171,6 +432,9 @@ class ReportOrchestrationService:
             "cache_hit_count": hits,
             "model_call_upper_bound": max(0, total - hits),
             "source_run_available": source_available,
+            "fund_bundle_available": bundle_available,
+            "fund_bundle_id": fund_bundle_id,
+            "input_preflight_error": input_error,
             "point_in_time_policy": "unverified evidence is blocked, never replaced by current data",
         }
 
@@ -183,10 +447,13 @@ class ReportOrchestrationService:
         start_date: date,
         end_date: date,
         source_run_id: str | None = None,
+        fund_bundle_id: str | None = None,
         manual: bool = True,
         force_new: bool = False,
     ) -> dict[str, Any]:
         dates = self._trading_dates(start_date, end_date)
+        if fund_bundle_id and start_date != end_date:
+            raise StrategyDomainError("fund_bundle_single_date_required", "指定基金 Bundle 仅支持单日任务")
         if not dates:
             raise StrategyDomainError("no_trading_days", "日期区间内没有交易日")
         if len(dates) > 60:
@@ -215,6 +482,7 @@ class ReportOrchestrationService:
                 "start_date": start_date.isoformat(),
                 "end_date": end_date.isoformat(),
                 "source_run_id": source_run_id,
+                "fund_bundle_id": fund_bundle_id,
                 "manual": manual,
             }
             idempotency_key = f"daily-report:{_hash(key_payload)}"
@@ -237,6 +505,7 @@ class ReportOrchestrationService:
                 "end_date": end_date.isoformat(),
                 "dates": [value.isoformat() for value in dates],
                 "source_run_id": source_run_id,
+                "fund_bundle_id": fund_bundle_id,
                 "manual": manual,
                 "top_n": document.report_inputs.top_n,
                 "research_profile": document.report_inputs.research_profile,
@@ -322,6 +591,16 @@ class ReportOrchestrationService:
         return payload
 
     def retry(
+        self, scope: OwnerScope, job_id: str, *, symbols: Iterable[str] | None = None,
+        full_rerun: bool = False, confirmed: bool = False, refresh_inputs: bool = False,
+    ) -> dict[str, Any]:
+        # Input preparation can take longer than a normal retry. Serialize
+        # local clicks so a second request cannot replace the queued reference.
+        with self._lock:
+            return self._retry_locked(scope, job_id, symbols=symbols, full_rerun=full_rerun,
+                                      confirmed=confirmed, refresh_inputs=refresh_inputs)
+
+    def _retry_locked(
         self,
         scope: OwnerScope,
         job_id: str,
@@ -329,6 +608,7 @@ class ReportOrchestrationService:
         symbols: Iterable[str] | None = None,
         full_rerun: bool = False,
         confirmed: bool = False,
+        refresh_inputs: bool = False,
     ) -> dict[str, Any]:
         selected = list(dict.fromkeys(str(value).strip() for value in (symbols or []) if str(value).strip()))
         if full_rerun and not confirmed:
@@ -337,6 +617,8 @@ class ReportOrchestrationService:
                 "完整重跑需要明确确认",
                 status_code=409,
             )
+        if refresh_inputs and (not confirmed or full_rerun):
+            raise StrategyConflict("input_revision_confirmation_required", "输入修订需要明确确认，不能与完整重跑同时请求")
         with self.database.session() as session:
             job = self._require_job(session, scope, job_id)
             if job.status in {JobStatus.QUEUED.value, JobStatus.RUNNING.value}:
@@ -347,9 +629,27 @@ class ReportOrchestrationService:
             if not full_rerun and not selected:
                 raise StrategyConflict("no_failed_nodes", "没有可重试的失败节点")
             request = dict(job.request_json or {})
+            # Resolve before queueing and persist only immutable references.
+            # Resuming this attempt cannot select a newer Bundle again.
+            input_revisions = {}
+            if refresh_inputs:
+                revise = getattr(self.holding_report_service, "revise_report_inputs", None)
+                if not callable(revise):
+                    raise StrategyConflict("report_input_revision_unsupported", "当前报告服务不支持输入修订")
+                from research_system.market_data.report_inputs import ReportInputError
+                for day in request.get("dates") or []:
+                    batch_id = dict(progress.get("batches") or {}).get(day)
+                    if not batch_id:
+                        raise StrategyConflict("report_manifest_missing", f"{day} 没有可修订的原报告输入")
+                    try:
+                        input_revisions[day] = revise(batch_id, symbols=selected, **self._runtime_scope(scope))
+                    except ReportInputError as exc:
+                        raise StrategyConflict(exc.code, str(exc)) from exc
             request["retry"] = True
             request["retry_symbols"] = selected
             request["full_rerun"] = full_rerun
+            request["refresh_inputs"] = refresh_inputs
+            request["input_revisions"] = input_revisions
             request["retry_requested_at"] = datetime.now(UTC).isoformat()
             job.request_json = request
             job.pause_requested = False
@@ -361,6 +661,35 @@ class ReportOrchestrationService:
             payload = self._job_payload(session, job)
         self._submit(job.id, attempt.id)
         return payload
+
+    def repair_plan(self, scope: OwnerScope, job_id: str) -> dict[str, Any]:
+        from zoneinfo import ZoneInfo
+        from research_system.market_data.report_repairs import report_repair_plan
+
+        with self.database.session() as session:
+            job = self._require_job(session, scope, job_id)
+            ids = list((job.progress_json or {}).get("report_set_ids") or [])
+            reports = list(session.scalars(select(DailyReportSet).where(
+                DailyReportSet.id.in_(ids), DailyReportSet.tenant_id == scope.tenant_id,
+                DailyReportSet.user_id == scope.user_id,
+            ).order_by(DailyReportSet.revision.desc())))
+            seen, plans = set(), []
+            for report in reports:
+                if report.as_of_date in seen:
+                    continue
+                seen.add(report.as_of_date)
+                nodes = list(session.scalars(select(DailyReportNode).where(
+                    DailyReportNode.report_set_id == report.id,
+                    DailyReportNode.node_type == "holding_uzi",
+                )))
+                for node in nodes:
+                    plan = report_repair_plan(dict(node.source_json or {}), symbol=node.subject_code,
+                                              as_of=report.as_of_date,
+                                              today=datetime.now(ZoneInfo("Asia/Shanghai")).date())
+                    if plan["recovery"]["kind"] != "complete":
+                        plans.append({"report_set_id": report.id, "run_id": node.run_id, **plan})
+            return {"schema_version": "report-repair-plan-v1", "job_id": job.id,
+                    "automatic_collection": False, "job_status": job.status, "items": plans}
 
     def list_report_sets(
         self,
@@ -550,7 +879,11 @@ class ReportOrchestrationService:
                 with self.database.session() as session:
                     job = session.get(OrchestrationJob, job_id)
                     if job is not None:
+                        current = dict(job.progress_json or {})
+                        batches = {**dict(current.get("batches") or {}), **batches}
+                        report_ids = list(dict.fromkeys([*list(current.get("report_set_ids") or []), *report_ids]))
                         job.progress_json = {
+                            **current,
                             "total": len(dates),
                             "completed": completed,
                             "failed": failed,
@@ -685,6 +1018,9 @@ class ReportOrchestrationService:
         scope = self._job_scope(job_id)
         assignment_id = str(request["assignment_id"])
         strategy_version_id = str(request.get("strategy_version_id") or "").strip() or None
+        has_bundle_boundary = bool(
+            getattr(self.holding_report_service, "_has_fund_report_lineage", lambda: False)()
+        )
         with self.database.session() as session:
             assignment, version, document = self._assignment_contract(
                 session,
@@ -720,7 +1056,7 @@ class ReportOrchestrationService:
                 .order_by(DailyReportSet.revision.desc())
                 .limit(1)
             )
-            if existing is not None and not request.get("retry"):
+            if existing is not None and not request.get("retry") and not has_bundle_boundary:
                 self._recompute_signal(
                     scope,
                     assignment.id,
@@ -736,13 +1072,42 @@ class ReportOrchestrationService:
                 }
             building_report_set_id = building.id if building is not None else None
             building_source_run_id = building.source_run_id if building is not None else None
+            if has_bundle_boundary and building is not None:
+                job = session.get(OrchestrationJob, job_id)
+                own_reports = list((job.progress_json or {}).get("report_set_ids") or []) if job else []
+                if building.id not in own_reports:
+                    building_report_set_id = None
+                    building_source_run_id = None
 
         source_run_id = str(request.get("source_run_id") or "").strip() or None
         if building_source_run_id:
             source_run_id = building_source_run_id
-        if source_run_id is None:
+        pinned_fund_bundle_id = str(request.get("fund_bundle_id") or "").strip() or None
+        if not request.get("full_rerun"):
+            pinned_fund_bundle_id = (
+                (request.get("fund_bundle_ids") or {}).get(as_of.isoformat())
+                or pinned_fund_bundle_id
+            )
+        bundle_input = None
+        if has_bundle_boundary:
+            bundle_input = self.holding_report_service.resolve_fund_input(
+                fund_code=assignment.fund_code,
+                as_of_date=as_of,
+                fund_bundle_id=pinned_fund_bundle_id,
+                **self._runtime_scope(scope),
+            )
+            pinned_fund_bundle_id = bundle_input["frozen"]["fund_bundle_id"]
+            with self.database.session() as session:
+                job = session.get(OrchestrationJob, job_id)
+                stored_request = dict(job.request_json or {})
+                pinned = dict(stored_request.get("fund_bundle_ids") or {})
+                pinned[as_of.isoformat()] = pinned_fund_bundle_id
+                stored_request["fund_bundle_ids"] = pinned
+                job.request_json = stored_request
+                request["fund_bundle_ids"] = pinned
+        if source_run_id is None and bundle_input is None:
             source_run_id = self._find_latest_fund_run(scope, assignment.fund_code, as_of)
-        if source_run_id is None:
+        if source_run_id is None and bundle_input is None:
             report_set_id = self._create_blocked_report(
                 scope,
                 assignment=assignment,
@@ -765,35 +1130,37 @@ class ReportOrchestrationService:
                 **self._report_progress_snapshot(report_set_id),
             }
 
-        artifacts = self._run_artifacts(source_run_id, scope)
-        snapshot = next(
-            (row for row in reversed(artifacts) if row.get("artifact_type") == "fund_snapshot"),
-            None,
-        )
-        if snapshot is None:
-            raise StrategyDomainError("fund_snapshot_unavailable", "来源运行没有 fund_snapshot", status_code=409)
-        frozen = freeze_fund_holdings(
-            [snapshot],
-            fund_code=assignment.fund_code,
-            top_n=document.report_inputs.top_n,
-            now=as_of,
-        )
-        pit_verified, availability = self._availability(snapshot, as_of)
-        candidate = self._fund_candidate(snapshot, assignment.fund_code)
-        analysis = self._fund_analysis(artifacts, assignment.fund_code)
-        fund_payload = {
-            **candidate,
-            **analysis,
-            "holding_source": frozen.get("holding_source"),
-            "is_fund_of_funds": frozen.get("is_fund_of_funds"),
-            "disclosure_date": frozen.get("disclosure_date"),
-            "disclosure_age_days": frozen.get("disclosure_age_days"),
-            "stale_level": frozen.get("stale_level"),
-            "report_allowed": pit_verified,
-            "critical_count": 0 if pit_verified else 1,
-            "point_in_time_verified": pit_verified,
-            "availability": availability,
-        }
+        if bundle_input is not None:
+            frozen = bundle_input["frozen"]
+            fund_payload = bundle_input["fund_payload"]
+            snapshot = {"artifact_id": frozen.get("source_artifact_id")}
+            pit_verified = True
+        else:
+            artifacts = self._run_artifacts(source_run_id, scope)
+            snapshot = next(
+                (row for row in reversed(artifacts) if row.get("artifact_type") == "fund_snapshot"),
+                None,
+            )
+            if snapshot is None:
+                raise StrategyDomainError("fund_snapshot_unavailable", "来源运行没有 fund_snapshot", status_code=409)
+            frozen = freeze_fund_holdings(
+                [snapshot], fund_code=assignment.fund_code,
+                top_n=document.report_inputs.top_n, now=as_of,
+            )
+            pit_verified, availability = self._availability(snapshot, as_of)
+            fund_payload = {
+                **self._fund_candidate(snapshot, assignment.fund_code),
+                **self._fund_analysis(artifacts, assignment.fund_code),
+                "holding_source": frozen.get("holding_source"),
+                "is_fund_of_funds": frozen.get("is_fund_of_funds"),
+                "disclosure_date": frozen.get("disclosure_date"),
+                "disclosure_age_days": frozen.get("disclosure_age_days"),
+                "stale_level": frozen.get("stale_level"),
+                "report_allowed": pit_verified,
+                "critical_count": 0 if pit_verified else 1,
+                "point_in_time_verified": pit_verified,
+                "availability": availability,
+            }
         if building_report_set_id is not None:
             report_set_id = building_report_set_id
         else:
@@ -833,6 +1200,8 @@ class ReportOrchestrationService:
                 **self._report_progress_snapshot(report_set_id),
             }
 
+        self._record_inflight_batch(job_id, as_of, report_set_id, None)
+
         retry_symbols = list(request.get("retry_symbols") or [])
         claim_symbols = (
             set(str(value) for value in retry_symbols)
@@ -840,6 +1209,13 @@ class ReportOrchestrationService:
             else None
         )
         report_manifest = None
+        revision = dict(request.get("input_revisions") or {}).get(as_of.isoformat())
+        if revision:
+            report_manifest = self.holding_report_service.load_revised_report_inputs(
+                revision, fund_code=assignment.fund_code,
+                symbols=[str(row["symbol"]) for row in frozen.get("holdings") or [] if row.get("supported")],
+                **self._runtime_scope(scope),
+            )
         load_frozen_manifest = getattr(
             self.holding_report_service,
             "frozen_report_manifest",
@@ -852,6 +1228,7 @@ class ReportOrchestrationService:
         # repeats the old failure forever.
         if (
             previous_batch_id
+            and report_manifest is None
             and not request.get("full_rerun")
             and callable(load_frozen_manifest)
         ):
@@ -876,7 +1253,15 @@ class ReportOrchestrationService:
                     "assignment_id": assignment.id,
                     "fund_code": assignment.fund_code,
                     "source_run_id": source_run_id,
+                    "fund_bundle_id": pinned_fund_bundle_id,
                     "holdings": list(frozen.get("holdings") or []),
+                    "published_workflow_pins": ({
+                        "workflow_commit": document.pins.uzi_source_commit,
+                        "skill_version": document.pins.uzi_methodology_version,
+                        "model_id": document.pins.model_id,
+                        "model_parameters": document.pins.model_parameters,
+                        "prompt_hash": document.pins.prompt_hash,
+                    } if is_report_conditions(document) else {}),
                 },
             )
         supported_holding_symbols = [
@@ -884,7 +1269,7 @@ class ReportOrchestrationService:
             for row in frozen.get("holdings") or []
             if bool(row.get("supported")) and str(row.get("symbol") or "")
         ]
-        bundle_manifest_hashes = bundle_hashes_for_symbols(
+        analysis_input_hashes = frozen_analysis_input_hashes(
             report_manifest,
             supported_holding_symbols,
         )
@@ -894,9 +1279,10 @@ class ReportOrchestrationService:
             holdings=list(frozen.get("holdings") or []),
             as_of=as_of,
             pin_hash=uzi_pin_hash,
-            manifest_hashes=bundle_manifest_hashes,
+            manifest_hashes=analysis_input_hashes,
             claim_symbols=claim_symbols,
         )
+        batch_options = {"fund_bundle_id": pinned_fund_bundle_id} if pinned_fund_bundle_id else {}
         batch = self.holding_report_service.create_batch(
             source_run_id,
             fund_code=assignment.fund_code,
@@ -915,7 +1301,9 @@ class ReportOrchestrationService:
                 else None
             ),
             **self._runtime_scope(scope),
+            **batch_options,
         )
+        self._record_inflight_batch(job_id, as_of, report_set_id, str(batch["batch_id"]))
         batch = self._wait_batch(
             str(batch["batch_id"]),
             scope,
@@ -933,6 +1321,7 @@ class ReportOrchestrationService:
             batch=batch,
             as_of=as_of,
             pin_hash=uzi_pin_hash,
+            report_manifest=report_manifest,
         )
         failed_symbols = self._finalize_report_set(
             scope,
@@ -941,7 +1330,8 @@ class ReportOrchestrationService:
             frozen=frozen,
             pin_hash=uzi_pin_hash,
             as_of=as_of,
-            manifest_hashes=bundle_manifest_hashes,
+            manifest_hashes=analysis_input_hashes,
+            report_manifest=report_manifest,
         )
         self._recompute_signal(
             scope,
@@ -955,6 +1345,25 @@ class ReportOrchestrationService:
             "failed_symbols": failed_symbols,
             **self._report_progress_snapshot(report_set_id),
         }
+
+    def _record_inflight_batch(
+        self, job_id: str, as_of: date, report_set_id: str, batch_id: str | None,
+    ) -> None:
+        """Expose persisted work before waiting; never replace sibling progress."""
+
+        with self.database.session() as session:
+            job = session.get(OrchestrationJob, job_id)
+            if job is None:
+                return
+            progress = dict(job.progress_json or {})
+            progress["report_set_ids"] = list(dict.fromkeys([
+                *list(progress.get("report_set_ids") or []), report_set_id,
+            ]))
+            if batch_id:
+                progress["batches"] = {
+                    **dict(progress.get("batches") or {}), as_of.isoformat(): batch_id,
+                }
+            job.progress_json = progress
 
     def _report_progress_snapshot(self, report_set_id: str) -> dict[str, Any]:
         with self.database.session() as session:
@@ -974,7 +1383,7 @@ class ReportOrchestrationService:
         version: StrategyVersion,
         as_of: date,
         pin_hash: str,
-        source_run_id: str,
+        source_run_id: str | None,
         source_artifact_id: str | None,
         fund_payload: dict[str, Any],
         top_n: int,
@@ -1029,7 +1438,10 @@ class ReportOrchestrationService:
                     status="completed" if not initial_gaps else "blocked",
                     run_id=source_run_id,
                     artifact_id=source_artifact_id,
-                    input_hash=_hash({"source_artifact_id": source_artifact_id, "as_of": as_of.isoformat()}),
+                    input_hash=_hash({
+                        "source_artifact_id": source_artifact_id, "as_of": as_of.isoformat(),
+                        "fund_bundle_hash": fund_payload.get("fund_bundle_manifest_hash"),
+                    }),
                     content_hash=_hash(fund_payload),
                     confidence=1.0 if not initial_gaps else 0.0,
                     data_gaps_json=list(initial_gaps),
@@ -1064,7 +1476,7 @@ class ReportOrchestrationService:
                 "critical_count": 1,
                 "point_in_time_verified": False,
             },
-            top_n=int(StrategyDocumentV1.model_validate(version.document_json).report_inputs.top_n),
+            top_n=int(parse_strategy_document(version.document_json).report_inputs.top_n),
             initial_gaps=[reason, "point_in_time_unverified"],
         )
         self._finalize_blocked_existing(report_set_id, reason=reason)
@@ -1097,6 +1509,7 @@ class ReportOrchestrationService:
         pin_hash: str,
         as_of: date,
         manifest_hashes: dict[str, str] | None = None,
+        report_manifest: dict[str, Any] | None = None,
     ) -> list[str]:
         failed_symbols: list[str] = []
         with self.database.session() as session:
@@ -1125,6 +1538,7 @@ class ReportOrchestrationService:
                     scope,
                     item,
                     previous=previous,
+                    report_manifest=report_manifest,
                 )
                 context_link = self._create_holding_context_link(
                     scope,
@@ -1354,12 +1768,15 @@ class ReportOrchestrationService:
         item: dict[str, Any],
         *,
         previous: DailyReportNode | None,
+        report_manifest: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], str | None, str | None, float, list[str]]:
         if item.get("canonical_reused") and previous is not None:
+            source = dict(previous.source_json or {})
+            source["reference_price_evidence"] = frozen_reference_price_evidence(report_manifest, str(item.get("symbol") or ""), source)
             return (
-                dict(previous.source_json or {}),
-                previous.artifact_id,
-                previous.content_hash,
+                source,
+                (previous.source_json or {}).get("canonical_artifact_id") or previous.artifact_id,
+                (previous.source_json or {}).get("canonical_content_hash") or previous.content_hash,
                 float(previous.confidence or 0.0),
                 list(previous.data_gaps_json or []),
             )
@@ -1382,12 +1799,22 @@ class ReportOrchestrationService:
         content = dict(chosen.get("content") or {})
         report_content = dict((report or {}).get("content") or {})
         score = extract_uzi_score({"source": content})
+        recovery = dict(item.get("recovery") or {})
+        input_reason_codes = set(item.get("data_gap") or []) | set(recovery.get("reason_codes") or [])
+        input_blocked = "input_preflight_blocked" in input_reason_codes or (
+            recovery.get("kind") in {"input_integrity", "version_mismatch"}
+            and "report_input" in (recovery.get("stages") or [])
+        )
         source = {
             **content,
             "uzi_overall_score": score,
-            "report_allowed": report_content.get("report_allowed", content.get("report_allowed", False)),
+            "report_allowed": report_content.get("report_allowed", content.get("report_allowed")),
             "critical_count": report_content.get("critical_count", content.get("critical_count", 0)),
             "canonical_run_id": run_id,
+            "report_stage": "final_self_review" if report else "native_analysis" if native else "input_preflight" if input_blocked else "execution",
+            **({"input_preflight": item["input_preflight"]} if item.get("input_preflight") else {}),
+            **({"recovery": item["recovery"]} if item.get("recovery") else {}),
+            "reference_price_evidence": frozen_reference_price_evidence(report_manifest, str(item.get("symbol") or ""), content),
         }
         gaps = list(
             dict.fromkeys(
@@ -1607,6 +2034,7 @@ class ReportOrchestrationService:
         batch: dict[str, Any],
         as_of: date,
         pin_hash: str,
+        report_manifest: dict[str, Any] | None = None,
     ) -> None:
         if not owned:
             return
@@ -1622,6 +2050,7 @@ class ReportOrchestrationService:
                 scope,
                 item,
                 previous=None,
+                report_manifest=report_manifest,
             )
             completed = bool(item.get("report_available")) and extract_uzi_score(source) is not None
             results[canonical_key] = {
@@ -1730,29 +2159,127 @@ class ReportOrchestrationService:
         )
         deadline = time.monotonic() + timeout_seconds
         next_heartbeat = time.monotonic()
-        while time.monotonic() < deadline:
-            if time.monotonic() >= next_heartbeat:
-                control = self._heartbeat(job_id)
-                if control != JobStatus.RUNNING.value:
-                    raise _JobControlRequested(control)
-                self._heartbeat_canonical(job_id, set(canonical_keys or set()))
-                next_heartbeat = time.monotonic() + 10.0
-            state = self.holding_report_service.detail(batch_id, **self._runtime_scope(scope))
-            if state.get("status") != "running":
+        pending_control: str | None = None
+        timed_out = False
+        cancel_sent = False
+        cancel_error: str | None = None
+        observation_error: Exception | None = None
+        state: dict[str, Any] = {}
+        while True:
+            timed_out = timed_out or time.monotonic() >= deadline
+            refresh_due = time.monotonic() >= next_heartbeat
+            if refresh_due:
+                if not timed_out:
+                    try:
+                        control = self._heartbeat(job_id)
+                        if control != JobStatus.RUNNING.value:
+                            pending_control = control
+                    except Exception as exc:
+                        observation_error = observation_error or exc
+                try:
+                    self._heartbeat_canonical(job_id, set(canonical_keys or set()))
+                except Exception as exc:
+                    observation_error = observation_error or exc
+                next_heartbeat = time.monotonic() + 3.0
+            if (pending_control or timed_out or observation_error) and not cancel_sent and (refresh_due or not cancel_error):
+                try:
+                    self.holding_report_service.cancel(batch_id, **self._runtime_scope(scope))
+                    cancel_sent = True
+                    cancel_error = None
+                    refresh_due = True
+                except Exception as exc:
+                    # Keep ownership while the child is still active. A
+                    # control failure is not evidence that transport exited.
+                    cancel_error = f"{exc.__class__.__name__}: {exc}"
+            if refresh_due:
+                try:
+                    state = self.holding_report_service.detail(batch_id, **self._runtime_scope(scope))
+                except Exception as exc:
+                    observation_error = observation_error or exc
+                try:
+                    self._record_batch_execution_progress(
+                        job_id, state, stopping=bool(pending_control or timed_out or observation_error),
+                        cancel_error=cancel_error, observation_error=str(observation_error) if observation_error else None,
+                    )
+                except Exception as exc:
+                    observation_error = observation_error or exc
+            terminal_holding_statuses = {"completed", "completed_partial", "failed", "cancelled", "unsupported"}
+            active_holdings = any(row.get("status") not in terminal_holding_statuses
+                                  for row in state.get("holdings") or [] if isinstance(row, dict))
+            if state.get("status") in {"completed", "completed_partial", "failed", "cancelled"} and not active_holdings:
+                try:
+                    self._record_batch_execution_progress(
+                        job_id, state, stopping=False,
+                        observation_error=str(observation_error) if observation_error else None,
+                    )
+                except Exception as exc:
+                    observation_error = observation_error or exc
+                # Observation failure is not proof of child termination. Only
+                # this observed terminal state permits the parent to release
+                # ownership and re-raise the original failure (never rerun).
+                if observation_error is not None:
+                    raise observation_error
+                if pending_control:
+                    raise _JobControlRequested(pending_control)
+                if timed_out:
+                    raise TimeoutError(
+                        f"holding report batch timed out; cancellation was requested and workers exited: {batch_id}"
+                    )
                 return state
             time.sleep(0.25)
-        try:
-            self.holding_report_service.cancel(
-                batch_id,
-                **self._runtime_scope(scope),
-            )
-        except Exception:
-            # Timeout remains the primary failure. A failed cancellation is
-            # retried by normal stale-batch recovery on the next service boot.
-            pass
-        raise TimeoutError(
-            f"holding report batch timed out and cancellation was requested: {batch_id}"
-        )
+
+    def _record_batch_execution_progress(
+        self, job_id: str, state: dict[str, Any], *, stopping: bool,
+        cancel_error: str | None = None,
+        observation_error: str | None = None,
+    ) -> None:
+        """Persist a bounded summary, never raw Bundles or graph artifacts."""
+        holdings = [row for row in state.get("holdings") or [] if isinstance(row, dict)]
+        completed = sum(row.get("status") in {"completed", "completed_partial", "failed", "cancelled", "unsupported"}
+                        for row in holdings)
+        running = next((row for row in holdings if row.get("status") == "running"), {})
+        stage_progress = dict(running.get("progress") or state.get("progress") or {})
+        measured = [row["execution_metrics"] for row in holdings
+                    if isinstance(row.get("execution_metrics"), dict) and not row.get("canonical_reused")]
+        stage = "cancelling" if stopping else "holding_analysis" if state.get("status") == "running" else "batch_terminal"
+        action = "正在取消并等待持仓请求退出" if stopping else str(stage_progress.get("current_action") or (
+            f"正在执行持仓 {running.get('symbol')}" if running else f"持仓批次 {state.get('status')}"
+        ))
+        with self.database.session() as session:
+            job = session.get(OrchestrationJob, job_id)
+            if job is None:
+                return
+            progress = dict(job.progress_json or {})
+            progress.update({"current_stage": stage, "current_action": action,
+                             "holding_completed": completed, "holding_total": len(holdings)})
+            if measured:
+                progress["persistence_seconds"] = round(sum(
+                    float(metrics.get("persistence_seconds") or 0) for metrics in measured
+                ), 6)
+            else:
+                progress.pop("persistence_seconds", None)
+            progress["render_status"] = "not_executed_in_job"
+            reused = sum(bool(row.get("canonical_reused")) for row in holdings)
+            progress["cache_hit_count"] = reused
+            if reused:
+                progress["cache_reason"] = next((str(row.get("cache_reason")) for row in holdings
+                                                 if row.get("canonical_reused") and row.get("cache_reason")),
+                                                "canonical_key_match")
+            for key in ("request_phase", "request_timing", "progress_scope", "workflow_phase",
+                        "workflow_completed_stages", "workflow_total_stages"):
+                if key in stage_progress:
+                    progress[key] = stage_progress[key]
+                else:
+                    progress.pop(key, None)
+            if cancel_error:
+                progress["cancellation_error"] = cancel_error
+            else:
+                progress.pop("cancellation_error", None)
+            if observation_error:
+                progress["observation_error"] = observation_error
+            job.progress_json = progress
+            if job.lease_owner == self._worker_id:
+                job.lease_until = datetime.now(UTC) + timedelta(seconds=60)
 
     def _batch_timeout_seconds(
         self,
@@ -1964,7 +2491,7 @@ class ReportOrchestrationService:
                 "assignment_strategy_version_mismatch",
                 "所选策略版本不属于当前 Assignment 的策略",
             )
-        return assignment, version, StrategyDocumentV1.model_validate(version.document_json)
+        return assignment, version, parse_strategy_document(version.document_json)
 
     def _job_scope(self, job_id: str) -> OwnerScope:
         with self.database.session() as session:
@@ -2164,7 +2691,7 @@ class ReportOrchestrationService:
         first_effective = next_weekday(as_of)
         if revision <= 1:
             return first_effective
-        document = StrategyDocumentV1.model_validate(version.document_json)
+        document = parse_strategy_document(version.document_json)
         schedule = {
             **document.schedule_defaults.model_dump(mode="json"),
             **dict(assignment.schedule_json or {}),

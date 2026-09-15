@@ -42,7 +42,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install -r requirements.txt -r requirements-test.txt
       - name: Validate reversible PostgreSQL migration chain
         env:
           COGNITRADE_DATABASE_URL: ${{ env.COGNITRADE_TEST_POSTGRES_URL }}
@@ -72,12 +72,14 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install -r requirements.txt -r requirements-test.txt
       - run: python -m pip install pytest
       - name: Verify generated Finance Artifact inventory is current
         run: python scripts/generate_finance_artifact_contracts.py --check
       - name: Run Point-in-Time market-data and fund-holding contracts
         run: python -m pytest -q tests/market_data
+      - name: Run Codex SDK provider regression
+        run: python -m pytest -q tests/test_codex_provider.py
       - name: Run complete backend suite with native crash diagnostics
         # Several native UZI/provider dependencies keep process-wide state.
         # Isolate every test module while retaining the complete test inventory.
@@ -126,7 +128,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.txt pytest
+      - run: python -m pip install -r requirements.txt -r requirements-test.txt pytest
       - name: Verify vendored scope against the pristine pinned checkout
         env:
           UZI_UPSTREAM_ROOT: ${{ github.workspace }}/upstream-uzi
@@ -163,7 +165,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install -r requirements.txt -r requirements-test.txt
       - name: Probe all 22 UZI dimensions with real configured providers
         run: >-
           python -m research_system.runtime.diagnostics.status.uzi_provider_smoke
