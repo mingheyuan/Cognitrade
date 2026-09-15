@@ -195,7 +195,7 @@ def test_profile_prompt_dedup_retains_exact_text_reference_without_expanding_inp
     assert result["company_profile_proposals"] == []
 
 
-@pytest.mark.parametrize("missing", ["url", "retrieved_at", "finding"])
+@pytest.mark.parametrize("missing", ["url", "finding"])
 def test_shared_document_does_not_remove_factual_evidence_required_fields(frozen, missing):
     class MissingFieldProvider(CapturingProvider):
         def parse(self, **kwargs):
@@ -206,6 +206,31 @@ def test_shared_document_does_not_remove_factual_evidence_required_fields(frozen
     result = request(frozen.inputs, MissingFieldProvider(frozen.document))
     assert result["status"] == "model_failed"
     assert result["failure"]["validation_reasons"][0]["code"] == "qualitative_factual_evidence_incomplete"
+    assert result["proposals"] == []
+
+
+@pytest.mark.parametrize("omitted", [False, True], ids=["null", "omitted"])
+def test_shared_document_optional_retrieval_metadata_never_invents_date(frozen, omitted):
+    # Native Task 2.5 lists URL/finding as factual requirements; retrieved_at
+    # appears in examples only. This path has no archive-binding parse context,
+    # so absent display metadata stays absent rather than using today/as_of.
+    class MissingRetrievalProvider(CapturingProvider):
+        def parse(self, **kwargs):
+            response = super().parse(**kwargs)
+            evidence = response["research"]["dimensions"][0]["evidence"][0]
+            if omitted:
+                evidence.pop("retrieved_at")
+            else:
+                evidence["retrieved_at"] = None
+            return response
+
+    result = request(frozen.inputs, MissingRetrievalProvider(frozen.document))
+    assert result["status"] == "completed", result
+    evidence = result["research"]["dimensions"][0]["evidence"][0]
+    assert evidence["url"] == frozen.document["url"]
+    assert evidence["finding"] == "公司自述所属行业为集成电路设计。"
+    assert evidence["retrieved_at"] is None
+    assert frozen.inputs["7_industry"]["documents"][0]["retrieved_at"] == frozen.document["retrieved_at"]
     assert result["proposals"] == []
 
 
