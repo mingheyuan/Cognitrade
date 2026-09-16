@@ -1,6 +1,6 @@
 # 2026-09-16 UZI 来源与执行修复记录
 
-状态：代码必要回归通过，真实复验待完成。本文不把代码落地当作报告质量或 E2E 已通过。
+状态：本轮最小修复、真实链路尝试和新 PR 已完成，**完整 E2E 未通过**。报告 4/10 交付，1 份持续生成超时、5 份上游过载；回测实际执行、0 成交。来源语义仍有待真实修订复验的缺陷，不能把代码回归通过当作报告质量通过。
 范围见 [执行方案](../plan/uzi-todo-repair-20260916.md)，验收项见 [TODO](TODO.md)。
 
 ## 已实现的最小改动
@@ -70,7 +70,7 @@ API 镜像已重新构建并部署，镜像 config digest 为
 探针证据保存在容器 `workspace/reports/uzi-todo-repair-20260916/sdk-probe.json`。
 这只证明新 SDK 链路可用，不替代完整报告或回测验收。
 
-## 真实采集、冻结输入与报告（报告进行中）
+## 真实采集、冻结输入与报告
 
 - 当日探针 `01M2MJFD95RC97AWV1Q58D7BSZ`：`688012.SH / 2026-09-16`，行情和事件 2/2 成功落库，服务端耗时 93.575 秒。
 - 行情快照 `01M2MJJ8KK76DZKFS7HA73DBJ2`，覆盖 360 个观测日，最后一根真实行情为 `2026-09-16`，hash `da450b4b91e9e6261fecbe95bca23244bc0f45f3859fc303b1528a48a2d0a27e`。
@@ -80,11 +80,11 @@ API 镜像已重新构建并部署，镜像 config digest 为
 - 采集结束且任务表无活跃任务后部署 Snapshot 来源传递修复。报告实际 API 镜像 config digest 为 `ca9d93ad82971483751e8b533b89bf7a3707ee6c8647cd4646b8e7753c85219f`，Web 镜像 ID 为 `d85e8e41da6ed9c21032b573aa30f73f7ce80ccdb860f722a9e4c360bc1661ff`；数据库版本不变。
 - 冻结确认耗时 5.227 秒；持仓未变，基金 Bundle 复用 `01M1NX6SGD66QW8H72HJ1JMHGE`，十只股票固定为本次新候选 Bundle，均已逐一核对 ID/hash。
 - 报告任务 `01M2MKVFYD5BC8GAF7N3C8Z0AR`，批次 `01M2MKVK96SSV8A9ZHETY6H7TM`，Manifest `01M2MKVH2G87NEH76XXY96YEF1`，hash `95bb4a8062068adf00a7912327c3253bf3cd5b715fa3c456cf9458fa2f8f225d`。实际 `gpt-5.6-luna / medium / full`，固定 UZI 提交不变。
-- 实际海光运行的 22 个 Snapshot Artifact 均保留了原始快照 ID/hash。报告输入预检通过，研究原文缺口仍作为明确提示保留，没有重新加成独立启动硬门禁。当前报告正在执行，交付、HTML 和回测结果仍待终态核验。
+- 实际海光运行的 22 个 Snapshot Artifact 均保留了原始快照 ID/hash。报告输入预检通过，研究原文缺口仍作为明确提示保留，没有重新加成独立启动硬门禁。
 
 PR：[#33](https://github.com/mingheyuan/Cognitrade/pull/33)，草稿，不自动合并。
 
-## 运行中的内容审计发现
+## 内容审计发现与补充修复
 
 本次长川 `01M2MKVSEZZ3ZM572E08239WX3` 已通过原生交付门（0 critical、3 warning），
 但人工定向审计不通过：铜价/期货快照已改为独立缺口披露，未继续直接绑定半年报；
@@ -92,8 +92,8 @@ PR：[#33](https://github.com/mingheyuan/Cognitrade/pull/33)，草稿，不自�
 却仍附着公司 PDF。说明原生结构自审通过不等于来源语义正确。
 
 针对该真实样本，补充显式“固定快照显示／本次查询结果”来源冲突检查，并验证旧缓存
-也会重新检查、只重做 B 组（A/C 复用）。84 项必要回归通过。此补充尚未部署到正在
-执行的批次，不将后补代码冒充该报告实际使用的版本。人工审计证据单独保存在
+也会重新检查、只重做 B 组（A/C 复用）。84 项必要回归通过。此补充不在本次完整
+批次使用的镜像中，不将后补代码冒充该报告实际使用的版本。人工审计证据单独保存在
 `workspace/reports/uzi-todo-repair-20260916/e2e/report-content-audit.json`。
 
 海光 `01M2MKVRXWH55B139AZ080MFRN` 同样通过交付门，材料/期货引用已指向公司采购和
@@ -110,6 +110,77 @@ PR：[#33](https://github.com/mingheyuan/Cognitrade/pull/33)，草稿，不自�
 这一解释，也不是鉴权失败；但未证明模型为何持续生成长文。收敛提示未完全解决问题，
 TD-03 保持未完成，不延长超时、不修改原生评分或伪造完整报告。
 
-CI `35072808032`（提交 `9f79418`）四个自动检查全部通过，包括完整后端、原生 UZI、
-前端及 SQLite/PostgreSQL 迁移。该结果早于新增的快照/查询错绑补充检查，后者会另行
-触发 Actions，不把先前 CI 成功归给尚未检验的提交。
+北方华创的事件证据也将公司文件披露与本地有界查询结果混为同一 PDF 来源，新检查能够
+识别该明确冲突。中微定向检查未发现同类模式，仍不等同于全文事实核验。
+
+新镜像下对长川原始 22 个快照做了一次独立研究阶段复验（不是新报告）：A/C 组复用，
+B 组旧错绑缓存被拒绝，重新请求模型时返回 `serverOverloaded`，短退避次数耗尽后停止；
+再次阶段调用正确返回 `stage_budget_already_exhausted`，未额外发起整股重跑。总耗时
+20.433 秒，2/3 组完成，最终 `incomplete`。原快照集合 hash
+`658ce71ac048efb3ccec0454ec7397baf3c55497e3e3bf0de4033e10f095ee1e` 未变。
+因此已证实“旧错绑不能直接复用”，尚未证实“修订报告已正确交付”；TD-02 保留未完成。
+
+## 报告终态与 HTML
+
+本轮报告 08:03:11—08:45:14 UTC，总耗时 **2,522.724 秒（42 分 02.724 秒）**。
+`completed_partial / final_partial`，覆盖率 40%；无人工取消、无仍在运行的股票。
+
+| 股票 | 运行 ID | 本轮终态及直接原因 |
+| --- | --- | --- |
+| 中微公司 688012 | `01M2MKVQ9GS9JCZ42EJBF50AHK` | 原生门允许交付，HTML 已生成 |
+| 北方华创 002371 | `01M2MKVQV6Q2RP3A3H6S1CPBJ0` | 原生门允许交付，HTML 已生成；事件来源错绑待修订复验 |
+| 寒武纪 688256 | `01M2MKVRD4Z8PZR7GFNDBVMV2T` | `narrative_core` 持续输出，600 秒无最终回答 |
+| 海光信息 688041 | `01M2MKVRXWH55B139AZ080MFRN` | 原生门允许交付，HTML 已生成；此前映射状态错绑未再观察到 |
+| 长川科技 300604 | `01M2MKVSEZZ3ZM572E08239WX3` | 原生门允许交付，HTML 已生成；行业/事件来源错绑待修订复验 |
+| 拓荆科技 688072 | `01M2MKVT1T93MN4FHTFQNEXA0T` | 定性研究及正文通过，买入区技术/游资/成长阶段 `serverOverloaded` |
+| 华海清科 688120 | `01M2MKVTHF248CMR31MSHP96Q2` | 买入区价值/游资阶段 `serverOverloaded` |
+| 中科飞测 688361 | `01M2MKVV1CG2CV29R24WWVD8K4` | 正文 125.879 秒完成；买入区成长/技术阶段 `serverOverloaded` |
+| 中芯国际 688981 | `01M2MKVVF4FKW1H99S1KJN9DDP` | `dimensions_16_20` 阶段 `serverOverloaded` |
+| 华峰测控 688200 | `01M2MKVVZ05Y6DHZCC4NYC5PTQ` | 买入区价值/游资阶段 `serverOverloaded` |
+
+拓荆原接口 URL 冲突及中科原正文超时在对应阶段未复现，但二者本轮均**未交付整份报告**。
+验收主因分类是 6 个系统执行失败，不是 6 个新的独立原生内容阻断；缺失 Agent 输出仍会
+在后续原生/完整 SKILL 门体现为 critical/incomplete，两层记录均保留，不相加成 12 份失败。
+
+四份 HTML 已核对标题、历史截止日/实际生成日提示、评级和作战价位的传递。原生渲染
+服务耗时分别约 41–66 毫秒，HTTP 读取约 0.80–1.12 秒；不是本轮性能瓶颈。正文页面未
+逐项铺开研究 evidence，完整引用保留在 HTML 内嵌分析数据中，因此必须结合结构化分析
+审计，不能因为可见正文没有那句话便判定来源错绑消失。本轮未做全页面像素级视觉验收。
+
+已交付报告均为原生 0 critical、3 warning，其中包含原生 `industry_mapping_sanity` /
+`metals_materials` 的 `NoneType` 检查异常和 DCF 为零提示；均需披露，不宣称原生检查器
+完成了所有事实校验，也没有为了通过而修改固定的原生实现。
+
+## 真实报告条件回测
+
+- 行情任务 `01M2MP9GG0CTG77TAKC0G558HJ`：十只股票的 `2_kline / 2026-09-04`，复用已落库数据，10/10 成功，服务端 0.509 秒。没有要求回测行情采齐 22 维。
+- 回测 `01M2MPK1C78C88CP4EWAFXNX3G`：`2026-09-02—2026-09-04`，`report_conditions_v1`，仅本轮报告集 `01M2MKVFZ0PQE46KQ3D2D8BJ5K`，`existing_only`，实际完成账本，服务端 0.202 秒。
+- 回测使用落库行情并固定实际选择清单，hash `5224ec3297412c99ad31af27ceca2713df8baed780b67aa748d84cccefaf87a6`。驱动未强制绑定刚采集任务的精确 Snapshot ID，不应声称两者完全同一集合；以实际回测清单为准。
+- 9 月 2 日：10 只均无已生效计划，不使用同日未来数据。9 月 3、4 日：每天 4 条 `native_verdict_no_new_entry`（原生评级“谨慎”），6 条 `report_plan_not_executable`（报告执行失败）。合计 30 条逐日判断，完整股票池保留。
+- 0 笔交易、0 费用、0 持仓，初始及期末现金/权益均为 100 万。没有改评级、放宽门禁、加 MA 策略或制造交易。
+
+该结果证明条件回放引擎和账本实际运行，**不证明真实成交分支已验证，也不证明十份报告
+全部合格**。已有两份来源审计问题仍成立，本次回放属于诊断结果，不应作为可靠投资业绩。
+总体验收保持 `pipeline=blocked / native_report=partial_delivery / replay=completed_without_trades`。
+
+## 最终部署、CI 与证据
+
+提交 `4988744` 的 [Actions 35074315889](https://github.com/mingheyuan/Cognitrade/actions/runs/35074315889)
+四项自动检查全部通过：完整后端、固定原生 UZI、前端及 SQLite/PostgreSQL。手动真实
+数据源 smoke 按工作流条件跳过，不能算作通过。本地真实验证结果另见上文。
+
+全部业务任务和独立探针退出后再次只读确认无活跃采集/报告/回测任务，才部署补充检查；
+保留原有 paused 任务，未恢复或取消它。最终 API 镜像 ID
+`b79d5410d590e65da047a87550328665c68f51bae0af1cd022ea73882eb239f3`，
+config digest `7f799cbb806bd222acd7b9a0afa0ca6f31c949ce5cc7b1676df283986dcb3393`，
+服务健康，数据库仍为 `20260906_0006`。该部署不会重写本轮旧报告。
+
+可随 PR 检查的脱敏摘要见 [机器可读验收记录](uzi-todo-repair-20260916.json)。完整本地证据
+位于 `workspace/reports/uzi-todo-repair-20260916/`：`e2e/e2e-result.json`、
+`e2e/report_acceptance.json`、`e2e/report-content-audit.json`、
+`e2e/report_html_evidence.json`、`e2e/backtest.json`、`source-repair-probe.json`。
+原始大体积报告/研究数据不提交到仓库。
+
+后续最小范围：服务恢复后只修订长川/北方有问题的研究阶段并核查 HTML；对正文持续生成
+追查有效输出与收敛机制；其余五只过载失败复用合格阶段恢复。保持自动补采关闭，不扩大
+并发/超时，不将这些剩余工作标成已完成。
