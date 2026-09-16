@@ -9,6 +9,7 @@
 - 数据中心和报告共享原文入口检查，导航/列表/API 文档页不会进入必然失败的正文补采。真实文章新 URL 仍走现有补采、归档和新 Manifest 修订。
 - 模型提供 URL 与宿主证据 ID 冲突时，以模型声称的 URL 识别待核实来源，不偷偷改成旧 ID 指向的 PDF。未知新 URL 不自动认可；明确归档的 URL 才绑定归档元数据。
 - 报告输入明确结构化快照 ID/hash、字段路径、采集状态与研究原文的区别。数据中心研究和报告采用同一窄范围来源冲突检查：本地采集状态不能冒充公司文档；已知文档发布日期之前不可能记载其后实际发生的收盘行情。不检查预测/情景，也不增加两个不同 URL 的要求。
+- 真实传递复查发现独立 Snapshot Artifact 原先丢失数据中心 ID/hash；已增加可选字段并传递原值，保留旧工件兼容。采集工件缓存版本升级为 3，避免继续复用旧投影。前端可查看原始快照编号和内容 hash，不与 Artifact ID 混用。
 - 正文阶段强调综合已有研究结论，不重复逐位评委与整份报告；不加硬字数限制、不减少原生问题、不延长 600 秒。
 - SDK 收到 `turn/completed` 即结束消费并关闭订阅，不等待额外 EOF。超时/取消前保存进展快照，结束清理产生的事件不能覆盖原始失败状态。
 - GitHub Actions 的隔离逐模块回归改用 pytest，避免纯函数测试被 unittest discover 当作 0 项成功跳过。
@@ -47,6 +48,8 @@ SDK 官方协议把 `turn/completed` 定义为 completed/interrupted/failed 的�
 - SDK、正文综合、原生输出边界与分析：99 passed，11 subtests passed。
 - 来源类型、数据中心研究与公司共享原文：106 passed。
 - 最后补入数据中心共享校验后的来源传输/元数据回归：46 passed（修正了测试视图预期，未取消正文/hash 校验）。
+- 最终来源/SDK/诊断/补采组合：224 passed，11 subtests passed。
+- Snapshot 实际采集工件、分析入口、历史降级回归：71 passed，27 subtests passed；缓存版本补充复查 25 passed；前端快照审计展示 4 passed。
 - `git diff --check` 与 Finance Artifact 生成契约检查通过。
 
 以上测试集合部分重叠，不相加成独立用例总数。完整回归交 GitHub Actions。
@@ -64,3 +67,13 @@ API 镜像已重新构建并部署，镜像 config digest 为
 
 探针证据保存在容器 `workspace/reports/uzi-todo-repair-20260916/sdk-probe.json`。
 这只证明新 SDK 链路可用，不替代完整报告或回测验收。
+
+## 真实采集与冻结输入检查（进行中）
+
+- 当日探针 `01M2MJFD95RC97AWV1Q58D7BSZ`：`688012.SH / 2026-09-16`，行情和事件 2/2 成功落库，服务端耗时 93.575 秒。
+- 行情快照 `01M2MJJ8KK76DZKFS7HA73DBJ2`，覆盖 360 个观测日，最后一根真实行情为 `2026-09-16`，hash `da450b4b91e9e6261fecbe95bca23244bc0f45f3859fc303b1528a48a2d0a27e`。
+- 历史基金补缺任务 `01M2MJKMVFADAX0PXA1QVYB6SG` 已显式启动，复用父持仓，不默认开启订阅。
+- 中科飞测原运行 `01M2HTG4YW58Q13S2ANJJD65AD` 的 22 个真实冻结快照经新投影离线检查：快照集合 hash `e8ac24272d5fc7aa450faded8ed43c7d656c7cdb88bdb98f1a60434e49fcf778` 未改变，六维来源 ID/hash 完整，业务取数/模型调用均为零。这是传递检查，不是重新生成报告。
+- 为先部署遗漏的来源定位传递修复，暂停了一次本地 `all` 验收驱动；未取消后台业务任务，随后以 `collect` 阶段继续观察同一任务。报告和回测尚未启动，不误记为成功或业务任务取消。
+
+PR：[#33](https://github.com/mingheyuan/Cognitrade/pull/33)，草稿，不自动合并。

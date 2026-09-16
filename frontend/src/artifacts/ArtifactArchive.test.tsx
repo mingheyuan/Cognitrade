@@ -13,6 +13,18 @@ describe('Finance Artifact renderer coverage', () => {
     expect(Object.keys(rendererContract.artifacts)).toEqual([...FINANCE_ARTIFACT_TYPES])
   })
 
+  it('shows the original data-centre identity separately from the artifact identity', () => {
+    render(<ArtifactArchive artifacts={[{
+      artifact_id: 'projection-artifact', artifact_type: 'snapshot', status: 'active',
+      content: { snapshot_type: 'industry', snapshot_id: 'fixed-data-centre-row',
+        content_hash: 'snapshot-source-hash', facts: { industry: '半导体' } },
+    }]} />)
+    expect(screen.getByText('数据中心快照编号')).toBeInTheDocument()
+    expect(screen.getByText('fixed-data-centre-row')).toBeInTheDocument()
+    expect(screen.getByText('内容哈希')).toBeInTheDocument()
+    expect(screen.getByText('snapshot-source-hash')).toBeInTheDocument()
+  })
+
   it('renders all nested business values without exposing sensitive keys or raw JSON', () => {
     render(
       <ArtifactArchive

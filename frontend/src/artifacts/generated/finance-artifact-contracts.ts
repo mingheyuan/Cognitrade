@@ -117,6 +117,8 @@ export const FINANCE_ARTIFACT_SCHEMA_FIELDS = {
     "snapshot_keys",
   ],
   "snapshot": [
+    "snapshot_id",
+    "content_hash",
     "snapshot_type",
     "dimension_id",
     "scope",

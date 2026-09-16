@@ -728,6 +728,10 @@ def _snapshot_artifact_content(snapshot: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "snapshot_type": snapshot_type,
+        # Keep data-centre identity through the independent Artifact hop. The
+        # Artifact's own ID/hash identifies a projection, not the source row.
+        **{key: snapshot[key] for key in ("snapshot_id", "content_hash")
+           if snapshot.get(key)},
         "dimension_id": str(
             snapshot.get("dimension_id") or snapshot.get("dimension") or ""
         )

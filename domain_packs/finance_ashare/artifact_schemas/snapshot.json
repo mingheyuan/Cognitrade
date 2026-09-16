@@ -9,6 +9,14 @@
     "facts"
   ],
   "properties": {
+    "snapshot_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "content_hash": {
+      "type": "string",
+      "minLength": 1
+    },
     "snapshot_type": {
       "type": "string",
       "minLength": 1

@@ -1155,7 +1155,8 @@ def _dimension_context(
             "source_kind": "structured_snapshot",
             "snapshot_id": row.get("snapshot_id"), "content_hash": row.get("content_hash"),
             "dimension": row.get("dimension") or row.get("dimension_id"),
-            "data_path": "facts._uzi_raw_result.data", "snapshot_date": row.get("snapshot_date"),
+            "data_path": "facts._uzi_raw_result.data" if "data" in native else "facts",
+            "snapshot_date": row.get("snapshot_date"),
             "source": native.get("source") or row.get("source"),
             "error": native.get("error"), "_timeout": native.get("_timeout"),
         })
