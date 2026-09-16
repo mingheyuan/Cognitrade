@@ -31,7 +31,7 @@ from pydantic import (
 from domain_packs.finance_ashare.subagents.uzi_agent_roleplay import (
     LATEST_UZI_SOURCE_COMMIT,
 )
-from .uzi_evidence_bindings import bind_citation, citation_validation_context
+from .uzi_evidence_bindings import bind_citation, citation_validation_context, document_attribution_conflicts
 from domain_packs.finance_ashare.subagents.uzi_input_views import (
     DEFAULT_PROMPT_VIEW_MAX_CHARACTERS,
     UziInputBudgetExceeded,
@@ -54,7 +54,7 @@ from domain_packs.finance_ashare.subagents.uzi_stage_progress import (
 )
 
 _LOGGER = logging.getLogger("uvicorn.error")
-_QUALITATIVE_STAGE_CACHE_SCHEMA_VERSION = "uzi-3.9.4-qualitative-stage-v9-bound-citations"
+_QUALITATIVE_STAGE_CACHE_SCHEMA_VERSION = "uzi-3.9.4-qualitative-stage-v10-source-roles"
 
 # Shared by report research and data-center research; this explains provenance
 # without introducing a new validator or a verbatim-quote research contract.
@@ -69,6 +69,12 @@ QUALITATIVE_SOURCE_ATTRIBUTION_RULES = (
     "提供者未知但文档确有支持的事实，仍可使用 source=unknown 并引用该文档的真实绑定 URL 和归档日期。"
     "无 URL 的 unknown 只披露缺口，不能充当有效事实引用或无风险结论。"
     "同一 URL 可以支持不同事实，不得为满足证据数量要求补造关联或重复同一 finding。\n"
+    "SOURCE_ROLES_V1：snapshot_origins 给出结构化事实的原始快照、字段路径和提供者；"
+    "这些行情/接口数值可以用于 conclusion 和 associations，明确写出原始来源，不能挂到公司 PDF 上。"
+    "采集未查询、映射缺失、接口失败属于数据限制，只能作 unknown 披露，不能引用公司公告当作其出处。"
+    "evidence 中带文档 URL 的 finding 必须由该文档支持；晚于原文发布时点的实际收盘行情不能归因于该原文。"
+    "原始 historical_evidence 字段也可能含旧版接口导航，source_discovery 标出的入口不是研究文章；"
+    "不要把它当事实引用或再次提交正文归档。结构化数据本身仍保留，不代表该维度完全无数据。\n"
 )
 
 _DIMENSION_TYPES: dict[str, tuple[str, ...]] = {
@@ -593,6 +599,8 @@ def _group_user_prompt(
             "已核实引用的 evidence.url 必须逐字等于本次证据 allowed_urls 中的一个值（包括本股固定原文的跨维复用），"
             "禁止改造 URL 或把不支持该结论的旧来源替换上去。确需新资料的 URL 仅作为待核实线索，"
             "标明 source=unknown 并解释补证需求；宿主不会将其计入有效证据，而会交给显式数据中心补证。"
+            "qualitative_source_attribution_conflict 表示把本地采集状态或发布日之后的实际行情误归给原文；"
+            "应保留真实数据来源，将采集限制单独披露，并用该原文实际支持的不同事实完成引用，不能更换链接掩盖。"
         )
     return (
         f"负责分组：{group_label}\n"
@@ -1139,7 +1147,21 @@ def _dimension_context(
         if isinstance(row, dict) and str(row.get("snapshot_type") or "") in snapshot_types
     ]
     evidence_records: list[dict[str, str]] = []
+    snapshot_origins = []
+    source_discovery = []
     for row in selected:
+        native = (row.get("facts") or {}).get("_uzi_raw_result") or {}
+        snapshot_origins.append({
+            "source_kind": "structured_snapshot",
+            "snapshot_id": row.get("snapshot_id"), "content_hash": row.get("content_hash"),
+            "dimension": row.get("dimension") or row.get("dimension_id"),
+            "data_path": "facts._uzi_raw_result.data", "snapshot_date": row.get("snapshot_date"),
+            "source": native.get("source") or row.get("source"),
+            "error": native.get("error"), "_timeout": native.get("_timeout"),
+        })
+        # A read-only classification view also covers already frozen legacy
+        # snapshots. Their raw fields, original hashes and manifests stay put.
+        source_discovery.extend(_discovery_records(row))
         # A URL recovered after the cutoff does not prove what its page said
         # then. Historical materialization supplies verified, frozen excerpts.
         # Do not infer historical mode from today's date: the same manifest
@@ -1175,6 +1197,14 @@ def _dimension_context(
         "snapshot_types": sorted(snapshot_types),
         "allowed_urls": allowed_urls,
         "evidence_records": deduped_records,
+        "snapshot_origins": snapshot_origins,
+        "source_discovery": source_discovery,
+        "document_publications": {
+            url: list(dict.fromkeys(str(binding["published_at"]) for record in (stock_documents or [])
+                     if record["url"] == url for binding in record.get("archive_bindings", [])
+                     if binding.get("published_at")))
+            for url in {record["url"] for record in (stock_documents or [])}
+        },
         "snapshots": compact_rows,
         "prompt_view": {
             "version": PROMPT_EVIDENCE_VIEW_VERSION, "truncations": view_truncations,
@@ -1189,7 +1219,7 @@ def _extract_evidence_records(value: Any, *, recursive: bool = True) -> list[dic
     records: list[dict[str, str]] = []
     if isinstance(value, dict):
         url = str(value.get("url") or value.get("pdf") or value.get("link") or "").strip().rstrip(".,;，。；)")
-        if url.startswith(("http://", "https://")):
+        if url.startswith(("http://", "https://")) and not _is_discovery_url(url):
             title = str(value.get("title") or value.get("text") or "").strip()
             finding = str(
                 value.get("finding")
@@ -1216,6 +1246,30 @@ def _extract_evidence_records(value: Any, *, recursive: bool = True) -> list[dic
         for item in value:
             records.extend(_extract_evidence_records(item))
     return records
+
+
+def _is_discovery_url(url: str) -> bool:
+    from research_system.market_data.research_archive import ArchiveEvidenceError, _check_document_url
+    try:
+        _check_document_url(url)
+    except ArchiveEvidenceError:
+        return True
+    return False
+
+
+def _discovery_records(value: Any) -> list[dict[str, str]]:
+    records = []
+    if isinstance(value, dict):
+        url = str(value.get("url") or value.get("link") or "")
+        if url.startswith(("http://", "https://")) and _is_discovery_url(url):
+            records.append({"url": url, "source_kind": "discovery_entry",
+                            "reason": "navigation_not_research_document"})
+        for child in value.values():
+            records.extend(_discovery_records(child))
+    elif isinstance(value, list):
+        for child in value:
+            records.extend(_discovery_records(child))
+    return list({record["url"]: record for record in records}.values())
 
 
 def _compact(value: Any, *, depth: int = 0, path: str = "",
@@ -1255,6 +1309,14 @@ def _validate_group(
             raise UziQualitativeValidationError(
                 field=f"dimensions.{dimension_index}.evidence", code="qualitative_ungrounded_url",
             )
+        publications = evidence_bundle[dimension.dimension_id].get("document_publications", {})
+        for evidence in dimension.evidence:
+            if evidence.url in publications and document_attribution_conflicts(
+                evidence.finding, publications[evidence.url],
+            ):
+                raise UziQualitativeValidationError(
+                    field=f"dimensions.{dimension_index}.evidence", code="qualitative_source_attribution_conflict",
+                )
 
 
 def _input_evidence_gaps(evidence_bundle: dict[str, dict[str, Any]]) -> list[str]:

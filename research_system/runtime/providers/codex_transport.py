@@ -13,6 +13,8 @@ import logging
 import math
 import os
 import tempfile
+from contextlib import aclosing
+from copy import deepcopy
 from importlib.metadata import version
 from pathlib import Path
 from threading import Event
@@ -31,7 +33,7 @@ from .errors import (
     LLMUnavailableError,
 )
 
-TRANSPORT_VERSION = "codex-sdk-frozen-stage-v2-reader"
+TRANSPORT_VERSION = "codex-sdk-frozen-stage-v3-terminal-trace"
 ISOLATION = {
     "model_provider": "openai", "forced_login_method": "chatgpt",
     "web_search": "disabled", "approval_policy": "never", "sandbox_mode": "read-only",
@@ -181,6 +183,21 @@ async def execute(*, model: str, instructions: str, prompt: str,
         now = monotonic()
         metadata["elapsed_seconds"] = round(now - started, 6)
         trace["idle_seconds"] = round(now - (last_event_at or started), 6)
+        trace["output_idle_seconds"] = (round(now - started - trace["last_output_seconds"], 6)
+                                         if "last_output_seconds" in trace else None)
+        trace["generation_state"] = (
+            "final_received" if "final_output_characters" in trace else
+            "output_incomplete" if trace["output_characters"] else "no_output"
+        )
+
+    def capture_stop() -> None:
+        capture_trace()
+        # Interruption can emit more events. Keep the actual failure instant
+        # separate from cleanup, instead of misreading interrupted completion
+        # as proof that the answer had completed before the deadline.
+        trace["stop_snapshot"] = deepcopy({key: value for key, value in trace.items()
+                                           if key not in {"stop_snapshot", "runtime_closed"}})
+        trace["stop_snapshot"]["elapsed_seconds"] = metadata["elapsed_seconds"]
 
     def record_event(method: str, payload: dict) -> None:
         nonlocal last_event_at
@@ -193,6 +210,12 @@ async def execute(*, model: str, instructions: str, prompt: str,
         trace.setdefault("first_event_seconds", trace["last_event_seconds"])
         if method == "item/agentMessage/delta" and isinstance(payload.get("delta"), str):
             trace["output_characters"] += len(payload["delta"])
+            trace["last_output_seconds"] = trace["last_event_seconds"]
+            trace.setdefault("first_output_seconds", trace["last_output_seconds"])
+        if method == "turn/completed":
+            terminal_status = (payload.get("turn") or {}).get("status")
+            trace["terminal_status"] = terminal_status if terminal_status in {"completed", "interrupted", "failed"} else "unknown"
+            trace["terminal_seconds"] = trace["last_event_seconds"]
         if method == "thread/tokenUsage/updated":
             usage = payload.get("tokenUsage") or {}
             trace["token_usage"] = {
@@ -250,29 +273,31 @@ async def execute(*, model: str, instructions: str, prompt: str,
             usage = None
             terminal = None
             item_types: list[str] = []
-            async for event in handle.stream():
-                payload = event.payload.model_dump(mode="json", by_alias=True)
-                record_event(event.method, payload)
-                if event.method == "model/rerouted":
-                    raise CodexTurnError("model_rerouted")
-                if event.method == "item/completed":
-                    item = payload.get("item") or {}
-                    kind = item.get("type")
-                    item_types.append(kind)
-                    if kind == "dynamicToolCall" and bridge is not None:
-                        bridge.verify_completed(item)
-                    elif kind in {"commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall",
-                                "webSearch", "collabAgentToolCall", "imageGeneration"}:
-                        raise CodexTurnError("unexpected_tool_execution")
-                    if kind == "agentMessage" and item.get("phase") != "commentary":
-                        final = item.get("text")
-                        if isinstance(final, str):
-                            trace["final_output_characters"] = len(final)
-                            trace["final_output_sha256"] = hashlib.sha256(final.encode()).hexdigest()
-                elif event.method == "thread/tokenUsage/updated":
-                    usage = payload.get("tokenUsage")
-                elif event.method == "turn/completed":
-                    terminal = payload.get("turn") or {}
+            async with aclosing(handle.stream()) as stream:
+                async for event in stream:
+                    payload = event.payload.model_dump(mode="json", by_alias=True)
+                    record_event(event.method, payload)
+                    if event.method == "model/rerouted":
+                        raise CodexTurnError("model_rerouted")
+                    if event.method == "item/completed":
+                        item = payload.get("item") or {}
+                        kind = item.get("type")
+                        item_types.append(kind)
+                        if kind == "dynamicToolCall" and bridge is not None:
+                            bridge.verify_completed(item)
+                        elif kind in {"commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall",
+                                    "webSearch", "collabAgentToolCall", "imageGeneration"}:
+                            raise CodexTurnError("unexpected_tool_execution")
+                        if kind == "agentMessage" and item.get("phase") != "commentary":
+                            final = item.get("text")
+                            if isinstance(final, str):
+                                trace["final_output_characters"] = len(final)
+                                trace["final_output_sha256"] = hashlib.sha256(final.encode()).hexdigest()
+                    elif event.method == "thread/tokenUsage/updated":
+                        usage = payload.get("tokenUsage")
+                    elif event.method == "turn/completed":
+                        terminal = payload.get("turn") or {}
+                        break
             if terminal is None:
                 raise CodexTurnError("missing_terminal_event")
             if terminal.get("status") == "failed":
@@ -281,7 +306,9 @@ async def execute(*, model: str, instructions: str, prompt: str,
                 raise LLMCancelledError("llm_request_cancelled")
             if terminal.get("status") != "completed" or not isinstance(final, str) or not final.strip():
                 raise CodexTurnError("missing_final_response")
-            metadata.update(status="completed", item_types=item_types, usage=usage)
+            metadata.update(item_types=item_types, usage=usage)
+            if "stop_snapshot" not in trace:
+                metadata["status"] = "completed"
             if frozen_session is not None:
                 metadata["frozen_read_audit"] = frozen_session.audit()
             capture_trace()
@@ -300,7 +327,7 @@ async def execute(*, model: str, instructions: str, prompt: str,
                 "deadline" if isinstance(exc, LLMDeadlineError) else
                 "timed_out" if str(exc) == "llm_request_timeout" else "failed"
             )
-            capture_trace()
+            capture_stop()
             exc.codex_metadata = metadata
             if frozen_session is not None:
                 exc.frozen_read_audit = frozen_session.audit()
@@ -309,15 +336,17 @@ async def execute(*, model: str, instructions: str, prompt: str,
             # Do not propagate RPC messages, stderr or secret-bearing causes.
             error = CodexTurnError(f"codex_{type(exc).__name__}")
             metadata["status"] = "failed"
-            capture_trace()
+            capture_stop()
             error.codex_metadata = metadata
             if frozen_session is not None:
                 error.frozen_read_audit = frozen_session.audit()
             raise error from None
         finally:
             if task is not None and not task.done() and handle is not None:
+                trace["interrupt_requested"] = True
                 try:
                     await asyncio.wait_for(handle.interrupt(), timeout=2)
+                    trace["interrupt_acknowledged"] = True
                     await asyncio.wait({task}, timeout=2)
                 except Exception:  # noqa: BLE001 — close runtime even if interrupt fails
                     logging.getLogger(__name__).warning("Codex interrupt not acknowledged; closing owned runtime")

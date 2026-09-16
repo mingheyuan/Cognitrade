@@ -155,21 +155,23 @@ class AkSharePitContextAdapter:
             "standards": selected,
             "history_count": len(history),
         }
-        evidence = [
+        structured_sources = [
             {
-                "title": "巨潮资讯上市公司行业归属变动",
-                "url": "https://webapi.cninfo.com.cn/#/apiDoc",
-                "date": primary.get("effective_date"),
+                "source_kind": "structured_api",
                 "provider": "cninfo.industry_change",
+                "fields": ["industry", "classification", "classification_version"],
+                "query": {"symbol": self._code(symbol), "end_date": as_of_date.isoformat()},
+                "data_date": primary.get("effective_date"),
             }
         ]
         if current:
-            evidence.append(
+            structured_sources.append(
                 {
-                    "title": "巨潮资讯行业市盈率",
-                    "url": "http://webapi.cninfo.com.cn/#/thematicStatistics",
-                    "date": current.get("data_date"),
+                    "source_kind": "structured_api",
                     "provider": "cninfo.industry_pe",
+                    "fields": ["valuation", "industry_pe"],
+                    "query": {"industry_name": valuation_name, "as_of_date": as_of_date.isoformat()},
+                    "data_date": current.get("data_date"),
                 }
             )
 
@@ -184,7 +186,11 @@ class AkSharePitContextAdapter:
             "industry_pe": current.get("pe_weighted") if current else None,
             "growth": growth,
             "cycle": cycle,
-            "historical_evidence": evidence,
+            # API navigation/documentation is not the original research body.
+            # Keep dated structured provenance in the snapshot, whose existing
+            # ID/hash binds these fields, without manufacturing article URLs.
+            "historical_evidence": [],
+            "structured_sources": structured_sources,
             "availability": "available",
             "data_gap": [
                 name

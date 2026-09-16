@@ -2094,6 +2094,12 @@ def _generate_agent_analysis(
     narrative_system_prompt = (
         f"{base_system_prompt}{native_agent_protocol('narrative')}{research_prompt}"
         f"{full_debate_contract}{rule_comparison_prompt}"
+        "NARRATIVE_SYNTHESIS_SCOPE_V1：这是最终综合摘要，不是重新生成整份报告。"
+        "panel_insights 概括主要共识、分歧及规则分差异，不逐人复制全部评委发言；"
+        "core_conclusion 提炼决定性依据与适用条件；risks 按重要性列出不同风险，不反复改写同一风险。"
+        "多空各轮回应不同争议，证据路径只列直接支持本句的条目，不复制路径目录或上游全文。"
+        "完整逐维研究、六维定性和逐人评审已由其他阶段保留；无需在本片段重复。"
+        "完成当前 JSON 字段后结束输出，不附加 HTML、完整报告或自我重复的补充章节。\n"
         "以下保留 Task3 实际逐人推理及原生 pass/fail 规则说明，供 Task3.3/4 阅读和整体审查。"
         "它们是评审上下文，不是新增市场事实，不作为 evidence_paths 或买区数值依据；"
         "其中指标、门槛和观点要分别理解，不能将观点当作已核验公告。\n"

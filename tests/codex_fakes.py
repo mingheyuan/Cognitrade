@@ -33,6 +33,9 @@ def sdk_factory(state):
                     yield SimpleNamespace(method=method, payload=Payload(payload))
                 while state.get("wait_after_events") and not state.get("closed") and not state.get("interrupted"):
                     await asyncio.sleep(0.005)
+                if state.get("interrupted"):
+                    for method, payload in state.get("interrupt_events", []):
+                        yield SimpleNamespace(method=method, payload=Payload(payload))
             finally:
                 state["stream_exited"] = True
 

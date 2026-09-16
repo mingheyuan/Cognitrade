@@ -2,7 +2,44 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any
+
+
+def document_attribution_conflicts(finding: str, publication_dates: list[str]) -> bool:
+    """Two narrow, provable source-scope errors, not a semantic fact checker.
+
+    A company document cannot attest to this host's collection state or an
+    actual closing quote observed after its publication. Forecasts/conditions
+    remain analysis. Other claims still require the native Agent fact-check.
+    """
+    if re.search(r"(?:本次固定数据|本地采集|采集器|固定数据.{0,30}(?:映射|查询)).{0,80}"
+                 r"(?:未执行|未完成|缺失|超时|失败|未查询)", finding):
+        return True
+    if not publication_dates or not re.search(r"收盘价|结算价|当日成交量|当日持仓量", finding):
+        return False
+    if re.search(r"预测|预期|预计|假设|情景|目标|如果|可能|若", finding):
+        return False
+    # Missing/ambiguous publication metadata is not proof of a contradiction.
+    try:
+        published = max(datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+                        for value in publication_dates)
+    except (TypeError, ValueError):
+        return False
+    # Do not combine a historical quote with an unrelated future event date
+    # elsewhere in the paragraph. Only a date attached to a quote is checked.
+    for clause in re.split(r"[。；;\n]", finding):
+        dates = re.findall(
+            r"(20\d{2}-\d{2}-\d{2})[^，,。；;\n]{0,48}"
+            r"(?:收盘价|结算价|当日成交量|当日持仓量)", clause,
+        )
+        for value in dates:
+            try:
+                if datetime.fromisoformat(value).date() > published:
+                    return True
+            except ValueError:
+                continue
+    return False
 
 
 def citation_validation_context(evidence_bundle: dict, stock_documents=()) -> dict:
@@ -27,7 +64,14 @@ def bind_citation(value: Any, context: Any) -> Any:
     evidence_id, url = value.get("evidence_id"), value.get("url")
     if evidence_id:
         candidates = [row for row in bindings if row["evidence_id"] == evidence_id]
-        if not candidates:
+        if url and any(row["url"] != url for row in candidates):
+            # The native URL is the model's claimed source. A host-only ID
+            # cannot silently replace a new/other source with a nearby PDF.
+            candidates = [row for row in bindings if row["url"] == url]
+            evidence_id = None
+            if not candidates:
+                return {**value, "evidence_id": None}
+        elif not candidates:
             # evidence_id is a host-only hint, not a native required field.
             # A mistyped hint must not reject an otherwise unique frozen URL.
             # Still never accept an unknown URL or pick a different version.
@@ -53,8 +97,8 @@ def bind_citation(value: Any, context: Any) -> Any:
     binding = candidates[0]
     observed = binding["observed_at"]
     # Once the document/version is unambiguous, model-copied metadata has no
-    # authority. Join it from the archive instead of spending a model repair
-    # on URL/date transcription. Never change finding or the frozen record.
+    # authority. Join missing URL/date from the archive. Conflicting nonempty
+    # URLs were handled above; never rewrite a claimed source or its finding.
     result = {**value, "evidence_id": binding["evidence_id"] if len(candidates) == 1 else None,
               "url": binding["url"], "retrieved_at": observed}
     if isinstance(context.get("citation_binding_audit"), list):

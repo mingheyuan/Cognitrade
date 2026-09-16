@@ -540,7 +540,14 @@ def _research_citation_view(context, profile_scope):
     records.extend({"scope": "company_profile", **document}
                    for document in (profile_scope or {}).get("documents", []))
     urls = list(dict.fromkeys(row["url"] for row in records))
-    view = {dimension: {**row, "allowed_urls": list(urls)} for dimension, row in context.items()}
+    publications = {
+        url: list(dict.fromkeys(str(row["published_at"]) for row in records
+                               if row["url"] == url and row.get("published_at")))
+        for url in urls
+    }
+    view = {dimension: {**row, "allowed_urls": list(urls),
+                        "document_publications": publications}
+            for dimension, row in context.items()}
     # A small non-content receipt supports later comparison without retaining
     # model answers, raw URLs, body text or arbitrary model field values.
     identities = [{key: row.get(key) for key in (

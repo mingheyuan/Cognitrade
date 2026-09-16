@@ -96,11 +96,8 @@ def test_binding_cannot_guess_or_mix_versions(case, code):
     assert context == before
 
 
-@pytest.mark.parametrize("field,value", [
-    ("url", "https://unrelated.example/document"),
-    ("retrieved_at", "2099-01-01"),
-])
-def test_unique_document_id_joins_metadata_instead_of_rejecting_transcription(field, value):
+def test_unique_document_id_joins_observation_metadata():
+    field, value = "retrieved_at", "2099-01-01"
     rows, doc, _, context = inputs()
     original = deepcopy(rows)
     context["citation_binding_audit"] = []
@@ -113,6 +110,24 @@ def test_unique_document_id_joins_metadata_instead_of_rejecting_transcription(fi
     audit = context["citation_binding_audit"][0]
     assert audit["corrected_fields"] == [field]
     assert value not in json.dumps(audit)
+
+
+def test_optional_id_cannot_replace_a_new_source_url_with_an_old_pdf():
+    rows, doc, _, context = inputs()
+    before = deepcopy(rows)
+    url = "https://www.pbc.gov.cn/release/new.html"
+    supplied = {**citation(doc), "url": url}
+    result = q.QualitativeEvidence.model_validate(supplied, context=context)
+    assert result.url == url and result.evidence_id is None
+    assert result.finding == supplied["finding"] and result.retrieved_at is None
+    assert rows == before
+
+
+def test_native_url_selects_its_own_document_not_a_conflicting_optional_id():
+    _, doc, _, context = inputs()
+    other = next(row for row in context["frozen_citation_bindings"] if row["url"] != doc["url"])
+    result = q.QualitativeEvidence.model_validate({**citation(doc), "url": other["url"]}, context=context)
+    assert result.url == other["url"] and result.evidence_id == other["evidence_id"]
 
 
 def test_wrong_optional_id_does_not_block_a_unique_frozen_native_url():

@@ -73,6 +73,27 @@ def test_unsafe_source_is_never_a_fetch_request(url):
         ResearchDocumentRequest(dimension="3_macro", url=url)
 
 
+@pytest.mark.parametrize("url", [
+    "https://webapi.cninfo.com.cn/#/apiDoc",
+    "http://webapi.cninfo.com.cn/#/thematicStatistics",
+    "https://webapi.cninfo.com.cn/",
+    "https://www.cninfo.com.cn/search/",
+])
+def test_navigation_is_not_an_original_document_retry(url):
+    with pytest.raises(ValueError):
+        ResearchDocumentRequest(dimension="7_industry", url=url)
+    payload = group_payload("B · Industry-Events")
+    payload["dimensions"][0]["evidence"][0]["url"] = url
+    group = q.QualitativeGroupResult.model_validate(payload)
+    assert pending_source_requests(group, evidence_bundle()) == []
+    content = {"results": [{"qualitative_execution": {"pending_evidence": [
+        {"dimension": "7_industry", "url": url},
+    ]}}]}
+    plan = report_repair_plan(content, symbol="688072", as_of=AS_OF, today=date(2026, 9, 16))
+    assert plan["pending_evidence"] == []
+    assert plan["collection_request"] is None
+
+
 def test_explicit_archive_only_fetches_requested_documents_and_keeps_pit_checks(tmp_path):
     archive = collector(tmp_path, page(modified="2026-08-19", document_id="new"))
     archive._official_candidates = Mock(return_value=[ArchiveCandidate("https://www.pbc.gov.cn/unrelated.html")])

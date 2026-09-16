@@ -4,7 +4,7 @@ from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from research_system.market_data.research_archive import RESEARCH_SOURCES, _check_url
+from research_system.market_data.research_archive import RESEARCH_SOURCES, _check_document_url, _check_url
 
 
 class ResearchDocumentRequest(BaseModel):
@@ -30,6 +30,9 @@ class ResearchDocumentRequest(BaseModel):
         if any(any(part in key.lower() for part in sensitive) for key, _ in parse_qsl(parsed.query)):
             raise ValueError("credential-bearing research URL")
         _check_url(self.url, self.dimension)
+        # Reject before removing fragments: #/apiDoc and similar navigation
+        # routes must not turn into a seemingly new, repeatedly retried root.
+        _check_document_url(self.url)
         # Fragments are client-side anchors, not different fetched documents.
         self.url = urlunsplit(parsed._replace(fragment=""))
         return self

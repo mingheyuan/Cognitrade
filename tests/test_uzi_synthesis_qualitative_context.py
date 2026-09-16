@@ -103,6 +103,8 @@ def test_actual_synthesis_and_explanations_consume_same_research_without_new_gat
     result = execute(provider, [output])
     main = next(row for row in provider.requests if row["schema"] is host.AgentNarrativeCorePayload)
     received = context(main)
+    assert "NARRATIVE_SYNTHESIS_SCOPE_V1" in main["system_prompt"]
+    assert "不逐人复制全部评委发言" in main["system_prompt"]
     assert received["qualitative_deep_dive"] == output["qualitative_deep_dive"]
     assert received["execution"]["status"] == status
     for row in provider.requests:

@@ -57,6 +57,7 @@ _QUALITATIVE_GROUP_VALIDATION_FIELDS = {
     "qualitative_dimension_membership_mismatch": frozenset({"dimensions"}),
     "qualitative_repeated_finding": frozenset({"dimensions.0.evidence", "dimensions.1.evidence"}),
     "qualitative_ungrounded_url": frozenset({"dimensions.0.evidence", "dimensions.1.evidence"}),
+    "qualitative_source_attribution_conflict": frozenset({"dimensions.0.evidence", "dimensions.1.evidence"}),
 }
 
 

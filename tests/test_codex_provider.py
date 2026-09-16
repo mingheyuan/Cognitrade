@@ -166,6 +166,35 @@ def test_timeout_preserves_safe_trace_and_closed_runtime(sdk, with_events):
     assert sdk["closed"] and sdk["stream_exited"]
 
 
+def test_terminal_event_finishes_without_waiting_for_stream_eof(sdk):
+    sdk["wait_after_events"] = True
+    p = provider()
+    assert p.parse(system_prompt="s", user_prompt="u", schema=Value, timeout_seconds=0.2).value == 1
+    assert p.last_call_metadata["request_trace"]["terminal_status"] == "completed"
+    assert not sdk.get("interrupted") and sdk["closed"] and sdk["stream_exited"]
+
+
+@pytest.mark.parametrize("late_status", ["interrupted", "completed"])
+def test_late_completion_during_interrupt_cannot_erase_timeout_evidence(sdk, late_status):
+    sdk["events"] = [("item/agentMessage/delta", {"delta": "unfinished private text"})]
+    sdk["wait_after_events"] = True
+    sdk["interrupt_events"] = [
+        ("item/completed", {"item": {"type": "agentMessage", "text": '{"value": 1}'}}),
+        ("turn/completed", {"turn": {"status": late_status}}),
+    ]
+    p = provider()
+    with pytest.raises(LLMProviderError):
+        p.parse(system_prompt="s", user_prompt="u", schema=Value, timeout_seconds=0.05)
+    metadata = p.last_call_metadata
+    trace, stopped = metadata["request_trace"], metadata["request_trace"]["stop_snapshot"]
+    assert metadata["status"] == "timed_out"
+    assert stopped["generation_state"] == "output_incomplete"
+    assert stopped["last_event"] == "item/agentMessage/delta" and "terminal_status" not in stopped
+    assert trace["terminal_status"] == late_status
+    assert trace["runtime_closed"] and trace["interrupt_acknowledged"]
+    assert "unfinished private text" not in json.dumps(metadata)
+
+
 @pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan")])
 def test_invalid_deadlines_are_rejected_before_runtime(sdk, timeout):
     with pytest.raises(ValueError):
