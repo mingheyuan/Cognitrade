@@ -500,6 +500,11 @@ class LiveAcceptance:
                 if self.state["pipeline"] == "running"
                 else self.state["pipeline"]
             )
+        except KeyboardInterrupt:
+            # Stopping this observer neither cancels nor completes the server
+            # job. Keep its ID for resume and label only this local attempt.
+            attempt["status"] = "observer_interrupted"
+            raise
         except Exception as exc:
             error = {
                 "stage": stage,

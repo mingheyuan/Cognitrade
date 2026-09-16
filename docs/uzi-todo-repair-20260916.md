@@ -51,6 +51,8 @@ SDK 官方协议把 `turn/completed` 定义为 completed/interrupted/failed 的�
 - 最终来源/SDK/诊断/补采组合：224 passed，11 subtests passed。
 - Snapshot 实际采集工件、分析入口、历史降级回归：71 passed，27 subtests passed；缓存版本补充复查 25 passed；前端快照审计展示 4 passed。
 - `git diff --check` 与 Finance Artifact 生成契约检查通过。
+- Actions 首轮完整发现了 4 个失败断言。定向复现确认：同输入缓存用例未固定原生随机评委话术；Agent 恢复用例受 `CI=true` 的原生 CLI 降级规则影响；异步回测用例用多线程共享单一内存 SQLite 连接，高频轮询还触发原生进程崩溃。分别固定测试话术、显式选择 Agent 测试环境、改用与部署相同的文件 SQLite 独立连接；未放宽断言或修改业务门禁。`CI=true` 下 68 passed、4 subtests passed，完整 CI 再交 Actions。
+- 本地 E2E 观察脚本中断现在记录 `observer_interrupted`，不会误记为后台业务取消或已完成；保存原任务 ID 继续观察。
 
 以上测试集合部分重叠，不相加成独立用例总数。完整回归交 GitHub Actions。
 未新增数据库迁移；部署前只读检查数据库版本为 `20260906_0006`，任务表无活跃采集、
@@ -68,12 +70,16 @@ API 镜像已重新构建并部署，镜像 config digest 为
 探针证据保存在容器 `workspace/reports/uzi-todo-repair-20260916/sdk-probe.json`。
 这只证明新 SDK 链路可用，不替代完整报告或回测验收。
 
-## 真实采集与冻结输入检查（进行中）
+## 真实采集、冻结输入与报告（报告进行中）
 
 - 当日探针 `01M2MJFD95RC97AWV1Q58D7BSZ`：`688012.SH / 2026-09-16`，行情和事件 2/2 成功落库，服务端耗时 93.575 秒。
 - 行情快照 `01M2MJJ8KK76DZKFS7HA73DBJ2`，覆盖 360 个观测日，最后一根真实行情为 `2026-09-16`，hash `da450b4b91e9e6261fecbe95bca23244bc0f45f3859fc303b1528a48a2d0a27e`。
-- 历史基金补缺任务 `01M2MJKMVFADAX0PXA1QVYB6SG` 已显式启动，复用父持仓，不默认开启订阅。
+- 历史基金补缺任务 `01M2MJKMVFADAX0PXA1QVYB6SG` 已完成，服务端耗时 1,211.874 秒（约 20 分 12 秒）。复用父持仓，追加一次 11 槽定向补采后仍为严格可用 161/220、缺口 59（可重试 11、不可恢复 48）；`partial / ready_degraded`。没有为了通过而将缺口改成合格。
 - 中科飞测原运行 `01M2HTG4YW58Q13S2ANJJD65AD` 的 22 个真实冻结快照经新投影离线检查：快照集合 hash `e8ac24272d5fc7aa450faded8ed43c7d656c7cdb88bdb98f1a60434e49fcf778` 未改变，六维来源 ID/hash 完整，业务取数/模型调用均为零。这是传递检查，不是重新生成报告。
-- 为先部署遗漏的来源定位传递修复，暂停了一次本地 `all` 验收驱动；未取消后台业务任务，随后以 `collect` 阶段继续观察同一任务。报告和回测尚未启动，不误记为成功或业务任务取消。
+- 为先部署遗漏的来源定位传递修复，暂停了一次本地 `all` 验收驱动；未取消后台业务任务，随后以 `collect` 阶段继续观察同一任务。
+- 采集结束且任务表无活跃任务后部署 Snapshot 来源传递修复。报告实际 API 镜像 config digest 为 `ca9d93ad82971483751e8b533b89bf7a3707ee6c8647cd4646b8e7753c85219f`，Web 镜像 ID 为 `d85e8e41da6ed9c21032b573aa30f73f7ce80ccdb860f722a9e4c360bc1661ff`；数据库版本不变。
+- 冻结确认耗时 5.227 秒；持仓未变，基金 Bundle 复用 `01M1NX6SGD66QW8H72HJ1JMHGE`，十只股票固定为本次新候选 Bundle，均已逐一核对 ID/hash。
+- 报告任务 `01M2MKVFYD5BC8GAF7N3C8Z0AR`，批次 `01M2MKVK96SSV8A9ZHETY6H7TM`，Manifest `01M2MKVH2G87NEH76XXY96YEF1`，hash `95bb4a8062068adf00a7912327c3253bf3cd5b715fa3c456cf9458fa2f8f225d`。实际 `gpt-5.6-luna / medium / full`，固定 UZI 提交不变。
+- 实际海光运行的 22 个 Snapshot Artifact 均保留了原始快照 ID/hash。报告输入预检通过，研究原文缺口仍作为明确提示保留，没有重新加成独立启动硬门禁。当前报告正在执行，交付、HTML 和回测结果仍待终态核验。
 
 PR：[#33](https://github.com/mingheyuan/Cognitrade/pull/33)，草稿，不自动合并。
