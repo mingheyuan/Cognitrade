@@ -46,6 +46,8 @@ def test_legacy_navigation_is_classified_without_rewriting_frozen_facts():
 @pytest.mark.parametrize("finding", [
     "2026-09-02 铜 CU0 收盘价 108040，60 日趋势 3.77%。",
     "固定数据未完成行业—原材料—合约映射，未执行价格查询。",
+    "固定行业快照将长川科技归类为半导体设备；截至2026-09-02，行业净利润同比增长4.69%。",
+    "截至2026-09-02、回溯180天的有界公告查询结果为零条事件记录；仅说明指定来源未返回事件。",
 ])
 def test_known_misattributions_fail_the_actual_group_check(finding):
     rows = fixed_rows(historical=True)
@@ -71,6 +73,8 @@ def test_known_misattributions_fail_the_actual_group_check(finding):
     "以固定行情来源计算成本传导，具体幅度未知。",
     "2026-08-01 铜 CU0 收盘价 108040。2026-09-02 公司将召开股东大会。",
     "铜 CU0 收盘价 108040，公司将于 2026-09-02 召开股东大会。",
+    "公司公告披露数据快照备份项目已投产，并为客户提供公告查询服务。",
+    "公司年报记载行业调查结果，按年度统计下游客户需求。",
 ])
 def test_scope_check_is_not_a_generic_semantic_or_forecast_gate(finding):
     assert not document_attribution_conflicts(finding, ["2026-08-14T00:00:00Z"])
@@ -89,3 +93,26 @@ def test_same_original_supports_two_distinct_facts_without_new_source_quota():
 def test_unknown_publication_is_not_inferred_from_a_url_or_observation():
     assert not document_attribution_conflicts("2026-09-02 铜 CU0 收盘价 108040。", [])
     assert not document_attribution_conflicts("2026-09-02 铜 CU0 收盘价 108040。", ["unknown"])
+
+
+def test_old_misattributed_cache_repairs_only_the_affected_group(tmp_path, monkeypatch):
+    rows = fixed_rows(historical=True)
+    attach_shared_document(rows)
+    urls = {dim: SHARED_URL for dim in q._DIMENSION_TYPES}
+    first = CapturingProvider(urls=urls, workspace_root=tmp_path)
+    assert q.apply_qualitative_deep_dive({}, snapshot_rows=rows, llm_provider=first)["qualitative_agent_execution"]["status"] == "completed"
+    load = q._load_qualitative_stage_cache
+
+    def old_cache(path):
+        cached = load(path)
+        if cached is not None and cached.group_label.startswith("B"):
+            cached.dimensions[0].evidence[0].finding = "固定行业快照显示行业估值中位数PE为50.84。"
+        return cached
+
+    second = CapturingProvider(urls=urls, workspace_root=tmp_path)
+    with monkeypatch.context() as scoped:
+        scoped.setattr(q, "_load_qualitative_stage_cache", old_cache)
+        result = q.apply_qualitative_deep_dive({}, snapshot_rows=rows, llm_provider=second)
+    assert result["qualitative_agent_execution"]["status"] == "completed"
+    assert len(second.calls) == 1
+    assert second.calls[0]["group"].startswith("B")

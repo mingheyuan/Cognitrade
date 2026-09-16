@@ -599,7 +599,7 @@ def _group_user_prompt(
             "已核实引用的 evidence.url 必须逐字等于本次证据 allowed_urls 中的一个值（包括本股固定原文的跨维复用），"
             "禁止改造 URL 或把不支持该结论的旧来源替换上去。确需新资料的 URL 仅作为待核实线索，"
             "标明 source=unknown 并解释补证需求；宿主不会将其计入有效证据，而会交给显式数据中心补证。"
-            "qualitative_source_attribution_conflict 表示把本地采集状态或发布日之后的实际行情误归给原文；"
+            "qualitative_source_attribution_conflict 表示把结构化快照/本地查询结果、采集状态或发布日之后的实际行情误归给原文；"
             "应保留真实数据来源，将采集限制单独披露，并用该原文实际支持的不同事实完成引用，不能更换链接掩盖。"
         )
     return (

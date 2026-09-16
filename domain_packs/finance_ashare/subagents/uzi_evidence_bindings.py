@@ -16,6 +16,16 @@ def document_attribution_conflicts(finding: str, publication_dates: list[str]) -
     if re.search(r"(?:本次固定数据|本地采集|采集器|固定数据.{0,30}(?:映射|查询)).{0,80}"
                  r"(?:未执行|未完成|缺失|超时|失败|未查询)", finding):
         return True
+    # A claim explicitly attributed to a host snapshot/query is not a finding
+    # from the attached company document, even if the numeric value is valid.
+    # Do not reject ordinary document statements about market data or queries.
+    if re.search(r"(?:本次|本轮|本地|固定|冻结)(?:的)?"
+                 r"(?:市场|行情|期货|行业|宏观|政策|事件|数据)?快照"
+                 r"(?:显示|记录|返回|提示|将|为|中)", finding):
+        return True
+    if re.search(r"(?:本次|本轮|本地|有界)[^，,。；;\n]{0,20}"
+                 r"(?:采集|查询)(?:结果|返回|未执行|未完成)", finding):
+        return True
     if not publication_dates or not re.search(r"收盘价|结算价|当日成交量|当日持仓量", finding):
         return False
     if re.search(r"预测|预期|预计|假设|情景|目标|如果|可能|若", finding):
