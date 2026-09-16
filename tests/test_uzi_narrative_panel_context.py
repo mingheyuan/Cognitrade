@@ -112,3 +112,25 @@ def test_panel_revision_invalidates_narrative_only(tmp_path):
         provider = DebateProvider(tmp_path)
         execute(provider, changed_prepared, changed_merged)
         assert [row["schema"] for row in provider.requests] == [host.AgentNarrativeCorePayload]
+
+
+def test_native_task4_writing_revision_invalidates_only_narrative_cache(tmp_path, monkeypatch):
+    prepared, merged, _ = prepared_input()
+    current_protocol = host.native_agent_protocol
+
+    def previous_protocol(stage):
+        prompt = current_protocol(stage)
+        if stage == "narrative":
+            return prompt.split("NATIVE_TASK4_WRITING_GUIDANCE", 1)[0].rstrip() + "\n"
+        return prompt
+
+    with monkeypatch.context() as context:
+        context.setattr(host, "native_agent_protocol", previous_protocol)
+        execute(DebateProvider(tmp_path), prepared, merged)
+    revised = DebateProvider(tmp_path)
+    execute(revised, prepared, merged)
+    assert [row["schema"] for row in revised.requests] == [host.AgentNarrativeCorePayload]
+    assert "NATIVE_TASK4_WRITING_GUIDANCE" in revised.requests[0]["system_prompt"]
+    repeated = DebateProvider(tmp_path)
+    execute(repeated, prepared, merged)
+    assert repeated.requests == []

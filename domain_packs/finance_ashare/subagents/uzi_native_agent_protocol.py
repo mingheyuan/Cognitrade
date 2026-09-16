@@ -34,6 +34,25 @@ def native_factcheck_protocol() -> str:
     return skill[offset:skill.index(end, offset)].strip()
 
 
+def _native_narrative_writing_protocol() -> str:
+    """Keep Task4's authoring guidance separate from native delivery gates.
+
+    The older reference differs from SKILL.md on character selection, risk
+    count and output file. Import only its writing guidance, not another
+    synthesis workflow or stricter Python/schema acceptance rules.
+    """
+    reference = (_SKILL.parent / "references/task4-synthesis.md").read_text(encoding="utf-8")
+    start = reference.index("**辩论的语言规则**")
+    end = reference.index("## Step 4.3 风险清单", start)
+    return (
+        "NATIVE_TASK4_WRITING_GUIDANCE：以下摘自固定原生 references/task4-synthesis.md。"
+        "用于本轮写作和自查，不新增宿主 schema/交付硬门禁；证据路径不属于正文篇幅。"
+        "选角、三条核心结论、Top 3 催化剂/风险及 agent_analysis.json 写回仍以 SKILL.md 为准；"
+        "不按旧参考重算评级、不直接改写 synthesis.json。\n"
+        + reference[start:end].strip()
+    )
+
+
 @lru_cache(maxsize=5)
 def native_agent_protocol(stage: Literal["dimensions", "narrative", "buy_zone", "roleplay", "warning_review"]) -> str:
     skill = _SKILL.read_text(encoding="utf-8")
@@ -44,6 +63,8 @@ def native_agent_protocol(stage: Literal["dimensions", "narrative", "buy_zone", 
         sections.append(skill[offset:skill.index(end, offset)].strip())
     if stage == "roleplay":
         sections.append((_SKILL.parent / "references/task3-agent-evaluation.md").read_text(encoding="utf-8"))
+    elif stage == "narrative":
+        sections.append(_native_narrative_writing_protocol())
     return (
         "以下为固定 UZI 3.9.4 SKILL 的原文职责，不是另一套公式或新交付门。"
         "本阶段仅完成当前 JSON 契约对应部分；其他部分由对应阶段完成。"

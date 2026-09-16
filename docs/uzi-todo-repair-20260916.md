@@ -184,3 +184,27 @@ config digest `7f799cbb806bd222acd7b9a0afa0ca6f31c949ce5cc7b1676df283986dcb3393`
 后续最小范围：服务恢复后只修订长川/北方有问题的研究阶段并核查 HTML；对正文持续生成
 追查有效输出与收敛机制；其余五只过载失败复用合格阶段恢复。保持自动补采关闭，不扩大
 并发/超时，不将这些剩余工作标成已完成。
+
+## 后续：正文写作要求对齐原生
+
+对照固定提交的 `SKILL.md`、`references/task4-synthesis.md`、`run_real_test.stage2()`
+和 `agent_analysis_validator.py` 后确认：原生由宿主 Agent 读取已有 JSON 产物，完成
+Task 4 并写回 `agent_analysis.json`，再由脚本合并/校验/渲染；没有对应本项目的
+`narrative_core` 600 秒 SDK 请求，也没有专门保证正文超时自动续写成功的机制。
+SKILL 中的采集器 90 秒和 stage1 resume 不能当作正文生成的恢复协议。
+
+本地遗漏的是 Task 4 参考文档的辩论语言与金句写作说明。已将该段固定原文接入实际
+正文请求，包括每段 ≤80 字、冲突性表达及金句篇幅；不复制旧参考中的不同选角、
+前五风险或直接写 `synthesis.json` 的旧流程。这些仍以主 SKILL 的选角、Top 3 风险、
+`agent_analysis.json` 写回为准。
+
+需要区分：原生 Python 校验器本身只要求至少三轮，没有把 80 字设为代码硬门禁。
+因此此次仅补写作/自查指导，不新增 maxLength/maxItems 拒绝规则、不裁剪输出，
+不新增模型阶段，也不改模型、推理强度、预算或冻结证据。提示版本改变只使正文缓存
+失效，其他合格阶段继续复用。
+
+此修改晚于上文真实 E2E，没有改变其记录，也尚未真实验证能否消除寒武纪超时。
+“原生写作要求已补齐”不等于“执行方式完全等同宿主 Agent”或“原生不会超时”。
+必要回归：`test_uzi_native_agent_protocol`、`test_uzi_narrative_panel_context`、
+`test_uzi_synthesis_qualitative_context` 共 18 passed，覆盖实际请求、原生职责保留、
+不新增长度硬门禁和仅正文缓存失效。此后续补丁尚未重建部署，完整回归交 CI。
