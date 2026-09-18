@@ -74,6 +74,12 @@ def test_frozen_response_production_synthesis_matches_unmodified_native(database
     assert actual == expected
     assert actual_panel == expected_panel
     assert frozen == before
+    preview = analysis._native_narrative_outcome(
+        raw, prepared["dimensions"], prepared["panel"], profile="lite",
+        school=None, auxiliary_input=frozen,
+    )
+    assert preview["synthesis"] == {key: expected[key] for key in preview["synthesis"]}
+    assert frozen == before
 
 
 def test_missing_optional_auxiliary_reaches_model_and_discloses_unknown(database):

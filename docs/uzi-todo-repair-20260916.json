@@ -1,0 +1,109 @@
+{
+  "schema_version": "uzi-todo-repair-summary-v1",
+  "evidence_mode": "live_with_separate_manual_content_audit",
+  "date": "2026-09-16",
+  "pull_request": "https://github.com/mingheyuan/Cognitrade/pull/33",
+  "code_commit": "498874493a99b8a8f55f2936850a61e5833aa3b2",
+  "uzi_commit": "b3665e85b8666477038e11157d8e8feb0e006b76",
+  "model": "gpt-5.6-luna",
+  "research_profile": "medium",
+  "workflow_mode": "full",
+  "fund_code": "020464",
+  "report_date": "2026-09-02",
+  "pipeline": "blocked",
+  "native_report": "partial_delivery",
+  "content_quality": "issues_found",
+  "replay": "completed_without_trades",
+  "trading_execution_demonstrated": false,
+  "today_probe": {
+    "job_id": "01M2MJFD95RC97AWV1Q58D7BSZ", "symbol": "688012.SH", "as_of_date": "2026-09-16",
+    "dimensions": ["2_kline", "15_events"], "status": "succeeded", "server_elapsed_seconds": 93.575
+  },
+  "historical_collection": {
+    "job_id": "01M2MJKMVFADAX0PXA1QVYB6SG", "status": "partial", "freeze_status": "ready_degraded",
+    "strict_ready_slots": 161, "total_slots": 220, "missing_slots": 59, "retryable_slots": 11, "unrecoverable_slots": 48,
+    "explicit_additional_retry_waves": 1, "server_execution_seconds_including_retry": 1211.874
+  },
+  "frozen_input": {
+    "fund_bundle_id": "01M1NX6SGD66QW8H72HJ1JMHGE", "holding_bundle_count": 10,
+    "manifest_id": "01M2MKVH2G87NEH76XXY96YEF1",
+    "manifest_hash": "95bb4a8062068adf00a7912327c3253bf3cd5b715fa3c456cf9458fa2f8f225d",
+    "freeze_seconds": 5.227, "old_manifest_rewritten": false
+  },
+  "report": {
+    "job_id": "01M2MKVFYD5BC8GAF7N3C8Z0AR", "batch_id": "01M2MKVK96SSV8A9ZHETY6H7TM", "report_set_id": "01M2MKVFZ0PQE46KQ3D2D8BJ5K",
+    "status": "completed_partial", "elapsed_seconds": 2522.724,
+    "api_image_config_digest": "ca9d93ad82971483751e8b533b89bf7a3707ee6c8647cd4646b8e7753c85219f",
+    "supplemental_snapshot_query_guard_in_full_batch": false,
+    "counts": {"delivered": 4, "system_failed": 6, "input_blocked": 0, "native_blocked_primary_cause": 0, "cancelled": 0, "unfinished": 0},
+    "holdings": [
+      {"symbol": "688012", "run_id": "01M2MKVQ9GS9JCZ42EJBF50AHK", "status": "delivered", "content_audit": "targeted_pattern_not_observed_not_full_fact_check"},
+      {"symbol": "002371", "run_id": "01M2MKVQV6Q2RP3A3H6S1CPBJ0", "status": "delivered", "content_audit": "bounded_query_claim_bound_to_company_pdf"},
+      {"symbol": "688256", "run_id": "01M2MKVRD4Z8PZR7GFNDBVMV2T", "status": "system_failed", "cause": "llm_transport_timeout", "stage": "narrative_core"},
+      {"symbol": "688041", "run_id": "01M2MKVRXWH55B139AZ080MFRN", "status": "delivered", "content_audit": "previous_mapping_state_misattribution_not_observed_not_full_fact_check"},
+      {"symbol": "300604", "run_id": "01M2MKVSEZZ3ZM572E08239WX3", "status": "delivered", "content_audit": "industry_snapshot_and_bounded_query_claims_bound_to_company_pdfs"},
+      {"symbol": "688072", "run_id": "01M2MKVT1T93MN4FHTFQNEXA0T", "status": "system_failed", "cause": "serverOverloaded", "stages": ["buy_zone_technical", "buy_zone_youzi", "buy_zone_growth"]},
+      {"symbol": "688120", "run_id": "01M2MKVTHF248CMR31MSHP96Q2", "status": "system_failed", "cause": "serverOverloaded", "stages": ["buy_zone_value", "buy_zone_youzi"]},
+      {"symbol": "688361", "run_id": "01M2MKVV1CG2CV29R24WWVD8K4", "status": "system_failed", "cause": "serverOverloaded", "stages": ["buy_zone_growth", "buy_zone_technical"], "narrative_seconds": 125.879},
+      {"symbol": "688981", "run_id": "01M2MKVVF4FKW1H99S1KJN9DDP", "status": "system_failed", "cause": "serverOverloaded", "stages": ["dimensions_16_20"]},
+      {"symbol": "688200", "run_id": "01M2MKVVZ05Y6DHZCC4NYC5PTQ", "status": "system_failed", "cause": "serverOverloaded", "stages": ["buy_zone_value", "buy_zone_youzi"]}
+    ]
+  },
+  "timeout_diagnostic": {
+    "run_id": "01M2MKVRD4Z8PZR7GFNDBVMV2T", "stage": "narrative_core",
+    "queue_seconds": 8.388, "request_seconds": 600.076, "input_chars": 148988, "output_chars_at_stop": 33756,
+    "generation_state_at_stop": "output_incomplete", "last_output_seconds": 600.040979,
+    "interrupt_acknowledged": true, "terminal_status": "interrupted", "runtime_closed": true, "long_generation_root_cause_resolved": false
+  },
+  "html": {
+    "rendered_count": 4, "title_dates_rating_and_battle_prices_checked": true, "pixel_visual_review_completed": false, "full_fact_check_completed": false,
+    "hashes_by_symbol": {
+      "688012": "47e861726abd19028a7e07c560971207bfa9a4b15bbec9ae1e40cfbca602562c",
+      "002371": "a8a4e733c7580b907dde3fd32e2f83007c6b281b4479471e797f1c58662a8ade",
+      "688041": "b4589a80b50d487760c7ac910023311dd9a72a445c9c687793e96b59cf206530",
+      "300604": "ea5e6ccb0bb009e9170f308b1c4ccb742d1a205b41e48f6b99e25c436c65f281"
+    }
+  },
+  "source_repair_probe": {
+    "scope": "research_stage_only_not_a_report", "source_run_id": "01M2MKVSEZZ3ZM572E08239WX3",
+    "source_snapshots_hash": "658ce71ac048efb3ccec0454ec7397baf3c55497e3e3bf0de4033e10f095ee1e", "source_unchanged": true,
+    "status": "incomplete", "completed_groups": 2, "total_groups": 3, "failed_group": "B · Industry-Events", "cause": "serverOverloaded",
+    "elapsed_seconds": 20.433, "second_stage_call": "stage_budget_already_exhausted", "new_report_created": false, "corrected_report_verified": false
+  },
+  "backtest": {
+    "market_collection_job_id": "01M2MP9GG0CTG77TAKC0G558HJ", "market_collection_status": "succeeded", "market_collection_server_execution_seconds": 0.509,
+    "id": "01M2MPK1C78C88CP4EWAFXNX3G", "status": "completed", "engine_executed": true, "completed_ledger": true,
+    "start_date": "2026-09-02", "end_date": "2026-09-04", "execution_model": "report_conditions_v1", "report_policy": "existing_only", "server_elapsed_seconds": 0.202,
+    "market_input_selection": "existing_data_center_at_execution", "exact_collection_snapshot_ids_enforced": false,
+    "market_data_manifest_hash": "5224ec3297412c99ad31af27ceca2713df8baed780b67aa748d84cccefaf87a6",
+    "plan_count": 10, "executable_plan_count": 4, "blocked_plan_count": 6,
+    "decisions_by_date": {
+      "2026-09-02": {"no_effective_report_plan": 10},
+      "2026-09-03": {"native_verdict_no_new_entry": 4, "report_plan_not_executable": 6},
+      "2026-09-04": {"native_verdict_no_new_entry": 4, "report_plan_not_executable": 6}
+    },
+    "trade_count": 0, "initial_cash": 1000000.0, "final_equity": 1000000.0, "total_fees": 0.0, "diagnostic_only_not_validated_investment_performance": true
+  },
+  "ci": {
+    "commit": "498874493a99b8a8f55f2936850a61e5833aa3b2", "run_id": 35074315889, "status": "success",
+    "passed": ["Complete backend suite", "Pinned UZI suite against vendored implementation", "Frontend lint, tests, and build", "Strategy SQLite/PostgreSQL contracts and migrations"],
+    "skipped": ["Manual UZI real-provider smoke"]
+  },
+  "final_deployment": {
+    "api_image_id": "b79d5410d590e65da047a87550328665c68f51bae0af1cd022ea73882eb239f3",
+    "api_image_config_digest": "7f799cbb806bd222acd7b9a0afa0ca6f31c949ce5cc7b1676df283986dcb3393",
+    "validator_file_sha256": "71a532b316c43cbeb202b67cdc977602dc3b3bb3d0a4b39a52df24321ca15296",
+    "alembic_version": "20260906_0006", "api_container_healthy": true, "web_openapi_http_status": 200,
+    "active_business_jobs_before_restart": 0, "existing_paused_job_preserved": true
+  },
+  "remaining_limitations": [
+    "Corrected longchuan/beifang research and report revision still require successful live verification",
+    "One narrative still produced output until the unchanged 600-second deadline",
+    "Five report attempts and the scoped source repair probe returned serverOverloaded",
+    "59 historical data gaps remain explicitly disclosed",
+    "Native warning check exceptions and incomplete DCF remain disclosed",
+    "Full factual and pixel-level HTML review not completed",
+    "Real fill branch not exercised; replay is a completed zero-trade diagnostic ledger"
+  ],
+  "local_evidence_directory": "workspace/reports/uzi-todo-repair-20260916"
+}

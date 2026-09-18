@@ -21,6 +21,8 @@ const FIELD_LABELS: Record<string, string> = {
   source_refs: '证据来源',
   snapshot_keys: '快照索引',
   snapshot_type: '快照类型',
+  snapshot_id: '数据中心快照编号',
+  content_hash: '内容哈希',
   scope: '适用范围',
   symbol: '证券代码',
   name: '名称',

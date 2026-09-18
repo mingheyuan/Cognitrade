@@ -11,7 +11,7 @@ from copy import deepcopy
 
 BONUS_PROJECTION_VERSION = "uzi-dim-result-v5"
 SKILL_BONUS_PROJECTION_VERSION = "uzi-dim-result-v6"
-SKILL_BONUS_PROJECTION_VERSIONS = frozenset({SKILL_BONUS_PROJECTION_VERSION, "uzi-dim-result-v7", "uzi-dim-result-v8"})
+SKILL_BONUS_PROJECTION_VERSIONS = frozenset({SKILL_BONUS_PROJECTION_VERSION, "uzi-dim-result-v7", "uzi-dim-result-v8", "uzi-dim-result-v9", "uzi-dim-result-v10"})
 BONUS_OWNERS = {"fund_managers": "fund_holders", "similar_stocks": "similar_stocks"}
 
 

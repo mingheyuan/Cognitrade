@@ -94,6 +94,24 @@ def runner():
     return run
 
 
+def test_stopping_local_observer_is_not_business_cancellation():
+    run = runner()
+    run.state["stages"] = {"collect": {"id": "live-collection"}}
+
+    def stop():
+        raise KeyboardInterrupt
+
+    run.collect = stop
+    with pytest.raises(KeyboardInterrupt):
+        run.execute_stage("collect")
+    attempt = run.state["stage_attempts"]["collect"][0]
+    assert attempt["status"] == "observer_interrupted"
+    assert attempt["completed_at"]
+    assert run.state["pipeline"] == "running"
+    assert run.state["stages"]["collect"]["id"] == "live-collection"
+    assert "last_error" not in run.state
+
+
 @pytest.mark.parametrize("status", ["failed", "cancelled"])
 def test_uncompleted_backtest_is_not_zero_trade_acceptance(status):
     run = runner()

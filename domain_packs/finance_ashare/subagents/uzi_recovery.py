@@ -134,6 +134,8 @@ def native_recovery(content: dict[str, Any], *, run_status: str = "") -> dict[st
         kind, action = "provider_unavailable", "inspect_provider"
     elif "pipeline_failure" in failure_kinds:
         kind, action = "pipeline_failure", "inspect"
+    elif "llm_output_repetition" in failure_kinds:
+        kind, action = "output_invalid", "repair_stage"
     elif content.get("report_allowed") is True and not issues:
         kind, action = "complete", "none"
     elif no_progress:

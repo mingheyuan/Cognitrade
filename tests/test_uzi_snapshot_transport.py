@@ -60,6 +60,10 @@ def test_frozen_references_survive_collect_artifact_and_actual_agent_input():
     assert len(rows) == 2
     assert len(symbols) == 1
     assert all(research_ref(1) in row["source_refs"] for row in rows)
+    originals = {row["snapshot_type"]: row for row in original["items"][0]["snapshots"]}
+    for row in rows:
+        for key in ("snapshot_id", "content_hash"):
+            assert row[key] == originals[row["snapshot_type"]][key]
     assert manifest == original
     context.call_tool.assert_not_called()
 
@@ -68,12 +72,16 @@ def test_frozen_references_survive_collect_artifact_and_actual_agent_input():
 def test_archived_documents_reach_qualitative_prompt(snapshot_type, dimension):
     snapshot = {
         "snapshot_type": snapshot_type, "symbol": "688041.SH", "facts": {},
+        "snapshot_id": "fixed-source-row", "content_hash": "a" * 64,
         "query_manifest": {"pit_mode": "historical_reconstruction"},
         "source_refs": [research_ref(1), research_ref(2)],
     }
     original = deepcopy(snapshot)
     content = runtime._snapshot_artifact_content(snapshot)
     actual = _dimension_context([content], dimension)
+    assert actual["snapshot_origins"][0]["snapshot_id"] == "fixed-source-row"
+    assert actual["snapshot_origins"][0]["content_hash"] == "a" * 64
+    assert actual["snapshot_origins"][0]["data_path"] == "facts"
     assert actual["allowed_urls"] == [ref["url"] for ref in original["source_refs"]]
     assert [ref["finding"] for ref in actual["evidence_records"]] == [ref["content"] for ref in original["source_refs"]]
     assert [ref["content_hash"] for ref in actual["evidence_records"]] == [ref["content_hash"] for ref in original["source_refs"]]
@@ -155,7 +163,7 @@ def test_collector_capability_version_invalidates_old_artifact_cache():
 
     manifest = yaml.safe_load((Path(runtime.__file__).parents[1] / "domain.yaml").read_text())
     capability = next(row for row in manifest["capabilities"] if row["capability"] == "finance.ashare.snapshot.collect")
-    assert capability["capability_version"] == "2"
+    assert capability["capability_version"] == "3"
     runner = object.__new__(ExecutionGraphRunner)
     snapshot = SimpleNamespace(graph=SimpleNamespace(domain_id="finance_ashare", metadata={}))
     node = ExecutionNode(
@@ -163,7 +171,7 @@ def test_collector_capability_version_invalidates_old_artifact_cache():
         capability=capability["capability"], cache_scope="run",
         metadata={"capability_version": capability["capability_version"], "policy_version": capability["policy_version"]},
     )
-    old = node.model_copy(update={"metadata": {"capability_version": "1"}})
+    old = node.model_copy(update={"metadata": {"capability_version": "2", "policy_version": "frozen-evidence-transport-v2"}})
     assert runner._cache_context(snapshot, node, []) != runner._cache_context(snapshot, old, [])
 
 

@@ -100,6 +100,23 @@ def request(inputs, provider):
     return result
 
 
+def test_same_source_role_guard_applies_to_dc_and_report(frozen):
+    class MisattributingProvider(CapturingProvider):
+        def parse(self, **kwargs):
+            result = super().parse(**kwargs)
+            result["research"]["dimensions"][0]["evidence"][0]["finding"] = (
+                "本次固定数据未完成行业—原材料—合约映射，未执行价格查询。"
+            )
+            return result
+
+    result = request(frozen.inputs, MisattributingProvider(frozen.document))
+    assert result["status"] == "model_failed"
+    assert result["failure"]["validation_reasons"] == [
+        {"field": "dimensions.0.evidence", "code": "qualitative_source_attribution_conflict"},
+    ]
+    assert result["proposals"] == []
+
+
 def assert_ungrounded(result):
     assert result["status"] == "model_failed", result
     assert result["failure"]["validation_reasons"] == [

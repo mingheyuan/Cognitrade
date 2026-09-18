@@ -59,7 +59,7 @@
             "required": ["stage", "kind", "error_type"],
             "properties": {
               "stage": {"type": "string"},
-              "kind": {"enum": ["agent_content_invalid", "source_gap", "pipeline_failure", "llm_cancelled", "llm_stage_deadline", "llm_queue_timeout", "llm_transport_timeout", "llm_provider_unavailable"]},
+              "kind": {"enum": ["agent_content_invalid", "source_gap", "pipeline_failure", "llm_cancelled", "llm_stage_deadline", "llm_queue_timeout", "llm_transport_timeout", "llm_provider_unavailable", "llm_output_repetition"]},
               "error_type": {"type": "string"},
               "provider_status_code": {"type": "integer", "minimum": 100, "maximum": 599},
               "provider_error_code": {"type": "string"},
@@ -76,7 +76,7 @@
                   "required": ["field", "code"],
                   "properties": {
                     "field": {"type": "string"},
-                    "code": {"enum": ["qualitative_evidence_url_invalid", "qualitative_unknown_gap_not_disclosed", "qualitative_factual_evidence_incomplete", "qualitative_dimension_membership_mismatch", "qualitative_repeated_finding", "qualitative_citations_incomplete", "qualitative_ungrounded_url", "qualitative_archive_binding_unknown", "qualitative_archive_binding_conflict", "qualitative_archive_binding_ambiguous", "qualitative_archive_binding_date_missing", "roleplay_override_reason_missing", "roleplay_rationale_grounding_missing"]},
+                    "code": {"enum": ["qualitative_evidence_url_invalid", "qualitative_unknown_gap_not_disclosed", "qualitative_factual_evidence_incomplete", "qualitative_dimension_membership_mismatch", "qualitative_repeated_finding", "qualitative_citations_incomplete", "qualitative_ungrounded_url", "qualitative_source_attribution_conflict", "qualitative_archive_binding_unknown", "qualitative_archive_binding_conflict", "qualitative_archive_binding_ambiguous", "qualitative_archive_binding_date_missing", "roleplay_override_reason_missing", "roleplay_rationale_grounding_missing"]},
                     "missing_fields": {
                       "type": "array",
                       "minItems": 1,

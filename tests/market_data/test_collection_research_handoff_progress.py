@@ -30,6 +30,7 @@ def test_source_settlement_is_durable_before_entering_research(symbols, monkeypa
             row = session.get(MarketDataCollectionJob, job_id)
             durable = dict(row.progress_json)
             finished = list(row.checkpoint_json.get("finished_task_ids") or [])
+            assert row.checkpoint_json["provider_progress"] == durable["provider"]
         observed.append((view, durable, finished))
         return {}
 
@@ -48,7 +49,7 @@ def test_source_settlement_is_durable_before_entering_research(symbols, monkeypa
         assert durable["by_status"] == dict(actual)
         assert set(finished) == {task["id"] for task in view["tasks"]}
         assert view["progress"] == durable
-        assert durable["provider"]["phase"] == "persisting"
+        assert durable["provider"]["phase"] == "settled"
     finally:
         coordinator.close()
         database.close()

@@ -688,7 +688,7 @@ def raw_quant_inputs(
         if snapshot is not None
         else []
     )
-    if (projection_version or PROJECTION_VERSION) in {"uzi-dim-result-v5", "uzi-dim-result-v6", "uzi-dim-result-v7", "uzi-dim-result-v8"}:
+    if (projection_version or PROJECTION_VERSION) in {"uzi-dim-result-v5", "uzi-dim-result-v6", "uzi-dim-result-v7", "uzi-dim-result-v8", "uzi-dim-result-v9", "uzi-dim-result-v10"}:
         from domain_packs.finance_ashare.subagents.uzi_bonus_inputs import (
             select_bonus_inputs,
         )

@@ -37,6 +37,11 @@ from domain_packs.finance_ashare.subagents.uzi_agent_roleplay import (
 from domain_packs.finance_ashare.subagents.uzi_input_views import (
     without_native_demo_holdings,
 )
+from domain_packs.finance_ashare.subagents.uzi_prompt_transport import (
+    PROMPT_TRANSPORT_INSTRUCTIONS,
+    evidence_paths_prompt_json,
+    evidence_prompt_json,
+)
 from domain_packs.finance_ashare.subagents.uzi_llm_support import (
     EXHAUSTED_MODEL_FAILURES,
     UziStageFailures,
@@ -46,6 +51,7 @@ from domain_packs.finance_ashare.subagents.uzi_llm_support import (
     model_failure_record,
     parse_uzi_structured,
     resolve_uzi_llm_request_timeout,
+    resolve_uzi_llm_queue_timeout,
     submit_uzi_stage,
     with_uzi_request_control,
 )
@@ -246,7 +252,7 @@ class GroundedText(BaseModel):
     evidence_paths: list[str] = Field(
         min_length=1,
         max_length=8,
-        description="Exact full paths copied from ALLOWED_LEAF_EVIDENCE_PATHS.",
+        description="Exact full paths from ALLOWED_LEAF_EVIDENCE_PATHS; expand prefix groups when present.",
     )
 
 
@@ -257,7 +263,7 @@ class GroundedRound(BaseModel):
     evidence_paths: list[str] = Field(
         min_length=1,
         max_length=6,
-        description="Exact full paths copied from ALLOWED_LEAF_EVIDENCE_PATHS.",
+        description="Exact full paths from ALLOWED_LEAF_EVIDENCE_PATHS; expand prefix groups when present.",
     )
 
 
@@ -380,6 +386,18 @@ class AgentDimensionPayload(BaseModel):
         if len(gap_ids) != len(set(gap_ids)):
             raise ValueError("data_gaps contains duplicate dimension_id values")
         return self
+
+
+def _dimension_batch_json_schema(dimension_ids: list[str]) -> dict[str, Any]:
+    """Move the existing exact-batch rule into decoding, not a prose quota."""
+    if not dimension_ids or len(set(dimension_ids)) != len(dimension_ids):
+        raise ValueError("dimension batch must be non-empty and unique")
+    schema = AgentDimensionPayload.model_json_schema()
+    schema["properties"]["dimensions"].update(minItems=len(dimension_ids), maxItems=len(dimension_ids))
+    schema["properties"]["data_gaps"]["maxItems"] = len(dimension_ids)
+    for name in ("AgentDimensionCommentary", "AgentDataGapAcknowledgement"):
+        schema["$defs"][name]["properties"]["dimension_id"]["enum"] = list(dimension_ids)
+    return schema
 
 
 class AgentNarrativeCorePayload(BaseModel):
@@ -797,6 +815,48 @@ def _synthesize_native(
         if auxiliary_diagnostics is not None:
             auxiliary_diagnostics.update(diagnostics)
     return result_panel, synthesis
+
+
+def _native_narrative_outcome(
+    raw: dict[str, Any], dimensions: dict[str, Any], panel: dict[str, Any],
+    *, profile: str, school: str | None,
+    auxiliary_input: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Show Task4 the same native outcome that Stage2 will render.
+
+    The pinned six-field roleplay merge intentionally leaves panel aggregates
+    untouched. Native synthesis then applies style weights and selects debate
+    speakers (including its zero-score exclusion). Narration must distinguish
+    those results from the stale skeleton summaries, without host re-scoring
+    or replacing the upstream choice of speakers. No default script prose is
+    exposed as an Agent conclusion or a new market fact.
+    """
+    merged, synthesis = _synthesize_native(
+        deepcopy(raw), deepcopy(dimensions), panel, agent_analysis=None,
+        profile=profile, school=school, auxiliary_input=auxiliary_input,
+    )
+    members = {row["investor_id"]: row for row in merged.get("investors", [])}
+    speakers = {}
+    for side in ("bull", "bear"):
+        identity = synthesis["debate"][side]
+        member = members[identity["investor_id"]]
+        speakers[side] = {
+            **identity,
+            **{key: deepcopy(member[key]) for key in ("score", "signal", "headline", "reasoning") if key in member},
+        }
+    return {
+        "version": "native-narrative-outcome-v1",
+        "source_commit": UZI_SOURCE_COMMIT,
+        "synthesis": {key: deepcopy(synthesis[key]) for key in (
+            "overall_score", "verdict_label", "verdict_detail", "fundamental_score",
+            "panel_consensus", "detected_style", "style_diagnostics",
+        )},
+        "debate_participants": speakers,
+        "merged_signal_counts_all_seats": dict(Counter(
+            row.get("signal") for row in merged.get("investors", [])
+        )),
+        "seat_count": len(members),
+    }
 
 
 def replay_native_alignment(
@@ -1419,6 +1479,7 @@ def _execute_symbol(
                         full_agent_workflow=full_agent_workflow,
                         qualitative_research=qualitative,
                         rule_panel=rule_panel,
+                        auxiliary_input=auxiliary_input,
                     )
                     if narrative is not None:
                         reusable_agent_analysis = deepcopy(narrative)
@@ -1762,6 +1823,7 @@ def _generate_agent_analysis(
     full_agent_workflow: bool = False,
     qualitative_research: dict[str, Any] | None = None,
     rule_panel: dict[str, Any] | None = None,
+    auxiliary_input: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if llm_provider is None or not bool(getattr(llm_provider, "available", True)):
         return None
@@ -1819,6 +1881,7 @@ def _generate_agent_analysis(
         "__uzi_prompt_omitted__ 仅表示未放入本次上下文，不表示原始数据缺失，禁止引用该标记。"
         "text_prefix 是有出处的节选，不代表已经阅读全文；不得从省略段推导事实或完整序列统计。"
         f"HOST_PROMPT_VIEW={_compact_json({'version': PROMPT_EVIDENCE_VIEW_VERSION, 'truncations': view_truncations})}\n"
+        f"{PROMPT_TRANSPORT_INSTRUCTIONS}"
     )
     if school:
         base_system_prompt += (
@@ -1887,13 +1950,15 @@ def _generate_agent_analysis(
             "raw.dimensions.0_basic.data.current_price。存在数据时引用精确 evidence_paths；不存在时明确说明缺口并"
             "引用对应 recovery/data_gap 路径。"
             f"{_qualitative_research_prompt(_qualitative_research_context(qualitative_research, dimension_keys=dimension_batch))}"
-            f"FROZEN_STAGE_EVIDENCE={_compact_json(dimension_evidence)}\n"
-            f"ALLOWED_LEAF_EVIDENCE_PATHS={_compact_json(sorted(dimension_allowed_paths))}"
+            f"FROZEN_STAGE_EVIDENCE={evidence_prompt_json(dimension_evidence)}\n"
+            f"ALLOWED_LEAF_EVIDENCE_PATHS={evidence_paths_prompt_json(dimension_allowed_paths)}"
         )
         dimension_prompt = (
             "生成当前档位 agent_analysis 的逐维评论部分。这是机械拆分后的一个批次，不能省略或增加维度。"
             "dimensions 中的 dimension_id 必须且只能是："
             f"{','.join(dimension_batch)}；每个维度恰好一条、commentary.text 至少 20 字，并引用真实叶子路径。"
+            "按原生 Task2 每维写 1—2 句定性评语，覆盖关键判断及限制；不复制原始数据、"
+            "字段目录或整份研究报告。每条只引用直接支持它的证据，完成本批 JSON 后结束输出。"
             "data_gaps 只记录本批次内已经穷尽的真实恢复尝试，不能把缺口写成已解决。"
             f"上一轮本阶段机械自审 critical 与 suggested_fix={stage_feedback_json}。"
             "必须逐条修复；不得通过改写措辞隐藏问题。"
@@ -1931,6 +1996,7 @@ def _generate_agent_analysis(
                     system_prompt=dimension_system_prompt,
                     user_prompt=f"{stage_retry_feedback}{dimension_prompt}",
                     schema=AgentDimensionPayload,
+                    json_schema_override=_dimension_batch_json_schema(dimension_batch),
                     temperature=0.1,
                     reasoning_effort=_PROFILE_REASONING_EFFORT[profile],
                     progress_callback=progress_callback,
@@ -2061,7 +2127,10 @@ def _generate_agent_analysis(
         "dimension_commentary_drafts": dimension_commentary_drafts,
         "cited_real_evidence_values_by_original_path": cited_real_values,
         "dimension_scores": frozen["dimension_scores"],
-        "panel": frozen["panel"],
+        # Native roleplay does not refresh skeleton aggregates. Keep the
+        # immutable full panel in the artifact, but do not advertise its old
+        # consensus/distribution as the current Task4 result or a repair target.
+        "panel": {member_key: frozen["panel"][member_key]},
         "recovery_tasks": frozen["recovery_tasks"],
         # Native Task1.5/4 reviews models, catalyst calendar and IC risks.
         # Do not let an earlier commentary's citation choices hide this input.
@@ -2069,7 +2138,7 @@ def _generate_agent_analysis(
     }
     narrative_allowed_paths = set(cited_dimension_paths)
     narrative_allowed_paths.update(_leaf_paths({"dimension_scores": frozen["dimension_scores"]}))
-    narrative_allowed_paths.update(_leaf_paths({"panel": frozen["panel"]}))
+    narrative_allowed_paths.update(_leaf_paths({"panel": narrative_evidence["panel"]}))
     narrative_allowed_paths.update(_leaf_paths({"recovery_tasks": frozen["recovery_tasks"]}))
     narrative_allowed_paths.update(_leaf_paths({"raw": narrative_evidence["raw"]}))
     if not narrative_allowed_paths.issubset(allowed_paths):
@@ -2091,20 +2160,53 @@ def _generate_agent_analysis(
             "这是规则与研究判断的比较，不是新增市场事实，也不是买区数值依据。\n"
             f"RULE_PANEL_COMPARISON_CONTEXT={_compact_json({'rule_scores_by_investor_id': rule_scores})}\n"
         )
+    native_outcome = _native_narrative_outcome(
+        raw, dimensions, panel, profile=profile, school=school,
+        auxiliary_input=auxiliary_input,
+    )
+    # Derived execution evidence, not a new market observation. It is produced
+    # by the same pinned synthesis and saved verbatim with the grounding audit.
+    # Only narrative can cite it; numeric_paths and all price-stage scopes stay
+    # unchanged, so a consensus/score cannot become a buy-price basis.
+    outcome_paths = set(_leaf_paths({"native_synthesis_outcome": native_outcome}))
+    narrative_evidence["native_synthesis_outcome"] = native_outcome
+    narrative_allowed_paths.update(outcome_paths)
     narrative_system_prompt = (
         f"{base_system_prompt}{native_agent_protocol('narrative')}{research_prompt}"
         f"{full_debate_contract}{rule_comparison_prompt}"
+        "以下是同一固定原生 generate_synthesis 对当前已合并逐人判断的实际计算结果，"
+        "不是新的评分公式、Agent 结论或市场事实。原始 panel 的汇总字段是原生保留的骨架统计，"
+        "不保证随逐人覆盖刷新，不能把它们称为最终共识或当前投票分布。"
+        "本阶段 panel 仅提供当前逐人判断；旧骨架汇总仍保留在原始工件中，不是本阶段引用候选。"
+        "最终评级和共识如需提及，使用此处 synthesis；统计要标明口径，"
+        "merged_signal_counts_all_seats 包含全部席位，不等于某个原生加权分母。"
+        "三轮 bull_say_rounds/bear_say_rounds 分别由 debate_participants 中的 bull/bear 发言，"
+        "与原生最终展示选角保持一致；不得另选角色，也不能交换多空两侧。"
+        "称其为‘原生选定的多方/空方代表’，不能把原生候选中的最高/最低分说成所有席位的最高/最低分。"
+        "原生通常先排除 skip 和非正分再选角，无正分候选时会回退；若给出的原生代表为零分，"
+        "如实使用该回退结果，不得依据通常的排除规则拒绝或替换它。"
+        "原生选角与 SKILL 的概括有差异时如实说明，不改写数值或替换原生计算。"
+        "叙述最终共识、评级、席位统计或辩论选角时，引用 native_synthesis_outcome 的对应叶子路径；"
+        "这是原生计算结果的溯源，不是新增公告或行情事实，也不能作为买区数值依据。"
+        "不得把面板骨架分布、某派分布或原生加权统计混称为全体当前投票。\n"
+        f"NATIVE_SYNTHESIS_OUTCOME_CONTEXT={_compact_json(native_outcome)}\n"
+        "NARRATIVE_SYNTHESIS_SCOPE_V1：这是最终综合摘要，不是重新生成整份报告。"
+        "panel_insights 概括主要共识、分歧及规则分差异，不逐人复制全部评委发言；"
+        "core_conclusion 提炼决定性依据与适用条件；risks 按重要性列出不同风险，不反复改写同一风险。"
+        "多空各轮回应不同争议，证据路径只列直接支持本句的条目，不复制路径目录或上游全文。"
+        "完整逐维研究、六维定性和逐人评审已由其他阶段保留；无需在本片段重复。"
+        "完成当前 JSON 字段后结束输出，不附加 HTML、完整报告或自我重复的补充章节。\n"
         "以下保留 Task3 实际逐人推理及原生 pass/fail 规则说明，供 Task3.3/4 阅读和整体审查。"
         "它们是评审上下文，不是新增市场事实，不作为 evidence_paths 或买区数值依据；"
         "其中指标、门槛和观点要分别理解，不能将观点当作已核验公告。\n"
         f"EXECUTED_PANEL_METHODOLOGY_CONTEXT={_compact_json(panel_methodology)}\n"
-        f"FROZEN_STAGE_EVIDENCE={_compact_json(narrative_evidence)}\n"
+        f"FROZEN_STAGE_EVIDENCE={evidence_prompt_json(narrative_evidence)}\n"
         "cited_real_evidence_values_by_original_path 的键就是原始 ArtifactBoard 叶子路径；"
         "dimension_commentary_drafts 只是已完成机械校验的中间分析，不是可引用路径。"
         "raw 中另提供本阶段所需的 DCF假设及结果、Comps、LBO、催化剂日历和IC风险章节；"
         "这些脚本模型的假设、预计日期和推导不是新增实测事实或已核验公告。"
         "DCF图表序列和其他研究产物未在此重复提供，不代表冻结原件缺失。"
-        f"ALLOWED_LEAF_EVIDENCE_PATHS={_compact_json(sorted(narrative_allowed_paths))}"
+        f"ALLOWED_LEAF_EVIDENCE_PATHS={evidence_paths_prompt_json(narrative_allowed_paths)}"
     )
     narrative_core_prompt = (
         "生成当前档位 agent_analysis 的评委洞察、核心结论和风险部分，不生成买入区间。"
@@ -2123,6 +2225,14 @@ def _generate_agent_analysis(
     ) if not _review_feedback_for_agent_stage(review_feedback, stage="narrative") else None
     narrative_retry_feedback = ""
     seen_narrative_failure_signatures: set[tuple[str, ...]] = set()
+    # Unlike parallel dimension/buy-zone workers, this serial loop has no
+    # submit_uzi_stage dispatch origin. Bind its budget once so a grounding
+    # repair cannot renew the stage's queue + request deadline on every parse.
+    narrative_provider = with_uzi_request_control(
+        llm_provider,
+        deadline_at=monotonic() + resolve_uzi_llm_queue_timeout(llm_provider)
+        + resolve_uzi_llm_request_timeout(llm_provider, research_profile=profile, uzi_stage="narrative_core"),
+    )
     while True:
         narrative_core_result = _load_agent_stage_cache(
             narrative_cache_path,
@@ -2141,7 +2251,7 @@ def _generate_agent_analysis(
             )
         else:
             narrative_core_result = _parse_agent_stage(
-                llm_provider,
+                narrative_provider,
                 stage="narrative_core",
                 symbol=str(raw.get("ticker") or ""),
                 profile=profile,
@@ -2431,9 +2541,16 @@ def _generate_agent_analysis(
         expected_dimensions=expected_dimensions,
         debate_required=bool(debate_required),
     )
-    _normalize_payload_paths(payload, allowed_paths=allowed_paths)
-    _validate_grounding(payload, allowed_paths=allowed_paths, numeric_paths=numeric_paths)
-    return _to_upstream_agent_analysis(payload)
+    final_allowed_paths = allowed_paths | outcome_paths
+    _normalize_payload_paths(payload, allowed_paths=final_allowed_paths)
+    _validate_grounding(payload, allowed_paths=final_allowed_paths, numeric_paths=numeric_paths)
+    result = _to_upstream_agent_analysis(payload)
+    result["grounding"]["native_synthesis_outcome"] = {
+        "content": deepcopy(native_outcome),
+        "content_hash": sha256(_compact_json(native_outcome).encode("utf-8")).hexdigest(),
+        "scope": "pinned_native_computation_not_market_observation",
+    }
+    return result
 
 
 def _compact_json(value: Any) -> str:
@@ -2460,7 +2577,8 @@ def _acknowledge_native_warnings(
         return result
     timeout = resolve_uzi_llm_request_timeout(llm_provider, research_profile=profile,
                                             uzi_stage="native_warning_review")
-    provider = with_uzi_request_control(llm_provider, deadline_at=monotonic() + 2 * timeout,
+    provider = with_uzi_request_control(llm_provider,
+                                       deadline_at=monotonic() + resolve_uzi_llm_queue_timeout(llm_provider) + timeout,
                                        progress_callback=progress_callback)
     check_uzi_request_control(provider._uzi_cancellation, provider._uzi_deadline_at)
     system_prompt = (

@@ -122,7 +122,14 @@ def assert_shared_policy(prompt):
 def assert_fixed_document_view(view, expected):
     """Independently resolve transport links, then compare every input field."""
     restored = deepcopy(view)
+    documents = [document for row in expected.values() for document in row["documents"]]
+    publications = {
+        url: list(dict.fromkeys(str(document["published_at"]) for document in documents
+                               if document["url"] == url and document.get("published_at")))
+        for url in {document["url"] for document in documents}
+    }
     for row in restored.values():
+        assert row.pop("document_publications") == publications
         for document in row["documents"]:
             if "text_reference" not in document:
                 continue
@@ -149,6 +156,8 @@ def test_attribution_transport_check_rejects_changed_identity_or_text(damage):
                 "url": SHARED_URL, "inline_content": text}
     expected = {key: {"documents": [deepcopy(document)]} for key in ("first", "second")}
     view = deepcopy(expected)
+    for row in view.values():
+        row["document_publications"] = {SHARED_URL: []}
     linked = view["second"]["documents"][0]
     linked.pop("inline_content")
     linked["text_reference"] = {"dimension": "first", "document_index": 0,

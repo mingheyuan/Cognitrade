@@ -60,7 +60,11 @@ def test_repair_attempts_do_not_count_as_extra_completed_stages():
     _check_counts(progress)
 
 
-def test_revalidated_cache_counts_once_in_each_new_analysis(tmp_path):
+def test_revalidated_cache_counts_once_in_each_new_analysis(tmp_path, monkeypatch):
+    # Native rule panels choose signature phrases randomly. This test promises
+    # identical prompt inputs; fix that fixture randomness rather than allowing
+    # the cache to ignore changed methodology content.
+    monkeypatch.setattr("random.choice", lambda rows: rows[0])
     first = _LiteAgentProvider()
     first.settings.workspace_root = tmp_path
     host.execute_native_analysis(_lite_snapshots(), ["600000"], profile="lite", llm_provider=first)

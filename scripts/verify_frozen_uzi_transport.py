@@ -48,6 +48,8 @@ def audit(manifest: dict, *, expected_hash: str) -> dict:
         assert len(complete) == len(rows), "false missing placeholders created"
         actual = [_snapshot_artifact_content(row) for row in complete]
         for original, transported in zip(rows, actual, strict=True):
+            for key in ("snapshot_id", "content_hash"):
+                assert original.get(key) == transported.get(key), "fixed snapshot identity was lost"
             for ref in original.get("source_refs") or []:
                 assert ref in transported["source_refs"], "fixed reference was lost or altered"
         native_hash = content_hash(build_uzi_raw(rows, symbol))

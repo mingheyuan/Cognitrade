@@ -279,7 +279,11 @@ def test_qualitative_input_budget_failure_does_not_start_downstream_analysis(pro
                for record in result["recovery"]["failure_records"])
 
 
-def test_value_deadline_recovery_reuses_successful_same_input_stage_caches(tmp_path):
+def test_value_deadline_recovery_reuses_successful_same_input_stage_caches(tmp_path, monkeypatch):
+    # This is an Agent-mode recovery contract. The native CLI/CI mode explicitly
+    # downgrades missing agent_analysis to warning and is a different contract.
+    monkeypatch.setenv("CI", "false")
+    monkeypatch.delenv("UZI_CLI_ONLY", raising=False)
     from collections import Counter
     from threading import Lock
     from tests.test_uzi_392_analysis import _LiteAgentProvider, _lite_snapshots

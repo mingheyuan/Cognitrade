@@ -1857,11 +1857,13 @@ def _point_in_time_uzi_projection(
 ) -> dict[str, Any]:
     """Project provider facts into UZI's public per-dimension data shape."""
 
+    from research_system.market_data.native_numbers import project_host_numbers
+
     if snapshot_type == "market":
         overview = dict(facts.get("market_overview") or {})
         history = dict(facts.get("market_hist") or {})
         latest = dict(history.get("latest_bar") or {})
-        return {
+        return project_host_numbers({
             "code": facts.get("symbol") or overview.get("symbol"),
             "name": overview.get("security_name") or latest.get("name"),
             "price": overview.get("latest_price") or latest.get("close"),
@@ -1877,9 +1879,9 @@ def _point_in_time_uzi_projection(
             "high": latest.get("high"),
             "low": latest.get("low"),
             "prev_close": latest.get("pre_close"),
-        }
+        }, "0_basic", include_display_aliases=True)
     if snapshot_type == "fundamental":
-        return _point_in_time_financial_projection(facts)
+        return project_host_numbers(_point_in_time_financial_projection(facts), "1_financials")
     if snapshot_type == "kline":
         history = dict(facts.get("history") or facts.get("market_hist") or {})
         bars = [
@@ -2750,6 +2752,9 @@ def _recover_market_snapshot(
     }
     if not any(not _missing_dimension_value(value) for value in projected.values()):
         return _append_recovery_trace(snapshot, recovery)
+    from research_system.market_data.native_numbers import project_host_numbers
+
+    projected = project_host_numbers(projected, "0_basic", include_display_aliases=True)
     projected["market_overview"] = {
         "security_name": projected["name"],
         "industry": projected["industry"],

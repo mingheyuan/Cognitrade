@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, datetime, timezone
 from contextlib import contextmanager
 from threading import Barrier, Event, Lock, get_ident
 from time import monotonic
@@ -559,8 +559,43 @@ def test_enrichment_prompt_keeps_observed_bound_separate_from_unknown_publicatio
         assert document["visible_by"] == CUTOFF.isoformat()
         assert document["publication_time_basis"] == "observed_upper_bound"
         assert "不得当作发布日" in document["publication_time_note"]
+        assert "market_publication_date" not in document
     finally:
         database.close()
+
+
+def test_enrichment_and_report_share_market_publication_view(source):
+    from domain_packs.finance_ashare.subagents.uzi_qualitative_deep_dive import market_publication_time_view
+
+    database, snapshot_id, _ = source
+    with database.session() as session:
+        repo = MarketDataRepository(session)
+        snapshot = repo.require_snapshot(snapshot_id)
+        proof = deepcopy(repo.list_snapshot_evidence(snapshot_id)[0])
+        proof.published_at = datetime(2026, 8, 19, 16, tzinfo=timezone.utc)
+        before = deepcopy(snapshot.payload_json)
+        documents = enrichment._research_documents(snapshot, [proof], CUTOFF)
+        assert len(documents) == 1
+        view = market_publication_time_view(documents[0]["published_at"], snapshot.exchange_timezone)
+        assert view["market_publication_date"] == "2026-08-20"
+        assert all(documents[0][key] == value for key, value in view.items())
+        context = {"7_industry": {"documents": documents}}
+        citation_view, _ = enrichment._research_citation_view(context, None)
+        assert citation_view["7_industry"]["document_publications"][proof.source_url] == [view["published_at_market"]]
+        assert snapshot.payload_json == before
+
+
+def test_profile_publication_view_is_local_without_mutating_validation_scope():
+    scope = {"target": {"snapshot_id": "fixed", "exchange_timezone": "Asia/Shanghai", "raw": {}},
+             "allowed_fields": [], "documents": [{"evidence_id": "proof", "document_hash": "hash",
+                 "inline_content": "归档原文", "url": "https://example.org/original",
+                 "published_at": "2026-08-31T16:00:00Z", "observed_at": "2026-09-02T00:00:00Z"}]}
+    before = deepcopy(scope)
+    prompt = enrichment._company_profile_prompt_scope(scope, {})
+    assert prompt["documents"][0]["market_publication_date"] == "2026-09-01"
+    citation_view, _ = enrichment._research_citation_view({"7_industry": {"documents": []}}, scope)
+    assert citation_view["7_industry"]["document_publications"]["https://example.org/original"] == ["2026-09-01T00:00:00+08:00"]
+    assert scope == before
 
 
 def test_job_cancellation_blocks_all_revision_and_model_calls(source, monkeypatch):

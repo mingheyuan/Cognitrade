@@ -54,6 +54,7 @@ class SettingsRuntimeTests(unittest.TestCase):
                 "CODEX_MODEL=test-model\n"
                 "CODEX_REASONING_EFFORT=xhigh\n"
                 "UZI_LLM_REQUEST_TIMEOUT_SECONDS=360\n"
+                "UZI_LLM_QUEUE_TIMEOUT_SECONDS=1500\n"
                 "COGNITRADE_BAOSTOCK_SOCKET_TIMEOUT_SECONDS=9\n"
                 "COGNITRADE_FUND_HOLDING_REPORT_MAX_AUTO_RETRIES=4\n"
                 "COGNITRADE_STRATEGY_BACKFILL_BATCH_TIMEOUT_SECONDS=28800\n",
@@ -67,6 +68,7 @@ class SettingsRuntimeTests(unittest.TestCase):
             self.assertEqual(settings.codex_reasoning_effort, "xhigh")
             self.assertEqual(settings.provider_name, "codex")
             self.assertEqual(settings.uzi_llm_request_timeout_seconds, 360)
+            self.assertEqual(settings.uzi_llm_queue_timeout_seconds, 1500)
             self.assertEqual(settings.baostock_socket_timeout_seconds, 9)
             self.assertEqual(settings.fund_holding_report_max_auto_retries, 4)
             self.assertEqual(settings.strategy_backfill_batch_timeout_seconds, 28800)

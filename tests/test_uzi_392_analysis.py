@@ -113,7 +113,11 @@ class _LiteAgentProvider:
                 for key in _LITE_DIMENSIONS
             },
             "panel_insights": "Lite 档位十位评委基于同一份冻结证据形成分歧，结论仅用于研究参考。",
-            "panel_evidence_paths": ["panel.panel_consensus"],
+            "panel_evidence_paths": [
+                "native_synthesis_outcome.synthesis.panel_consensus"
+                if "NATIVE_SYNTHESIS_OUTCOME_CONTEXT=" in str(kwargs.get("system_prompt") or "")
+                else "panel.panel_consensus"
+            ],
             "narrative_override": {
                 "core_conclusion": "基于当前冻结证据形成谨慎结论，真实风险和数据缺口必须继续保留。",
                 "conclusion_evidence_paths": [evidence_path],

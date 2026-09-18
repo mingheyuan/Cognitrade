@@ -77,6 +77,15 @@ const childJob: CollectionJob = {
 afterEach(cleanup)
 
 describe('FundCollectionOverview', () => {
+  it('shows research still running for a settled stock collection child', () => {
+    const child = { ...childJob, progress: { ...childJob.progress, running: 0, completed: 220,
+      research_enrichment: { status: 'running', groups: [{ group: 'A' }], revisions: [] } } }
+    render(<FundCollectionOverview job={parentJob} childJobs={[child]} jobDetails={{}}
+      actionLoading={false} onLoadDetail={vi.fn()} onRetry={vi.fn()} />)
+    expect(screen.getByLabelText('研究证据整理进度')).toHaveTextContent('研究证据整理：进行中')
+    expect(screen.getByText(/结构化槽位已结算，任务仍在继续/)).toBeInTheDocument()
+  })
+
   it('does not mark unscheduled holdings or absent portfolio assessments ready', () => {
     const job = { ...parentJob, portfolio_summary: undefined, child_collection_job_ids: [] }
     render(<>

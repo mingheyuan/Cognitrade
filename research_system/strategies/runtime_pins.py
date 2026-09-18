@@ -40,7 +40,7 @@ def deployed_prompt_hash() -> str:
     # safety guard must not silently resume an older pinned model workflow.
     for name in (
         "commodity_pit.py", "report_inputs.py", "quant_auxiliary.py",
-        "bundles.py", "native_projection.py", "evidence_bindings.py",
+        "bundles.py", "native_projection.py", "native_numbers.py", "evidence_bindings.py",
         "report_execution_dependencies.py",
     ):
         path = root.parents[1] / "research_system" / "market_data" / name

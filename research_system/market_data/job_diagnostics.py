@@ -209,7 +209,8 @@ def _bucket_rows(
     *,
     key_name: str,
     fallback: str,
-    limit: int = 12,
+    limit: int | None = 12,
+    projected_slots: bool = False,
 ) -> list[dict[str, Any]]:
     buckets: dict[str, dict[str, Any]] = {}
     for task in tasks:
@@ -226,7 +227,9 @@ def _bucket_rows(
             },
         )
         bucket["count"] += 1
-        if task_is_retryable(task):
+        if projected_slots:
+            bucket["retryable_count" if _value(task, "retryable", False) else "blocked_count"] += 1
+        elif task_is_retryable(task):
             bucket["retryable_count"] += 1
         elif task_is_blocked(task):
             bucket["blocked_count"] += 1
@@ -620,7 +623,7 @@ def summarize_fund_portfolio(
     )
     configured_dimensions = set(dimension_ids)
     by_holding = []
-    relevant_tasks: list[Any] = []
+    gap_diagnostics: list[dict[str, Any]] = []
     for symbol in holding_symbols:
         known_dimensions = (
             (
@@ -699,11 +702,19 @@ def summarize_fund_portfolio(
                     or symbol in candidate_symbols
                     or bool(_value(result, "snapshot_id"))
                 )
-                if task is not None:
-                    relevant_tasks.append(task)
+                retryable = dimension in retry_scope.get(symbol, [])
+                # Count the same projected gap exactly once, even when there
+                # was no child task or a successful task reused a gap snapshot.
+                gap_diagnostics.append({
+                    "dimension": dimension,
+                    "retryable": retryable,
+                    "last_error_code": _value(task, "last_error_code") or _value(result, "error_code") or "data_gap",
+                    "last_error_message": _value(task, "last_error_message") or _value(result, "error_message")
+                        or ("冻结候选仍有数据缺口，可定向补采" if retryable else "冻结候选仍有数据缺口，当前不可直接重试，按降级披露"),
+                })
                 counts[
                     "retryable_slots"
-                    if dimension in retry_scope.get(symbol, [])
+                    if retryable
                     else "blocked_slots"
                 ] += 1
             else:
@@ -745,7 +756,6 @@ def summarize_fund_portfolio(
         [int(run.get("attempt") or 0) for run in last_runs if isinstance(run, Mapping)]
         or [0]
     )
-    diagnostics = summarize_tasks(relevant_tasks)
     return {
         "total_holdings": total_holdings,
         "ready_holdings": sum(
@@ -769,8 +779,10 @@ def summarize_fund_portfolio(
         "by_holding": by_holding,
         "attempt": attempt,
         "current_child_job_ids": sorted(current_child_ids),
-        "by_error_code": diagnostics["by_error_code"],
-        "by_dimension": diagnostics["by_dimension"],
+        "by_error_code": _bucket_rows(gap_diagnostics, key_name="last_error_code", fallback="data_gap",
+                                      projected_slots=True, limit=None),
+        "by_dimension": _bucket_rows(gap_diagnostics, key_name="dimension", fallback="unknown_dimension",
+                                     projected_slots=True, limit=None),
     }
 
 

@@ -10,7 +10,7 @@ from domain_packs.finance_ashare.subagents.uzi_392_native_methods import build_u
 
 def row(kind, *, data=None, spill=None, version="uzi-dim-result-v5", failure=False, unsafe=False):
     facts = {"_uzi_raw_result": {"data": data or {}, "source": "recorded-native"}}
-    if version in {"uzi-dim-result-v5", "uzi-dim-result-v6", "uzi-dim-result-v7", "uzi-dim-result-v8"}:
+    if version in {"uzi-dim-result-v5", "uzi-dim-result-v6", "uzi-dim-result-v7", "uzi-dim-result-v8", "uzi-dim-result-v9", "uzi-dim-result-v10"}:
         facts["_uzi_bonus_projection"] = version
     if failure:
         facts["_uzi_raw_result"].update(error="recorded provider error", _timeout=True)
@@ -76,7 +76,7 @@ def test_declared_owner_absence_does_not_restore_unrelated_mirror():
     assert "similar_stocks" not in build_uzi_raw(rows, "688041.SH")
 
 
-@pytest.mark.parametrize("version", ["uzi-dim-result-v4", "uzi-dim-result-v5", "uzi-dim-result-v6", "uzi-dim-result-v7", "uzi-dim-result-v8"])
+@pytest.mark.parametrize("version", ["uzi-dim-result-v4", "uzi-dim-result-v5", "uzi-dim-result-v6", "uzi-dim-result-v7", "uzi-dim-result-v8", "uzi-dim-result-v9", "uzi-dim-result-v10"])
 def test_quant_and_report_use_the_same_owner_with_legacy_version_preserved(version):
     from research_system.market_data.bundles import native_transport_facts
     from research_system.market_data.contracts import cutoff_at_for_date
@@ -110,7 +110,7 @@ def test_quant_and_report_use_the_same_owner_with_legacy_version_preserved(versi
     assert raw["fund_managers"] == quant["fund_managers"] == expected
 
 
-@pytest.mark.parametrize("version", ["uzi-dim-result-v5", "uzi-dim-result-v6", "uzi-dim-result-v7", "uzi-dim-result-v8"])
+@pytest.mark.parametrize("version", ["uzi-dim-result-v5", "uzi-dim-result-v6", "uzi-dim-result-v7", "uzi-dim-result-v8", "uzi-dim-result-v9", "uzi-dim-result-v10"])
 def test_v6_uses_skill_bonus_envelope_without_rewriting_v5(version):
     failure = {"data": {}, "source": "pipeline:timeout", "_pipeline": {"error": "timeout"}}
     rows = [row("market", version=version, data={"name": "recorded"}),

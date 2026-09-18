@@ -421,8 +421,8 @@ capabilities:
     cache_scope: global
   - subagent_type: stock_snapshot_collector
     capability: finance.ashare.snapshot.collect
-    capability_version: "2"
-    policy_version: "frozen-evidence-transport-v2"
+    capability_version: "3"
+    policy_version: "frozen-evidence-transport-v3-source-identity"
     implementation: subagents.runtime:collect_snapshot
     consumes:
       - artifact_type: normalized_query

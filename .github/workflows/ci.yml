@@ -82,7 +82,8 @@ jobs:
         run: python -m pytest -q tests/test_codex_provider.py
       - name: Run complete backend suite with native crash diagnostics
         # Several native UZI/provider dependencies keep process-wide state.
-        # Isolate every test module while retaining the complete test inventory.
+        # Pytest collects both unittest classes and function-style regressions.
+        # Keep process isolation; a zero-test module is a failure, not a pass.
         run: |
           suite_status=0
           for test_file in tests/test_*.py; do
@@ -97,12 +98,12 @@ jobs:
             module_status=0
             echo "::group::$test_pattern"
             timeout --signal=TERM --kill-after=10s 180s \
-              python -X faulthandler -m unittest discover -v -s tests -p "$test_pattern" || module_status=$?
+              python -X faulthandler -m pytest -q "$test_file" || module_status=$?
             if [[ "$module_status" -eq 124 || "$module_status" -eq 137 ]]; then
               echo "::warning::$test_pattern did not exit within 180s; retrying once in a fresh process"
               module_status=0
               timeout --signal=TERM --kill-after=10s 180s \
-                python -X faulthandler -m unittest discover -v -s tests -p "$test_pattern" || module_status=$?
+                python -X faulthandler -m pytest -q "$test_file" || module_status=$?
             fi
             echo "::endgroup::"
             if [[ "$module_status" -ne 0 ]]; then

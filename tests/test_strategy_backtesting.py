@@ -94,7 +94,10 @@ def _series_loader(_instrument, start_date: date, end_date: date, _as_of: date):
 class StrategyBacktestTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
-        self.database = StrategyDatabase("sqlite:///:memory:")
+        # The worker, heartbeat and polling reader need independent SQLite
+        # transactions, as in deployment. StaticPool's single in-memory
+        # connection lets concurrent sessions commit/rollback each other's work.
+        self.database = StrategyDatabase(f"sqlite:///{Path(self.temporary.name) / 'backtests.sqlite3'}")
         self.strategy_service = StrategyService(
             self.database,
             workspace_root=Path(self.temporary.name),
@@ -299,6 +302,7 @@ class StrategyBacktestTests(unittest.TestCase):
         fund = self._wait(
             self.backtests.create(self.owner, mode=BacktestMode.FUND_ONLY, **common)["id"]
         )
+        self.assertEqual(fund["status"], "completed", fund.get("error_summary"))
         holdings = self._wait(
             self.backtests.create(
                 self.owner,
@@ -422,6 +426,7 @@ class StrategyBacktestTests(unittest.TestCase):
         }
         first = self._wait(self.backtests.create(self.owner, **request)["id"])
         verification_service = StrategyVerificationService(self.database)
+        self.assertEqual(first["status"], "completed", first.get("error_summary"))
         failed = verification_service.create(
             self.owner,
             strategy_version_id=self.version["id"],
@@ -434,6 +439,7 @@ class StrategyBacktestTests(unittest.TestCase):
             verification_service.confirm(self.owner, failed["id"])
 
         second = self._wait(self.backtests.create(self.owner, **request)["id"])
+        self.assertEqual(second["status"], "completed", second.get("error_summary"))
         passed = verification_service.create(
             self.owner,
             strategy_version_id=self.version["id"],

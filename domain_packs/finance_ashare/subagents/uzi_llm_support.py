@@ -22,8 +22,10 @@ import httpx
 from pydantic import ValidationError
 
 from research_system.runtime.providers.errors import (
+    CodexTurnError,
     LLMCancelledError,
     LLMDeadlineError,
+    LLMOutputRepetitionError,
     StructuredOutputError,
 )
 
@@ -34,6 +36,7 @@ DEFAULT_UZI_LLM_PROFILE_REQUEST_TIMEOUT_SECONDS = {
     "deep": 900.0,
 }
 DEFAULT_UZI_LLM_BUY_ZONE_REQUEST_TIMEOUT_SECONDS = 300.0
+DEFAULT_UZI_LLM_QUEUE_TIMEOUT_SECONDS = 1200.0
 DEFAULT_UZI_LLM_MAX_CONCURRENCY = 2
 DEFAULT_UZI_LLM_TRANSIENT_RETRIES = 2
 DEFAULT_UZI_LLM_RETRY_BASE_SECONDS = 2.0
@@ -57,6 +60,7 @@ _QUALITATIVE_GROUP_VALIDATION_FIELDS = {
     "qualitative_dimension_membership_mismatch": frozenset({"dimensions"}),
     "qualitative_repeated_finding": frozenset({"dimensions.0.evidence", "dimensions.1.evidence"}),
     "qualitative_ungrounded_url": frozenset({"dimensions.0.evidence", "dimensions.1.evidence"}),
+    "qualitative_source_attribution_conflict": frozenset({"dimensions.0.evidence", "dimensions.1.evidence"}),
 }
 
 
@@ -102,6 +106,7 @@ class UziQualitativeValidationError(ValueError):
 EXHAUSTED_MODEL_FAILURES = frozenset({
     "llm_cancelled", "llm_stage_deadline", "llm_queue_timeout",
     "llm_transport_timeout", "llm_provider_unavailable",
+    "llm_output_repetition",
 })
 
 
@@ -240,12 +245,19 @@ def model_failure_kind(exc: Exception) -> str:
         return next((kind for kind in (
             "llm_cancelled", "llm_stage_deadline", "llm_queue_timeout",
             "llm_transport_timeout", "llm_provider_unavailable", "pipeline_failure", "agent_content_invalid", "source_gap",
+            "llm_output_repetition",
         ) if kind in kinds), "agent_content_invalid")
     chain = _exception_chain(exc)
+    if any(isinstance(error, CodexTurnError) and error.code == "codex_runtime_exit_unconfirmed" for error in chain):
+        # An unconfirmed process exit is never repaired by starting another
+        # attempt, even if its chained original failure was repetition.
+        return "llm_provider_unavailable"
     if any(isinstance(error, (LLMCancelledError, UziRequestCancelled)) for error in chain):
         return "llm_cancelled"
     if any(isinstance(error, (LLMDeadlineError, UziRequestDeadline)) for error in chain):
         return "llm_queue_timeout" if "queue_timeout" in str(exc) else "llm_stage_deadline"
+    if any(isinstance(error, LLMOutputRepetitionError) for error in chain):
+        return "llm_output_repetition"
     if any(isinstance(error, (ValidationError, StructuredOutputError, UziQualitativeValidationError)) for error in chain):
         return "agent_content_invalid"
     if any(isinstance(error, UziInputBudgetExceeded) for error in chain):
@@ -553,6 +565,14 @@ def resolve_uzi_llm_request_timeout(
     return timeout_seconds
 
 
+def resolve_uzi_llm_queue_timeout(provider: Any) -> float:
+    value = float(getattr(getattr(provider, "settings", None), "uzi_llm_queue_timeout_seconds",
+                          DEFAULT_UZI_LLM_QUEUE_TIMEOUT_SECONDS))
+    if not isfinite(value) or value <= 0:
+        raise ValueError("UZI LLM queue timeout must be finite and positive")
+    return value
+
+
 def parse_uzi_structured(
     provider: Any,
     *,
@@ -584,6 +604,7 @@ def parse_uzi_structured(
         research_profile=research_profile,
         uzi_stage=uzi_stage,
     )
+    queue_timeout_seconds = resolve_uzi_llm_queue_timeout(provider)
     max_concurrency = int(
         getattr(settings, "uzi_llm_max_concurrency", DEFAULT_UZI_LLM_MAX_CONCURRENCY)
     )
@@ -640,6 +661,16 @@ def parse_uzi_structured(
         kwargs.pop("reasoning_effort")
     if "validation_context" in kwargs and not supports("validation_context"):
         kwargs.pop("validation_context")
+    if "json_schema_override" in kwargs and not supports("json_schema_override"):
+        kwargs.pop("json_schema_override")
+    # Opt in only for generated commentary/synthesis, not arbitrary JSON data,
+    # quoted research documents, roleplay, or general provider callers.
+    guard_repetition = bool(
+        uzi_stage == "narrative_core"
+        or re.fullmatch(r"dimensions_\d+_\d+", str(uzi_stage or ""))
+    ) and supports("output_repetition_guard")
+    if guard_repetition:
+        kwargs["output_repetition_guard"] = True
     supports_max_retries = supports("max_retries")
     if supports_max_retries:
         # UZI owns recovery through suggested_fix → recompute → self-review.
@@ -652,10 +683,10 @@ def parse_uzi_structured(
     executor_wait_seconds = max(dispatch[1] - dispatch[0], 0) if dispatch is not None else 0.0
     # One bounded budget covers queueing, every attempt and backoff. Root
     # cancellation/deadline always takes precedence and retries never reset it.
-    stage_deadline = _earliest_deadline(deadline_at, stage_started + 2 * timeout_seconds)
+    stage_deadline = _earliest_deadline(deadline_at, stage_started + queue_timeout_seconds + timeout_seconds)
     # Charge executor wait to admission, not previous HTTP/validation work in
     # an output repair. All of that work still consumes the stage deadline.
-    queue_deadline = min(stage_deadline, started + max(timeout_seconds - executor_wait_seconds, 0))
+    queue_deadline = min(stage_deadline, started + max(queue_timeout_seconds - executor_wait_seconds, 0))
     if supports("deadline_at"):
         kwargs["deadline_at"] = stage_deadline
     semaphore = _uzi_semaphore(max_concurrency)
@@ -666,9 +697,12 @@ def parse_uzi_structured(
     backoff_seconds = 0.0
     failure_metadata: dict[str, Any] = {}
     execution_metadata: dict[str, Any] = {}
+    upstream_retries = 0
+    repetition_retries = 0
 
     def emit(phase: str, attempt: int) -> None:
         timing = {"queue_seconds": round(queue_seconds, 3), "http_seconds": round(http_seconds, 3),
+                  "queue_budget_seconds": queue_timeout_seconds, "request_budget_seconds": timeout_seconds,
                   "backoff_seconds": round(backoff_seconds, 3), "total_seconds": round(monotonic() - started, 3),
                   "executor_wait_seconds": round(executor_wait_seconds, 3),
                   "stage_elapsed_seconds": round(monotonic() - stage_started, 3),
@@ -683,7 +717,7 @@ def parse_uzi_structured(
             except Exception:
                 _LOGGER.warning("UZI request progress callback failed", exc_info=True)
 
-    for attempt in range(transient_retries + 1):
+    for attempt in range(transient_retries + 1 + int(guard_repetition)):
         try:
             check_uzi_request_control(cancellation, stage_deadline)
         except (UziRequestCancelled, UziRequestDeadline) as exc:
@@ -707,6 +741,7 @@ def parse_uzi_structured(
         request_started: float | None = None
         request_phase = "failed"
         attempt_error: Exception | None = None
+        repair_repetition = False
         try:
             check_uzi_request_control(cancellation, stage_deadline)
             emit("requesting", attempt + 1)
@@ -729,10 +764,17 @@ def parse_uzi_structured(
                 failure_metadata["provider_retryable"] = _is_transient_upstream_failure(exc)
             if kind == "llm_cancelled":
                 request_phase = "cancelled"
-            if (
-                attempt >= transient_retries
-                or not _is_transient_upstream_failure(exc)
-            ):
+            if kind == "llm_output_repetition" and guard_repetition and repetition_retries == 0:
+                repetition_retries += 1
+                repair_repetition = True
+                kwargs["user_prompt"] = str(kwargs.get("user_prompt") or "") + (
+                    "\n上一次本阶段生成出现连续大段完全重复文本，已终止且未采纳任何不完整结果。"
+                    "请从相同证据重新生成本阶段完整 JSON，每个结论只写一次；"
+                    "不要续写或复述上次输出，不复制输入目录，保留所有要求的字段、维度、风险与辩论。"
+                )
+            elif upstream_retries < transient_retries and _is_transient_upstream_failure(exc):
+                upstream_retries += 1
+            else:
                 raise
         finally:
             if request_started is not None:
@@ -749,7 +791,13 @@ def parse_uzi_structured(
                         execution_metadata["sdk_request_trace"] = metadata["request_trace"]
             semaphore.release(owner=owner)
             emit(request_phase, attempt + 1)
-        delay = min(retry_max_seconds, retry_base_seconds * (2**attempt))
+        if repair_repetition:
+            # The provider has interrupted/reaped its runtime before releasing
+            # the slot. Never renew the shared deadline or rerun another stage.
+            emit("repairing_output", attempt + 1)
+            queue_deadline = min(stage_deadline, monotonic() + queue_timeout_seconds)
+            continue
+        delay = min(retry_max_seconds, retry_base_seconds * (2 ** (upstream_retries - 1)))
         jitter = min(delay * 0.25, 5.0) * random()
         backoff_started = monotonic()
         # A server's Retry-After is a lower bound, not subject to our local
@@ -768,7 +816,7 @@ def parse_uzi_structured(
         except (UziRequestCancelled, UziRequestDeadline) as exc:
             emit("cancelled" if isinstance(exc, UziRequestCancelled) else "stage_deadline", attempt + 1)
             raise exc from attempt_error
-        queue_deadline = min(stage_deadline, monotonic() + timeout_seconds)
+        queue_deadline = min(stage_deadline, monotonic() + queue_timeout_seconds)
     raise AssertionError("unreachable UZI request retry state")
 
 

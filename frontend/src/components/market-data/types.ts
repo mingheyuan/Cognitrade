@@ -210,6 +210,15 @@ export interface CollectionProgress {
     reason_code?: string
   }
   research_archive?: ResearchArchiveProgress
+  research_enrichment?: {
+    status: string
+    groups?: Array<{
+      status?: string; symbol?: string; group?: string
+      failure?: { kind?: string; provider_error_code?: string }
+    }>
+    revisions?: Array<{ snapshot_id?: string }>
+    reason_code?: string
+  }
   total: number
   queued: number
   running: number

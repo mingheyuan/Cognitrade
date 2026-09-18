@@ -2519,13 +2519,16 @@ def test_restart_only_requeues_parent_after_lease_expiry(harness) -> None:
         submit.assert_called_once_with(parent["id"])
 
 
-def test_running_fund_parent_renews_its_durable_lease(monkeypatch) -> None:
+def test_running_fund_parent_renews_its_durable_lease(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         "research_system.market_data.fund_holding_collection."
         "_FUND_LEASE_RENEW_INTERVAL_SECONDS",
         0.02,
     )
-    database = StrategyDatabase("sqlite://")
+    # A heartbeat and worker transact concurrently. StaticPool's single
+    # in-memory connection cannot isolate their commits/rollbacks; use the
+    # file-backed WAL database and separate connections used by the service.
+    database = StrategyDatabase(f"sqlite:///{tmp_path / 'fund-lease.sqlite3'}")
     database.create_schema()
     equity = _BlockingEquityCollection(database)
     coordinator = _TestFundHoldingCoordinator(

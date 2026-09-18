@@ -409,6 +409,7 @@ function normalizeJob(payload: unknown): CollectionJob {
   const source = asRecord(payload)
   const rawProgress = asRecord(source.progress)
   const rawPostfetch = asRecord(rawProgress.native_postfetch)
+  const rawEnrichment = asRecord(rawProgress.research_enrichment)
   const rawArchive = asRecord(source.research_archive ?? rawProgress.research_archive)
   const archiveActive = asRecord(rawArchive.active)
   const researchArchive = Object.keys(rawArchive).length ? {
@@ -497,6 +498,20 @@ function normalizeJob(payload: unknown): CollectionJob {
     research_archive: researchArchive,
     scoped_retry_supported: Boolean(source.scoped_retry_supported),
     progress: {
+      research_enrichment: Object.keys(rawEnrichment).length ? {
+        status: stringValue(rawEnrichment.status),
+        groups: records(rawEnrichment.groups).map((group) => {
+          const failure = asRecord(group.failure)
+          return {
+            status: stringValue(group.status), symbol: stringValue(group.symbol), group: stringValue(group.group),
+            ...(Object.keys(failure).length ? { failure: {
+              kind: stringValue(failure.kind), provider_error_code: stringValue(failure.provider_error_code),
+            } } : {}),
+          }
+        }),
+        revisions: records(rawEnrichment.revisions).map((revision) => ({ snapshot_id: stringValue(revision.snapshot_id) })),
+        reason_code: stringValue(rawEnrichment.reason_code) || undefined,
+      } : undefined,
       native_postfetch: Object.keys(rawPostfetch).length ? {
         status: stringValue(rawPostfetch.status), attempted: numberValue(rawPostfetch.attempted),
         succeeded: numberValue(rawPostfetch.succeeded), failed: numberValue(rawPostfetch.failed),

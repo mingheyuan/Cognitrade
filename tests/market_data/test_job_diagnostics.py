@@ -14,6 +14,35 @@ from research_system.market_data.job_diagnostics import (
 
 
 class MarketDataJobDiagnosticsTests(unittest.TestCase):
+    def test_candidate_only_gaps_are_in_every_breakdown_with_identical_retryability(self):
+        symbol = "688012.SH"
+        dimensions = ["19_contests", "13_policy"]
+        summary = summarize_fund_portfolio(
+            checkpoint={"holdings": [{"symbol": symbol}], "publication_candidate": {
+                "bundles": [{"symbol": symbol, "items": [{"dimension": d, "status": "data_gap"} for d in dimensions]}],
+            }}, child_tasks=[], dimension_ids=dimensions, dimensions_per_holding=2, top_n=1,
+        )
+        self.assertEqual(summary["missing_slots"], 2)
+        self.assertEqual(summary["retryable_slots"], 1)
+        self.assertEqual(summary["blocked_slots"], 1)
+        for key in ("by_dimension", "by_error_code"):
+            self.assertEqual(sum(row["count"] for row in summary[key]), 2)
+            self.assertEqual(sum(row["retryable_count"] for row in summary[key]), 1)
+            self.assertEqual(sum(row["blocked_count"] for row in summary[key]), 1)
+
+    def test_fund_breakdown_does_not_truncate_at_twelve_dimensions(self):
+        symbol = "688012.SH"
+        dimensions = [f"dimension_{n}" for n in range(22)]
+        tasks = [{"symbol": symbol, "dimension": d, "status": "failed", "last_error_code": f"error-{d}",
+                  "retryable": False} for d in dimensions]
+        summary = summarize_fund_portfolio(
+            checkpoint={"holdings": [{"symbol": symbol}]}, child_tasks=tasks,
+            dimension_ids=dimensions, dimensions_per_holding=22, top_n=1,
+        )
+        for key in ("by_dimension", "by_error_code"):
+            self.assertEqual(len(summary[key]), 22)
+            self.assertEqual(sum(row["count"] for row in summary[key]), summary["missing_slots"])
+
     def test_unscheduled_portfolio_slots_are_unassessed_not_ready_or_blocked(self):
         summary = summarize_fund_portfolio(
             checkpoint={
@@ -126,6 +155,9 @@ class MarketDataJobDiagnosticsTests(unittest.TestCase):
         self.assertEqual(summary["blocked_slots"], 1)
         self.assertEqual(summary["unassessed_slots"], 219)
         self.assertEqual(summary["by_holding"][0]["unassessed_slots"], 21)
+        self.assertEqual(summary["by_dimension"][0]["count"], 1)
+        self.assertEqual(summary["by_dimension"][0]["blocked_count"], 1)
+        self.assertEqual(summary["by_error_code"][0]["count"], 1)
 
     def test_only_persisted_positive_results_count_as_ready_before_candidate(self):
         holdings = [{"symbol": f"60000{index}.SH"} for index in range(10)]

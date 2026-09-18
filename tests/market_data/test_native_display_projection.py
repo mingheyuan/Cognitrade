@@ -105,8 +105,8 @@ def test_top_level_fund_mirror_is_not_repeated_inside_native_dimension():
 def test_new_pin_is_versioned_while_v3_remains_supported():
     from research_system.market_data.native_projection import pin_native_workflow
     from research_system.strategies.runtime_pins import deployed_workflow_pins
-    assert pin_native_workflow({})["snapshot_projection_version"] == "uzi-dim-result-v8"
-    assert deployed_workflow_pins()["snapshot_projection_version"] == "uzi-dim-result-v8"
+    assert pin_native_workflow({})["snapshot_projection_version"] == "uzi-dim-result-v10"
+    assert deployed_workflow_pins()["snapshot_projection_version"] == "uzi-dim-result-v10"
     assert pin_native_workflow({"snapshot_projection_version": "uzi-dim-result-v6"})["snapshot_projection_version"] == "uzi-dim-result-v6"
     assert pin_native_workflow({"snapshot_projection_version": "uzi-dim-result-v5"})["snapshot_projection_version"] == "uzi-dim-result-v5"
     assert pin_native_workflow({"snapshot_projection_version": "uzi-dim-result-v4"})["snapshot_projection_version"] == "uzi-dim-result-v4"

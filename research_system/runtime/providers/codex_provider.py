@@ -41,7 +41,8 @@ class CodexProvider:
     async def execute_async(self, *, system_prompt: str, user_prompt: str,
                             output_schema: dict | None = None, timeout_seconds: float | None = None,
                             reasoning_effort: str | None = None, cancellation: Event | None = None,
-                            deadline_at: float | None = None, frozen_corpus=None) -> dict:
+                            deadline_at: float | None = None, frozen_corpus=None,
+                            output_repetition_guard: bool = False) -> dict:
         if not self.available:
             raise LLMUnavailableError("llm_provider_unavailable: codex_explicitly_disabled")
         return await codex_transport.execute(model=self.settings.default_model,
@@ -49,6 +50,7 @@ class CodexProvider:
             effort=reasoning_effort or self.settings.codex_reasoning_effort,
             timeout=self.request_timeout_seconds if timeout_seconds is None else float(timeout_seconds),
             deadline_at=deadline_at, cancellation=cancellation,
+            output_repetition_guard=output_repetition_guard,
             **({"frozen_session": frozen_corpus.session()} if frozen_corpus is not None else {}))
 
     def _execute(self, **kwargs) -> str:
@@ -71,16 +73,19 @@ class CodexProvider:
                           reasoning_effort: str | None = None, timeout_seconds: float | None = None,
                           max_retries: int | None = None, cancellation: Event | None = None,
                           deadline_at: float | None = None, frozen_corpus=None,
-                          validation_context: dict | None = None) -> SchemaT:
+                          validation_context: dict | None = None,
+                          output_repetition_guard: bool = False,
+                          json_schema_override: dict | None = None) -> SchemaT:
         # Temperature is a legacy caller argument, not a supported Codex knob.
         # Preserve caller compatibility without claiming it was applied.
-        original_schema = schema.model_json_schema()
+        original_schema = schema.model_json_schema() if json_schema_override is None else json_schema_override
         output_schema = strict_schema(original_schema)
         if output_schema is None:
             user_prompt += "\nReturn only JSON matching this schema (preserve arbitrary map keys):\n" + json.dumps(original_schema, ensure_ascii=False)
         text = self._execute(system_prompt=system_prompt, user_prompt=user_prompt,
             output_schema=output_schema, reasoning_effort=reasoning_effort,
             timeout_seconds=timeout_seconds, cancellation=cancellation, deadline_at=deadline_at,
+            output_repetition_guard=output_repetition_guard,
             **({"frozen_corpus": frozen_corpus} if frozen_corpus is not None else {}))
         try:
             return schema.model_validate_json(text, context=validation_context)

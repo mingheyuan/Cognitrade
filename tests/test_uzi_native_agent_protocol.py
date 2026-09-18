@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from tests.uzi_prompt_wire import decode_evidence, decode_paths
 
 from domain_packs.finance_ashare.subagents import uzi_392_analysis as host
 from tests.test_uzi_392_analysis import _lite_snapshots
@@ -38,6 +39,11 @@ PANEL_REVIEW = section("### Step 3.4 · 整体审查", "### Task 4 ·")
 SYNTHESIS = section("### Task 4 ·", "### Task 5 ·")
 COPY_REVIEW = section("### 🧠 你的金句审查", "### 完成验证")
 BUY_ZONES = section("**4.5 四派系买入区间**", "### 写入（v2.2 闭环机制）")
+TASK4_REFERENCE = (Path(__file__).resolve().parents[1]
+                  / "domain_packs/finance_ashare/vendor/uzi_3_9_2/skill/references/task4-synthesis.md").read_text()
+TASK4_WRITING = TASK4_REFERENCE[
+    TASK4_REFERENCE.index("**辩论的语言规则**"):TASK4_REFERENCE.index("## Step 4.3 风险清单")
+].strip()
 
 
 def test_real_split_requests_receive_native_duties_not_just_length_constraints(tmp_path):
@@ -53,9 +59,30 @@ def test_real_split_requests_receive_native_duties_not_just_length_constraints(t
         elif request["schema"] is host.AgentNarrativeCorePayload:
             for protocol in (ASSUMPTIONS, PANEL_REVIEW, SYNTHESIS, COPY_REVIEW):
                 assert protocol in prompt
+            assert TASK4_WRITING in prompt
+            assert "NATIVE_TASK4_WRITING_GUIDANCE" in prompt
+            assert "Top 3 催化剂/风险及 agent_analysis.json 写回仍以 SKILL.md 为准" in prompt
+            assert "前 5 条进风险清单" not in prompt
         else:
             assert BUY_ZONES in prompt
+        if request["schema"] is not host.AgentNarrativeCorePayload:
+            assert "NATIVE_TASK4_WRITING_GUIDANCE" not in prompt
     assert len(provider.requests) == 9, "Protocol alignment must not add a model stage"
+
+
+def test_native_writing_guidance_does_not_create_new_host_length_gates():
+    # Native Python validates minimum coverage, not a new host max-length
+    # contract. Authoring/self-review should improve prose, not truncate it.
+    debate = host.AgentGreatDivide.model_validate({
+        "punchline": "原生指导不能被偷换成本地新增门禁" * 3,
+        **{side: [{"text": "有来源的完整论证" * 20, "evidence_paths": ["raw.test.fact"]}
+                  for _ in range(4)] for side in ("bull_say_rounds", "bear_say_rounds")},
+    })
+    assert len(debate.bull_say_rounds) == 4
+    assert len(debate.bull_say_rounds[0].text) > 80
+    schema = host.AgentGreatDivide.model_json_schema()
+    assert "maxItems" not in schema["properties"]["bull_say_rounds"]
+    assert "maxLength" not in schema["$defs"]["GroundedRound"]["properties"]["text"]
 
 
 def test_narrative_can_review_model_assumptions_and_catalysts_without_earlier_citation(tmp_path):
@@ -63,8 +90,8 @@ def test_narrative_can_review_model_assumptions_and_catalysts_without_earlier_ci
     execute(provider, [research()])
     request = next(row for row in provider.requests if row["schema"] is host.AgentNarrativeCorePayload)
     prompt = request["system_prompt"]
-    evidence = json.loads(prompt.split("FROZEN_STAGE_EVIDENCE=", 1)[1].split("\n", 1)[0])
-    paths = set(json.loads(prompt.split("ALLOWED_LEAF_EVIDENCE_PATHS=", 1)[1].split("\n", 1)[0]))
+    evidence = decode_evidence(json.loads(prompt.split("FROZEN_STAGE_EVIDENCE=", 1)[1].split("\n", 1)[0]))
+    paths = set(decode_paths(json.loads(prompt.split("ALLOWED_LEAF_EVIDENCE_PATHS=", 1)[1].split("\n", 1)[0])))
     models = evidence.get("raw", {}).get("dimensions", {})
     assert set(models) == {"20_valuation_models", "21_research_workflow", "22_deep_methods"}
     for key in models:

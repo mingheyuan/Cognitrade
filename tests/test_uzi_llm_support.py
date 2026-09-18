@@ -217,6 +217,44 @@ class UziLlmSupportTests(unittest.TestCase):
         self.assertEqual(progress[-1]["request_phase"], "completed")
         self.assertIn("http_seconds", progress[-1]["request_timing"])
 
+    def test_long_queue_does_not_extend_or_consume_generation_allowance(self) -> None:
+        provider = _TimeoutAwareProvider(600)
+        provider.settings.uzi_llm_queue_timeout_seconds = 1200
+        clock = [100.0]
+        observed = {}
+
+        class Limiter:
+            def acquire(self, cancellation, deadline, *, owner):
+                observed["queue_deadline"] = deadline
+                clock[0] += 855
+            def release(self, *, owner):
+                observed["released"] = True
+
+        progress = []
+        with patch("domain_packs.finance_ashare.subagents.uzi_llm_support.monotonic", side_effect=lambda: clock[0]), \
+             patch("domain_packs.finance_ashare.subagents.uzi_llm_support._uzi_semaphore", return_value=Limiter()):
+            parse_uzi_structured(provider, schema=dict, progress_callback=progress.append)
+        self.assertEqual(observed["queue_deadline"], 1300)
+        self.assertEqual(provider.received_timeout, 600)
+        self.assertTrue(observed["released"])
+        self.assertEqual(progress[-1]["request_timing"]["queue_seconds"], 855)
+        self.assertEqual(progress[-1]["request_timing"]["queue_budget_seconds"], 1200)
+
+    def test_generation_setting_does_not_change_queue_deadline(self) -> None:
+        observed = []
+        class Limiter:
+            def acquire(self, cancellation, deadline, *, owner):
+                observed.append(deadline)
+            def release(self, *, owner):
+                pass
+        with patch("domain_packs.finance_ashare.subagents.uzi_llm_support.monotonic", return_value=100), \
+             patch("domain_packs.finance_ashare.subagents.uzi_llm_support._uzi_semaphore", return_value=Limiter()):
+            for timeout in (300, 600, 1200):
+                provider = _TimeoutAwareProvider(timeout)
+                provider.settings.uzi_llm_queue_timeout_seconds = 900
+                parse_uzi_structured(provider, schema=dict)
+        self.assertEqual(observed, [1000, 1000, 1000])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -38,6 +38,8 @@ from research_system.market_data.native_projection import (
     V5_PROJECTION_VERSION,
     V6_PROJECTION_VERSION,
     V7_PROJECTION_VERSION,
+    V8_PROJECTION_VERSION,
+    V9_PROJECTION_VERSION,
     project_native_result,
     stored_native_payload,
 )
@@ -105,9 +107,9 @@ def native_transport_facts(snapshot, *, evidence, cutoff_at, projection_version=
     reconstruction. The immutable transport proof can follow a later fact
     revision without pretending the revision itself was observed in the past.
     """
-    if projection_version not in {V3_PROJECTION_VERSION, V4_PROJECTION_VERSION, V5_PROJECTION_VERSION, V6_PROJECTION_VERSION, V7_PROJECTION_VERSION, PROJECTION_VERSION}:
+    if projection_version not in {V3_PROJECTION_VERSION, V4_PROJECTION_VERSION, V5_PROJECTION_VERSION, V6_PROJECTION_VERSION, V7_PROJECTION_VERSION, V8_PROJECTION_VERSION, V9_PROJECTION_VERSION, PROJECTION_VERSION}:
         return {}
-    result = {"_uzi_bonus_projection": projection_version} if projection_version in {V5_PROJECTION_VERSION, V6_PROJECTION_VERSION, V7_PROJECTION_VERSION, PROJECTION_VERSION} else {}
+    result = {"_uzi_bonus_projection": projection_version} if projection_version in {V5_PROJECTION_VERSION, V6_PROJECTION_VERSION, V7_PROJECTION_VERSION, V8_PROJECTION_VERSION, V9_PROJECTION_VERSION, PROJECTION_VERSION} else {}
     payload = stored_native_payload(snapshot, version=projection_version)
     marker = (snapshot.query_manifest_json or {}).get("native_symbol_transport") or {}
     if marker.get("version") != "native-symbol-transport-v1":
@@ -752,7 +754,7 @@ class BundleMaterializer:
                     )
 
                     ref.update(research_publication_projection(proof))
-                if projection_version in {V2_PROJECTION_VERSION, V3_PROJECTION_VERSION, V4_PROJECTION_VERSION, V5_PROJECTION_VERSION, V6_PROJECTION_VERSION, V7_PROJECTION_VERSION, PROJECTION_VERSION} and proof.source_kind == "research_document":
+                if projection_version in {V2_PROJECTION_VERSION, V3_PROJECTION_VERSION, V4_PROJECTION_VERSION, V5_PROJECTION_VERSION, V6_PROJECTION_VERSION, V7_PROJECTION_VERSION, V8_PROJECTION_VERSION, V9_PROJECTION_VERSION, PROJECTION_VERSION} and proof.source_kind == "research_document":
                     # The report receives the frozen excerpt, never an external
                     # URL to dereference during analysis. Raw bytes stay in the
                     # content-addressed archive for verification and re-extraction.

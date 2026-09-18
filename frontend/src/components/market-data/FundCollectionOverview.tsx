@@ -8,6 +8,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import { collectionOutcomeMeta, collectionSettledCount, isActiveCollectionJob, jobStatusMeta } from './status'
 import { StatusBadge } from './shared'
 import { fundPortfolioSummary } from './portfolio'
+import { CollectionResearchProgress } from './CollectionJobProgress'
 import type { CollectionDiagnosticBucket, CollectionJob, CollectionTask } from './types'
 
 function dimensionCount(job: CollectionJob) {
@@ -315,6 +316,7 @@ export function FundCollectionOverview({ job, childJobs, jobDetails, actionLoadi
                 {child.progress.provider && settled < child.progress.total ? (
                   <small>上游 {child.progress.provider.completed}/{child.progress.provider.total} · {child.progress.provider.phase}</small>
                 ) : null}
+                <CollectionResearchProgress progress={child.progress} />
               </div>
             </article>
           )

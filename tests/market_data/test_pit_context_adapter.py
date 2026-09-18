@@ -141,6 +141,13 @@ def test_industry_archive_filters_future_classification_and_uses_cutoff_metrics(
     assert result["growth"]["value_pct"] == 20.0
     assert result["cycle"]["stage"] == "expansion"
     assert result["availability"] == "available"
+    assert result["historical_evidence"] == []
+    assert [row["provider"] for row in result["structured_sources"]] == [
+        "cninfo.industry_change", "cninfo.industry_pe",
+    ]
+    assert all(row["source_kind"] == "structured_api" and "url" not in row
+               for row in result["structured_sources"])
+    assert result["structured_sources"][1]["query"]["as_of_date"] == target.isoformat()
 
 
 def test_chain_uses_only_report_visible_before_cutoff() -> None:

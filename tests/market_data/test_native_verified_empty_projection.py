@@ -176,7 +176,7 @@ def test_zero_query_source_survives_database_and_bundle_without_changing_old_man
         args = {"symbols": ["600519.SH"], "as_of_date": AS_OF, "tenant_id": "t", "user_id": "u", "context": {}}
         old = gateway.freeze_report_manifest(**args, workflow_pins={"snapshot_projection_version": "uzi-dim-result-v6", "research_profile": "lite"})
         new = gateway.freeze_report_manifest(**args, workflow_pins={"research_profile": "lite"})
-        assert new["workflow_pins"]["snapshot_projection_version"] == "uzi-dim-result-v8"
+        assert new["workflow_pins"]["snapshot_projection_version"] == "uzi-dim-result-v10"
         loaded = gateway.load_frozen_report_manifest(manifest_id=old["manifest_id"], manifest_hash=old["manifest_hash"], tenant_id="t", user_id="u")
         assert loaded["items"][0]["snapshots"] == old["items"][0]["snapshots"]
         assert new["manifest_hash"] != old["manifest_hash"]

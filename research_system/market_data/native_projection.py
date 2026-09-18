@@ -12,6 +12,7 @@ from copy import deepcopy
 from typing import Any
 
 from research_system.market_data.contracts import canonical_hash
+from research_system.market_data.native_numbers import project_host_numbers
 
 LEGACY_PROJECTION_VERSION = "legacy-v1"
 V2_PROJECTION_VERSION = "uzi-dim-result-v2"
@@ -20,10 +21,12 @@ V4_PROJECTION_VERSION = "uzi-dim-result-v4"
 V5_PROJECTION_VERSION = "uzi-dim-result-v5"
 V6_PROJECTION_VERSION = "uzi-dim-result-v6"
 V7_PROJECTION_VERSION = "uzi-dim-result-v7"
-PROJECTION_VERSION = "uzi-dim-result-v8"
+V8_PROJECTION_VERSION = "uzi-dim-result-v8"
+V9_PROJECTION_VERSION = "uzi-dim-result-v9"
+PROJECTION_VERSION = "uzi-dim-result-v10"
 EMPTY_INPUT_VERSION = "native-empty-input-v1"
 PROJECTION_VERSIONS = frozenset(
-    {LEGACY_PROJECTION_VERSION, V2_PROJECTION_VERSION, V3_PROJECTION_VERSION, V4_PROJECTION_VERSION, V5_PROJECTION_VERSION, V6_PROJECTION_VERSION, V7_PROJECTION_VERSION, PROJECTION_VERSION}
+    {LEGACY_PROJECTION_VERSION, V2_PROJECTION_VERSION, V3_PROJECTION_VERSION, V4_PROJECTION_VERSION, V5_PROJECTION_VERSION, V6_PROJECTION_VERSION, V7_PROJECTION_VERSION, V8_PROJECTION_VERSION, V9_PROJECTION_VERSION, PROJECTION_VERSION}
 )
 UNAVAILABLE_QUALITIES = frozenset(
     {
@@ -66,13 +69,17 @@ def native_payload(
         raise ValueError(f"unsupported snapshot projection version: {version}")
     if version == V3_PROJECTION_VERSION:
         return _native_payload_v3(snapshot)
-    if version == PROJECTION_VERSION:
+    if version in {V8_PROJECTION_VERSION, V9_PROJECTION_VERSION, PROJECTION_VERSION}:
         disclosure = _historical_availability_payload(snapshot)
         if disclosure:
             return disclosure
-    if version in {V7_PROJECTION_VERSION, PROJECTION_VERSION}:
-        return _native_payload_v4(snapshot, payload=stored_native_payload(snapshot, version=version),
-                                  promote_verified_empty=False)
+    if version in {V7_PROJECTION_VERSION, V8_PROJECTION_VERSION, V9_PROJECTION_VERSION, PROJECTION_VERSION}:
+        data = _native_payload_v4(snapshot, payload=stored_native_payload(snapshot, version=version),
+                                 promote_verified_empty=False)
+        if version in {V9_PROJECTION_VERSION, PROJECTION_VERSION} and _host_historical_numbers(snapshot):
+            return project_host_numbers(data, snapshot.dimension,
+                                        include_display_aliases=version == PROJECTION_VERSION)
+        return data
     if version in {V4_PROJECTION_VERSION, V5_PROJECTION_VERSION, V6_PROJECTION_VERSION}:
         return _native_payload_v4(snapshot)
     # Frozen v1/v2 manifests must retain their exact old projection, including
@@ -102,6 +109,26 @@ def native_payload(
     return deepcopy(
         {str(k): v for k, v in payload.items() if not str(k).startswith("_")}
     )
+
+
+def _host_historical_numbers(snapshot: Any) -> bool:
+    """Identify our historical bridge, never reinterpret native fetch results.
+
+    V1–V8 keep their original bytes; V9 retains its numeric-only aliases.
+    New manifests explicitly pin V10; the
+    persisted snapshot, old materialized inputs and their hashes do not change.
+    """
+    manifest = dict(getattr(snapshot, "query_manifest_json", None) or {})
+    envelope = (getattr(snapshot, "payload_json", None) or {}).get("_uzi_raw_result")
+    provider = manifest.get("provider")
+    providers = {
+        "0_basic": {"akshare_market", "efinance_market", "baostock_market", "direct_http_market", "tushare_market"},
+        "1_financials": {"akshare_fundamental"},
+    }
+    return (manifest.get("pit_mode") == "historical_reconstruction"
+            and manifest.get("pit_safe") is True
+            and provider in providers.get(getattr(snapshot, "dimension", None), set())
+            and isinstance(envelope, Mapping) and envelope.get("source") == provider)
 
 
 def _pit_rejected(manifest: Mapping[str, Any]) -> bool:
@@ -191,7 +218,7 @@ def stored_native_payload(snapshot: Any, *, version: str = PROJECTION_VERSION) -
     stored = dict(getattr(snapshot, "payload_json", None) or {})
     manifest = dict(getattr(snapshot, "query_manifest_json", None) or {})
     marker = manifest.get("native_empty_input")
-    if version not in {V7_PROJECTION_VERSION, PROJECTION_VERSION} or stored or marker is None:
+    if version not in {V7_PROJECTION_VERSION, V8_PROJECTION_VERSION, V9_PROJECTION_VERSION, PROJECTION_VERSION} or stored or marker is None:
         return stored
     if (manifest.get("collection_outcome") != "verified_empty"
             or not isinstance(marker, Mapping) or marker.get("version") != EMPTY_INPUT_VERSION
@@ -390,14 +417,14 @@ def project_native_result(
         message = failure.get("message") if isinstance(failure, Mapping) else None
         if not result.get("error"):
             result["error"] = str(message or "historical provider failure")
-    if version in {V3_PROJECTION_VERSION, V4_PROJECTION_VERSION, V5_PROJECTION_VERSION, V6_PROJECTION_VERSION, V7_PROJECTION_VERSION, PROJECTION_VERSION}:
+    if version in {V3_PROJECTION_VERSION, V4_PROJECTION_VERSION, V5_PROJECTION_VERSION, V6_PROJECTION_VERSION, V7_PROJECTION_VERSION, V8_PROJECTION_VERSION, V9_PROJECTION_VERSION, PROJECTION_VERSION}:
         # Keep only the upstream error/_timeout already present in its envelope.
         # A strict collection gap must not manufacture an upstream exception or
         # downgrade the native final empty-dimension check from critical.
         disclosure = _gap_disclosure(snapshot)
         if disclosure:
             result["_market_data_gap"] = disclosure
-    if version in {V7_PROJECTION_VERSION, PROJECTION_VERSION} and manifest.get("collection_outcome") == "verified_empty":
+    if version in {V7_PROJECTION_VERSION, V8_PROJECTION_VERSION, V9_PROJECTION_VERSION, PROJECTION_VERSION} and manifest.get("collection_outcome") == "verified_empty":
         result["_market_data_observation"] = {
             "collection_outcome": "verified_empty", "is_research_fact": False,
             "native_input_retained": bool(stored),

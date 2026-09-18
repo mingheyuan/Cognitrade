@@ -86,6 +86,7 @@ def test_binding_cannot_guess_or_mix_versions(case, code):
         value["evidence_id"] = "other-stock-or-unfrozen-evidence"
     else:
         rows.append({**selected, "observed_at": "2099-01-01",
+                     "content_hash": "different-source-version",
                      "evidence_id": "newer" if case == "ambiguous_url" else selected["evidence_id"]})
     before = deepcopy(context)
     with pytest.raises(ValidationError) as caught:
@@ -96,11 +97,8 @@ def test_binding_cannot_guess_or_mix_versions(case, code):
     assert context == before
 
 
-@pytest.mark.parametrize("field,value", [
-    ("url", "https://unrelated.example/document"),
-    ("retrieved_at", "2099-01-01"),
-])
-def test_unique_document_id_joins_metadata_instead_of_rejecting_transcription(field, value):
+def test_unique_document_id_joins_observation_metadata():
+    field, value = "retrieved_at", "2099-01-01"
     rows, doc, _, context = inputs()
     original = deepcopy(rows)
     context["citation_binding_audit"] = []
@@ -115,6 +113,24 @@ def test_unique_document_id_joins_metadata_instead_of_rejecting_transcription(fi
     assert value not in json.dumps(audit)
 
 
+def test_optional_id_cannot_replace_a_new_source_url_with_an_old_pdf():
+    rows, doc, _, context = inputs()
+    before = deepcopy(rows)
+    url = "https://www.pbc.gov.cn/release/new.html"
+    supplied = {**citation(doc), "url": url}
+    result = q.QualitativeEvidence.model_validate(supplied, context=context)
+    assert result.url == url and result.evidence_id is None
+    assert result.finding == supplied["finding"] and result.retrieved_at is None
+    assert rows == before
+
+
+def test_native_url_selects_its_own_document_not_a_conflicting_optional_id():
+    _, doc, _, context = inputs()
+    other = next(row for row in context["frozen_citation_bindings"] if row["url"] != doc["url"])
+    result = q.QualitativeEvidence.model_validate({**citation(doc), "url": other["url"]}, context=context)
+    assert result.url == other["url"] and result.evidence_id == other["evidence_id"]
+
+
 def test_wrong_optional_id_does_not_block_a_unique_frozen_native_url():
     rows, doc, _, context = inputs()
     before = deepcopy(rows)
@@ -125,6 +141,37 @@ def test_wrong_optional_id_does_not_block_a_unique_frozen_native_url():
     assert result.url == doc["url"] and result.retrieved_at == doc["observed_at"]
     assert result.finding == value["finding"] and rows == before
     assert context["citation_binding_audit"][0]["corrected_fields"] == ["evidence_id"]
+
+
+def test_wrong_optional_id_keeps_new_url_for_separate_evidence_recovery():
+    _, doc, bundle, context = inputs()
+    supplied = {**citation(doc), "url": "https://www.pbc.gov.cn/release/new.html",
+                "evidence_id": "reader-document-hash-not-an-evidence-id"}
+    before = deepcopy((supplied, context))
+    parsed = q.QualitativeEvidence.model_validate(supplied, context=context)
+    assert parsed.url == supplied["url"] and parsed.evidence_id is None
+    assert parsed.retrieved_at is None and parsed.finding == supplied["finding"]
+    group = q.QualitativeGroupResult.model_validate({
+        "agent_reviewed": True, "group_label": "A · Macro-Policy", "dimensions": [
+            {"dimension_id": key, "evidence": [parsed.model_dump(),
+                {"source": "unknown", "finding": "另一项事实缺少依据。"}],
+             "conclusion": "不能把新 URL 视为已核实证据。"}
+            for key in ("3_macro", "13_policy")],
+    })
+    from research_system.market_data.research_requests import pending_source_requests
+    assert pending_source_requests(group, bundle)
+    with pytest.raises(ValueError, match="qualitative_ungrounded_url"):
+        q._validate_group(group, ("3_macro", "13_policy"), bundle)
+    assert (supplied, context) == before
+
+
+def test_missing_fact_disclosure_with_wrong_optional_id_never_becomes_evidence():
+    _, _, _, context = inputs()
+    value = {"source": "unknown", "finding": "原文未披露该字段，不能量化。",
+             "evidence_id": "mistyped-optional-hint", "retrieved_at": "2099-01-01"}
+    parsed = q.QualitativeEvidence.model_validate(value, context=context)
+    assert parsed.url is parsed.evidence_id is parsed.retrieved_at is None
+    assert parsed.finding == value["finding"] and value["retrieved_at"] == "2099-01-01"
 
 
 def test_archive_without_observation_never_invents_retrieval_date():
@@ -203,3 +250,33 @@ def test_duplicate_bindings_with_identical_metadata_do_not_pick_arbitrary_id():
     rows.append({**selected, "evidence_id": "same-document-another-link"})
     result = q.QualitativeEvidence.model_validate(citation(doc, by_id=False), context=context)
     assert result.evidence_id is None and result.retrieved_at == doc["observed_at"]
+
+
+@pytest.mark.parametrize("supplied_date", [None, "wrong-observation-date"])
+def test_same_original_observed_twice_is_not_a_conflicting_source_version(supplied_date):
+    _, doc, _, context = inputs()
+    rows = context["frozen_citation_bindings"]
+    selected = next(row for row in rows if row["evidence_id"] == doc["id"])
+    rows.append({**selected, "evidence_id": "same-bytes-later-observation",
+                 "observed_at": "2026-09-12T00:00:00Z"})
+    context["citation_binding_audit"] = []
+    before = deepcopy(rows)
+    value = {**citation(doc, by_id=False), "retrieved_at": supplied_date}
+    result = q.QualitativeEvidence.model_validate(value, context=context)
+    assert result.url == doc["url"] and result.finding == value["finding"]
+    assert result.evidence_id is result.retrieved_at is None
+    audit = context["citation_binding_audit"][0]
+    assert audit["equivalent_evidence_ids"] == sorted([doc["id"], "same-bytes-later-observation"])
+    assert audit["content_hash"] == selected["content_hash"]
+    assert audit["observation_resolution"] == "multiple_observations_same_original_no_date_chosen"
+    assert rows == before
+
+
+def test_wrong_observation_cannot_resolve_different_original_versions():
+    _, doc, _, context = inputs()
+    selected = next(row for row in context["frozen_citation_bindings"] if row["evidence_id"] == doc["id"])
+    context["frozen_citation_bindings"].append({**selected, "evidence_id": "different-version",
+        "observed_at": "2026-09-12T00:00:00Z", "content_hash": "other-original-hash"})
+    with pytest.raises(ValidationError, match="qualitative_archive_binding_ambiguous"):
+        q.QualitativeEvidence.model_validate({**citation(doc, by_id=False),
+            "retrieved_at": "2026-09-02"}, context=context)

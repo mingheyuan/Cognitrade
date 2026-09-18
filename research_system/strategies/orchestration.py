@@ -474,6 +474,17 @@ class ReportOrchestrationService:
                 and (not manual or strategy_version_id is None)
             ):
                 raise StrategyConflict("assignment_not_active", "Assignment 已禁用或暂停")
+            report_time_modes = None
+            if is_report_conditions(document):
+                # Pin intent at creation, not when a queued/resumed job runs.
+                # Scheduled/live revisions retain their settlement rule.
+                schedule = {**document.schedule_defaults.model_dump(mode="json"),
+                            **dict(assignment.schedule_json or {})}
+                today = datetime.now(ZoneInfo(str(schedule.get("timezone") or "Asia/Shanghai"))).date()
+                report_time_modes = {
+                    day.isoformat(): "historical_replay" if manual and day < today else "live"
+                    for day in dates
+                }
             key_payload = {
                 "tenant_id": scope.tenant_id,
                 "user_id": scope.user_id,
@@ -485,6 +496,8 @@ class ReportOrchestrationService:
                 "fund_bundle_id": fund_bundle_id,
                 "manual": manual,
             }
+            if report_time_modes is not None:
+                key_payload["report_time_modes"] = report_time_modes
             idempotency_key = f"daily-report:{_hash(key_payload)}"
             if force_new:
                 idempotency_key += f":{generate_ulid()}"
@@ -511,6 +524,12 @@ class ReportOrchestrationService:
                 "research_profile": document.report_inputs.research_profile,
                 "pin_set_hash": self._pin_hash(document),
             }
+            if report_time_modes is not None:
+                request["report_time_modes"] = report_time_modes
+                request["report_pin_set_hashes"] = {
+                    day: self._pin_hash(document, report_time_mode=mode)
+                    for day, mode in report_time_modes.items()
+                }
             job = OrchestrationJob(
                 tenant_id=scope.tenant_id,
                 user_id=scope.user_id,
@@ -1028,7 +1047,8 @@ class ReportOrchestrationService:
                 assignment_id,
                 strategy_version_id=strategy_version_id,
             )
-            pin_hash = self._pin_hash(document)
+            report_time_mode = dict(request.get("report_time_modes") or {}).get(as_of.isoformat(), "live")
+            pin_hash = self._pin_hash(document, report_time_mode=report_time_mode)
             uzi_pin_hash = self._uzi_pin_hash(document)
             existing = session.scalar(
                 select(DailyReportSet)
@@ -1115,6 +1135,7 @@ class ReportOrchestrationService:
                 as_of=as_of,
                 reason="point_in_time_fund_report_unavailable",
                 pin_hash=pin_hash,
+                report_time_mode=report_time_mode,
             )
             self._recompute_or_carry(
                 scope,
@@ -1176,6 +1197,7 @@ class ReportOrchestrationService:
                     fund_payload=fund_payload,
                     top_n=document.report_inputs.top_n,
                     initial_gaps=[] if pit_verified else ["point_in_time_unverified"],
+                    report_time_mode=report_time_mode,
                 )
             except IntegrityError:
                 report_set_id = self._latest_report_set_id(
@@ -1388,7 +1410,9 @@ class ReportOrchestrationService:
         fund_payload: dict[str, Any],
         top_n: int,
         initial_gaps: list[str],
+        report_time_mode: str = "live",
     ) -> str:
+        fund_payload = {**fund_payload, "report_time_mode": report_time_mode}
         with self.database.session() as session:
             latest_revision = int(
                 session.scalar(
@@ -1415,6 +1439,7 @@ class ReportOrchestrationService:
                     version=version,
                     as_of=as_of,
                     revision=revision,
+                    report_time_mode=report_time_mode,
                 ),
                 pin_set_hash=pin_hash,
                 revision=revision,
@@ -1460,6 +1485,7 @@ class ReportOrchestrationService:
         as_of: date,
         reason: str,
         pin_hash: str,
+        report_time_mode: str = "live",
     ) -> str:
         report_set_id = self._begin_report_set(
             scope,
@@ -1478,6 +1504,7 @@ class ReportOrchestrationService:
             },
             top_n=int(parse_strategy_document(version.document_json).report_inputs.top_n),
             initial_gaps=[reason, "point_in_time_unverified"],
+            report_time_mode=report_time_mode,
         )
         self._finalize_blocked_existing(report_set_id, reason=reason)
         return report_set_id
@@ -2670,14 +2697,20 @@ class ReportOrchestrationService:
         return is_trading_day(value)
 
     @staticmethod
-    def _pin_hash(document: StrategyDocumentV1) -> str:
-        return _hash(
+    def _pin_hash(document: StrategyDocumentV1, *, report_time_mode: str = "live") -> str:
+        if report_time_mode not in {"live", "historical_replay"}:
+            raise ValueError("unknown report time mode")
+        base_hash = _hash(
             {
                 "pins": document.pins.model_dump(mode="json"),
                 "research_profile": document.report_inputs.research_profile,
                 "top_n": document.report_inputs.top_n,
             }
         )
+        # Separate report lifecycles so a live job cannot reuse a retrospective
+        # report (or its BUILDING row). Native stock-analysis caching is separate.
+        return (_hash({"pin_set_hash": base_hash, "report_time_mode": "historical_replay_v1"})
+                if report_time_mode == "historical_replay" else base_hash)
 
     @staticmethod
     def _report_effective_date(
@@ -2687,9 +2720,12 @@ class ReportOrchestrationService:
         as_of: date,
         revision: int,
         now: datetime | None = None,
+        report_time_mode: str = "live",
     ) -> date:
+        if report_time_mode not in {"live", "historical_replay"}:
+            raise ValueError("unknown report time mode")
         first_effective = next_weekday(as_of)
-        if revision <= 1:
+        if report_time_mode == "historical_replay" or revision <= 1:
             return first_effective
         document = parse_strategy_document(version.document_json)
         schedule = {

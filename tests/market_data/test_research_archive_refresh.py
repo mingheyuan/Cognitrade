@@ -58,7 +58,7 @@ def stage(tmp_path, monkeypatch):
         old_evidence_id = original_evidence.id
         old_metadata = dict(original_evidence.metadata_json)
 
-    def run(mode="force_all", *, cancellation=None, max_duration_seconds=600):
+    def run(mode="force_all", *, cancellation=None, max_duration_seconds=600, archive_collector=None):
         job = coordinator.create_job(
             tenant_id="tenant",
             user_id="user",
@@ -76,7 +76,7 @@ def stage(tmp_path, monkeypatch):
             job_id=job["id"],
             settings=settings,
             registry=DEFAULT_DIMENSION_REGISTRY,
-            archive_collector=SimpleNamespace(collect=forbidden),
+            archive_collector=archive_collector or SimpleNamespace(collect=forbidden),
             cancellation=cancellation,
             max_duration_seconds=max_duration_seconds,
         )
@@ -190,8 +190,9 @@ def test_cancel_or_expired_budget_does_not_publish_refresh(stage, boundary):
     assert result["attempts"][0]["status"] == "cancelled"
 
 
-def test_force_all_recovers_original_from_prior_same_day_revision_when_structured_refresh_has_none(
-    stage,
+@pytest.mark.parametrize("mode", ["force_all", "missing_or_stale"])
+def test_recovers_original_from_prior_same_day_revision_when_structured_refresh_has_none(
+    stage, mode,
 ):
     with stage.database.session() as session:
         repo = MarketDataRepository(session)
@@ -203,13 +204,14 @@ def test_force_all_recovers_original_from_prior_same_day_revision_when_structure
         )
         fresh = SnapshotIngestionService(repo).ingest(value)
         fresh_id, fresh_hash = fresh.id, fresh.content_hash
-    result = stage.run()
+    result = stage.run(mode)
     assert result["persisted_snapshot_count"] == 1
     with stage.database.session() as session:
         repo = MarketDataRepository(session)
         revised = repo.require_snapshot(result["persisted_snapshots"][0]["snapshot_id"])
         assert revised.payload_json == repo.require_snapshot(fresh_id).payload_json
         assert repo.require_snapshot(fresh_id).content_hash == fresh_hash
+        assert repo.require_snapshot(stage.original_id).content_hash == stage.original_hash
         proof = next(
             row
             for row in repo.list_snapshot_evidence(revised.id)
@@ -219,6 +221,47 @@ def test_force_all_recovers_original_from_prior_same_day_revision_when_structure
             proof.metadata_json["text_reextraction"]["source_snapshot_id"]
             == stage.original_id
         )
+        assert proof.metadata_json["text_reextraction"]["network_requests"] == 0
+        assert _database_utc(proof.published_at) == stage.old.published_at
+        assert _database_utc(proof.observed_at) == stage.old.observed_at
+        chosen = next(row for row in SnapshotResolver(repo).coverage(
+            "600519.SH", "CN_EQUITY", date(2026, 8, 20)).dimensions
+            if row.dimension == "8_materials")
+        assert chosen.snapshot_id == revised.id
+
+
+@pytest.mark.parametrize("damage", ["revoked", "future", "other_day", "other_symbol", "other_contract", "other_zone"])
+def test_gap_fill_never_borrows_out_of_scope_or_invalid_prior_archive(stage, damage):
+    changes = {
+        "revoked": {"revoked_at": LATER},
+        "future": {"published_at": CUTOFF + timedelta(days=1)},
+        "other_day": {"as_of_date": date(2026, 8, 19)},
+        "other_symbol": {"symbol": "000001.SZ"},
+        "other_contract": {"contract_version": "unrelated-contract"},
+        "other_zone": {"exchange_timezone": "UTC"},
+    }
+    with stage.database.session() as session:
+        # Fault-inject a nonqualifying prior candidate; normal ingestion is
+        # immutable. A failed cache match must not change the current raw.
+        session.execute(update(MarketDataSnapshot).where(
+            MarketDataSnapshot.id == stage.original_id).values(**changes[damage]))
+        fresh = SnapshotIngestionService(MarketDataRepository(session)).ingest(_input(
+            "8_materials", published_at=CUTOFF - timedelta(minutes=1),
+            observed_at=CUTOFF, ingested_at=CUTOFF))
+        fresh_id, fresh_hash = fresh.id, fresh.content_hash
+    lookups = []
+
+    def empty_collector(**scope):
+        lookups.append(scope)
+        return {"status": "missing", "evidence": [], "attempts": []}
+
+    result = stage.run("missing_or_stale", archive_collector=SimpleNamespace(collect=empty_collector))
+    assert result["persisted_snapshot_count"] == 0
+    assert result["attempts"][0]["status"] == "missing"
+    assert "acquisition_mode" not in result["attempts"][0]
+    assert len(lookups) == 1 and lookups[0]["symbol"] == "600519.SH"
+    with stage.database.session() as session:
+        assert session.get(MarketDataSnapshot, fresh_id).content_hash == fresh_hash
 
 
 @pytest.mark.parametrize(
