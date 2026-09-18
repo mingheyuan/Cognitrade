@@ -17,6 +17,9 @@ class DeferredExecutor:
 class Provider:
     settings = SimpleNamespace(
         uzi_llm_request_timeout_seconds=100,
+        # Boundary cases below deliberately use a 100s queue plus 100s request.
+        # Production queue time is independently configured, not request time.
+        uzi_llm_queue_timeout_seconds=100,
         uzi_llm_max_concurrency=4,
         uzi_llm_transient_retries=0,
     )
@@ -64,6 +67,31 @@ def test_dispatch_deadline_and_separate_wait_timing(monkeypatch):
     # The worker's context must not leak into an unrelated synchronous call.
     support.parse_uzi_structured(provider)
     assert provider.calls[1]["deadline_at"] == 1240
+
+
+@pytest.mark.parametrize("configured,expected_queue", [(400, 400), (None, 1200)])
+def test_executor_wait_uses_independent_queue_budget_without_extending_request(
+    monkeypatch, configured, expected_queue,
+):
+    now = [1000.0]
+    monkeypatch.setattr(support, "monotonic", lambda: now[0])
+    pool, provider, progress = DeferredExecutor(), Provider(), []
+    provider.settings = SimpleNamespace(**vars(provider.settings))
+    if configured is None:
+        del provider.settings.uzi_llm_queue_timeout_seconds
+    else:
+        provider.settings.uzi_llm_queue_timeout_seconds = configured
+    submit(pool, support.parse_uzi_structured, provider, progress_callback=progress.append)
+    # More than a generation budget, but still within the actual queue budget.
+    now[0] += 120
+    assert pool.work() == "ok"
+    assert provider.calls[0]["deadline_at"] == 1000 + expected_queue + 100
+    assert provider.calls[0]["timeout_seconds"] == 100
+    timing = progress[-1]["request_timing"]
+    assert timing["queue_budget_seconds"] == expected_queue
+    assert timing["request_budget_seconds"] == 100
+    assert timing["executor_wait_seconds"] == 120
+    assert timing["remaining_budget_seconds"] == expected_queue + 100 - 120
 
 
 def test_output_repair_shares_dispatch_deadline_without_counting_http_as_queue(monkeypatch):
