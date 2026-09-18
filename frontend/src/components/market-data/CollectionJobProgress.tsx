@@ -1,6 +1,43 @@
 import { collectionSettledCount, progressValue } from './status'
 import type { CollectionProgress } from './types'
 
+export function CollectionResearchProgress({ progress }: { progress: CollectionProgress }) {
+  const research = progress.research_enrichment
+  if (!research) return null
+  const issueLabels: Record<string, string> = {
+    model_failed: '模型执行失败', failed: '执行失败', input_invalid: '输入校验未通过',
+    original_documents_missing: '缺少已归档原文', provider_unavailable: '模型不可用',
+    cancelled: '已取消', deadline_exceeded: '共享时限已到',
+  }
+  const issues = (research.groups || []).filter((group) => Boolean(issueLabels[group.status || '']))
+  const issueReason = (group: typeof issues[number]) => {
+    if (group.failure?.provider_error_code === 'serverOverloaded') return '模型上游过载（serverOverloaded）'
+    const failureLabels: Record<string, string> = {
+      llm_transport_timeout: '模型请求超时', llm_queue_timeout: '模型排队超时',
+      llm_stage_deadline: '阶段时限已到', llm_cancelled: '已取消',
+      llm_output_repetition: '检测到模型重复输出', agent_content_invalid: '模型输出校验未通过',
+    }
+    return failureLabels[group.failure?.kind || ''] || issueLabels[group.status || '']
+  }
+  const status = ({
+    running: '进行中', completed: '已结算', succeeded: '已结算', partial: '仍有缺口', failed: '执行失败',
+    cancelled: '已取消', deadline_exceeded: '共享时限已到', not_run: '未执行', not_requested: '未请求',
+    provider_unavailable: '模型不可用',
+  }[research.status] || research.status)
+  return <div className="mdc-provider-progress" aria-label="研究证据整理进度">
+    研究证据整理：{status} · 已返回 {research.groups?.length || 0} 组 · 已保存 {research.revisions?.length || 0} 个数据修订
+    {issues.length > 0 ? ` · 异常 ${issues.length} 组` : ''}
+    {research.status === 'running' ? ' · 结构化槽位已结算，任务仍在继续，不是落库卡住' : ''}
+    {' · 不代表报告自审通过'}
+    {issues.length > 0 ? <details>
+      <summary>查看异常分组</summary>
+      <ul>{issues.map((group, index) => <li key={`${group.symbol}-${group.group}-${index}`}>
+        {group.symbol || '股票未标注'} · {group.group || '分组未标注'}：{issueReason(group)}
+      </li>)}</ul>
+    </details> : null}
+  </div>
+}
+
 export function CollectionJobProgress({ progress }: { progress: CollectionProgress }) {
   const value = progressValue(progress)
   const settled = collectionSettledCount(progress)
@@ -16,6 +53,7 @@ export function CollectionJobProgress({ progress }: { progress: CollectionProgre
     completed: '数据源返回',
     cache_hit: '读取缓存',
     persisting: '校验并落库',
+    settled: '结构化槽位已结算',
     failed: '数据源调用失败',
   }[provider.phase] || provider.phase) : null
   return (
@@ -44,6 +82,7 @@ export function CollectionJobProgress({ progress }: { progress: CollectionProgre
           {' · 不代表报告自审通过'}
         </small>
       ) : null}
+      <CollectionResearchProgress progress={progress} />
     </div>
   )
 }

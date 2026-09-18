@@ -55,6 +55,7 @@ class Settings(BaseModel):
     uzi_llm_medium_request_timeout_seconds: int = 600
     uzi_llm_deep_request_timeout_seconds: int = 900
     uzi_llm_buy_zone_request_timeout_seconds: int = 300
+    uzi_llm_queue_timeout_seconds: int = 1200
     uzi_llm_max_concurrency: int = 2
     uzi_llm_transient_retries: int = 2
     uzi_llm_retry_base_seconds: float = 2.0
@@ -105,6 +106,7 @@ class Settings(BaseModel):
                 self.uzi_llm_medium_request_timeout_seconds,
                 self.uzi_llm_deep_request_timeout_seconds,
                 self.uzi_llm_buy_zone_request_timeout_seconds,
+                self.uzi_llm_queue_timeout_seconds,
             )
         ):
             raise ValueError("profile-specific UZI request timeouts must be positive")

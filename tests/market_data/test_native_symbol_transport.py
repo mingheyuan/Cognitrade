@@ -57,7 +57,7 @@ def _source(extra):
     {"full": "600519.SH", "fund_managers": [], "similar_stocks": None},
     {"fetched_at": "2026-08-20T02:29:00+00:00", "fund_managers": [{"fund_code": "000001"}], "similar_stocks": []},
 ])
-@pytest.mark.parametrize("projection_version", ["uzi-dim-result-v3", "uzi-dim-result-v4", "uzi-dim-result-v5", "uzi-dim-result-v6", "uzi-dim-result-v7", "uzi-dim-result-v8"])
+@pytest.mark.parametrize("projection_version", ["uzi-dim-result-v3", "uzi-dim-result-v4", "uzi-dim-result-v5", "uzi-dim-result-v6", "uzi-dim-result-v7", "uzi-dim-result-v8", "uzi-dim-result-v9", "uzi-dim-result-v10"])
 def test_native_root_presence_survives_ingestion_and_bundle(database, extra, projection_version):
     original, source = _source(extra)
     value = UziSnapshotAdapter().adapt(source, symbol="600519.SH", market="CN_EQUITY", exchange_timezone="Asia/Shanghai", as_of_date=AS_OF)
@@ -72,12 +72,12 @@ def test_native_root_presence_survives_ingestion_and_bundle(database, extra, pro
         assert rows[0]["snapshot_id"] == snapshot.id
         raw = build_uzi_raw(rows, "600519.SH")
         native_data = raw["dimensions"]["0_basic"]["data"]
-        if projection_version in {"uzi-dim-result-v4", "uzi-dim-result-v5", "uzi-dim-result-v6", "uzi-dim-result-v7", "uzi-dim-result-v8"}:
+        if projection_version in {"uzi-dim-result-v4", "uzi-dim-result-v5", "uzi-dim-result-v6", "uzi-dim-result-v7", "uzi-dim-result-v8", "uzi-dim-result-v9", "uzi-dim-result-v10"}:
             assert native_data == original["dimensions"]["0_basic"]["data"]
         else:
             assert "market_overview" in native_data
         for key in ("ticker", "market", "code", "full", "fetched_at", "fund_managers", "similar_stocks"):
-            if projection_version in {"uzi-dim-result-v6", "uzi-dim-result-v7", "uzi-dim-result-v8"} and key in {"code", "full"}:
+            if projection_version in {"uzi-dim-result-v6", "uzi-dim-result-v7", "uzi-dim-result-v8", "uzi-dim-result-v9", "uzi-dim-result-v10"} and key in {"code", "full"}:
                 assert key not in raw
                 continue
             assert (key in raw) == (key in original), key

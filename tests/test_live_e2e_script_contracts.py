@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -413,8 +414,9 @@ def test_wait_preserves_multiple_invocation_timing_and_server_elapsed():
     )
 
 
+@pytest.mark.parametrize("image_metadata_missing", [False, True])
 def test_execution_provenance_hashes_untracked_code_and_redacts_docker_inspection(
-    tmp_path,
+    tmp_path, image_metadata_missing,
 ):
     code = tmp_path / "new_adapter.py"
     code.write_text("fixture = 1\n")
@@ -430,7 +432,7 @@ def test_execution_provenance_hashes_untracked_code_and_redacts_docker_inspectio
         if args[:2] == ["git", "ls-files"]:
             return b"new_adapter.py\0.env\0"
         if args[:2] == ["docker", "ps"]:
-            return b"container-fixture\n" if args[-1].endswith("=api") else b""
+            return b"container-fixture\n" if args[-1].endswith("=api") or image_metadata_missing else b""
         if args[:2] == ["docker", "inspect"]:
             return json.dumps(
                 {
@@ -440,6 +442,8 @@ def test_execution_provenance_hashes_untracked_code_and_redacts_docker_inspectio
                     "started_at": "2026-09-06T01:00:00Z",
                 }
             ).encode()
+        if image_metadata_missing:
+            raise subprocess.CalledProcessError(1, args, stderr=b"SECRET not for export")
         return json.dumps(
             {
                 "image_id": "sha256:actual-image",
@@ -458,6 +462,11 @@ def test_execution_provenance_hashes_untracked_code_and_redacts_docker_inspectio
         }
     ]
     assert original["deployment"]["containers"][0]["image_id"] == "sha256:actual-image"
+    assert original["deployment"]["status"] == "captured"
+    if image_metadata_missing:
+        assert len(original["deployment"]["containers"]) == 2, "Continue inspecting other services"
+        assert all(row["image_metadata_error"] == "CalledProcessError"
+                   and "image" not in row for row in original["deployment"]["containers"])
     assert all(".Config.Env" not in " ".join(args) for args in calls)
     assert "SECRET" not in json.dumps(original)
     code.write_text("fixture = 2\n")
@@ -505,6 +514,47 @@ def test_market_audit_uses_task_snapshot_ids_and_blocked_replay_is_not_zero_trad
     assert run.state["trade_count"] is None
     assert run.state["trading_execution_demonstrated"] is False
     assert "/finance/strategy-backtests" not in seen
+
+
+@pytest.mark.parametrize("delivered", [0, 4])
+def test_cancelled_report_does_not_launch_or_misclassify_replay(delivered):
+    run = runner()
+    counts = {"delivered": delivered, "cancelled": 10 - delivered}
+    run.state.update(
+        native_report="partial_delivery" if delivered else "cancelled",
+        native_report_counts=counts,
+    )
+    run.api = lambda *_: pytest.fail("Cancelled report must not initiate replay")
+    run.backtest()
+    assert run.state["pipeline"] == "cancelled"
+    assert run.state["replay"] == "not_run_cancelled"
+    assert run.state["blocking_stage"] == "report_cancelled"
+    assert run.state["native_report_counts"] == counts
+    assert run.state["trade_count"] is None
+    assert run.state["replay_acceptance"]["backtest_engine_executed"] is False
+
+
+@pytest.mark.parametrize("can_run", [True, False])
+def test_cancelled_report_preserves_existing_replay_without_creating_another(can_run):
+    run = runner()
+    run.state.update(
+        native_report="partial_delivery",
+        native_report_counts={"delivered": 4, "cancelled": 6},
+        strategy_version_id="version",
+    )
+    run.state["stages"]["backtest"] = {"id": "existing-replay"}
+
+    def api(method, path, payload):
+        assert path == "/finance/strategy-backtests/preflight"
+        return {"can_run": can_run}
+
+    run.api = api
+    run.wait = lambda path, **_: {"status": "completed", "result": {"trades": []}}
+    run.backtest()
+    assert run.state["pipeline"] == "cancelled"
+    assert run.state["stages"]["backtest"]["id"] == "existing-replay"
+    assert run.state["replay_acceptance"]["backtest_run_created"] is True
+    assert run.state["trade_count"] == (0 if can_run else None)
 
 
 def test_report_and_backtest_payloads_follow_current_api_contracts(tmp_path):

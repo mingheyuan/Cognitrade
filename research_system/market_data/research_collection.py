@@ -218,10 +218,12 @@ def recover_research_documents(
             snapshot_id = snapshot.id
             refresh_inputs = []
             originals = []
-            if refresh_originals and not source_urls:
-                # A force-all structured refresh can replace the selected raw
-                # snapshot without carrying its previous document links. Look
-                # only within this exact requested stock/day/dimension scope.
+            if (refresh_originals or not inventory["document_count"]) and not source_urls:
+                # A newer structured snapshot can lose the previous document
+                # links even during missing-or-stale collection. Recover only
+                # this exact stock/day/dimension's verified local originals;
+                # keep the selected raw input and create a new bound revision.
+                # Explicit URL requests still fetch precisely those URLs.
                 archive_owner = snapshot
                 if not inventory["document_count"]:
                     for prior in repository.list_snapshots(
@@ -232,6 +234,8 @@ def recover_research_documents(
                         cutoff_at=cutoff_at_for_date(as_of, zone),
                         limit=100,
                     ):
+                        if prior.contract_version != registry.contract_version or prior.exchange_timezone != zone:
+                            continue
                         if _snapshot_pit_visibility_errors(
                             repository, prior, cutoff_at_for_date(as_of, zone)
                         ):

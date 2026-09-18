@@ -155,21 +155,27 @@ def execution_provenance(base_url, *, root=ROOT, command=None):
                         ]
                     )
                 )
-                image = json.loads(
-                    command(
-                        [
-                            "docker",
-                            "image",
-                            "inspect",
-                            "--format",
-                            '{"image_id":{{json .Id}},"repo_digests":{{json .RepoDigests}},"created_at":{{json .Created}}}',
-                            row["image_id"],
-                        ]
+                container = {"service": service, **row}
+                deployment["containers"].append(container)
+                try:
+                    container["image"] = json.loads(
+                        command(
+                            [
+                                "docker",
+                                "image",
+                                "inspect",
+                                "--format",
+                                '{"image_id":{{json .Id}},"repo_digests":{{json .RepoDigests}},"created_at":{{json .Created}}}',
+                                row["image_id"],
+                            ]
+                        )
                     )
-                )
-                deployment["containers"].append(
-                    {"service": service, **row, "image": image}
-                )
+                except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                    # Rebuilding a local tag can remove the old image's
+                    # metadata while its container still runs. Its actual
+                    # image ID remains authoritative; never substitute the
+                    # newly built tag or discard the container identity.
+                    container["image_metadata_error"] = type(exc).__name__
         deployment["status"] = (
             "captured" if deployment["containers"] else "no_local_compose_container"
         )
@@ -975,6 +981,27 @@ class LiveAcceptance:
         self.save()
 
     def backtest(self):
+        report_cancelled = self.state.get("native_report") == "cancelled" or bool(
+            (self.state.get("native_report_counts") or {}).get("cancelled")
+        )
+        if report_cancelled and not (self.state["stages"].get("backtest") or {}).get("id"):
+            # An intentionally interrupted report batch is not a failed E2E,
+            # nor permission to launch a new replay from its partial output.
+            # Keep already delivered reports and their detailed classifications.
+            self.state.update(
+                pipeline="cancelled", blocking_stage="report_cancelled",
+                replay="not_run_cancelled", trade_count=None,
+                trading_execution_demonstrated=False,
+                replay_acceptance={
+                    "schema_version": "uzi-e2e-replay-acceptance-v2",
+                    "backtest_run_created": False,
+                    "backtest_engine_executed": False,
+                    "completed_ledger": False,
+                    "reason": "report_batch_cancelled",
+                },
+            )
+            self.save()
+            return
         request = {
             "strategy_version_id": self.state["strategy_version_id"],
             "fund_code": "020464",
@@ -1009,8 +1036,8 @@ class LiveAcceptance:
                 else "backtest_preflight"
             )
             self.state["pipeline"] = (
-                "failed"
-                if self.state["native_report"] == "generation_failed"
+                "cancelled" if report_cancelled
+                else "failed" if self.state["native_report"] == "generation_failed"
                 else "blocked"
             )
             self.save()
@@ -1061,7 +1088,7 @@ class LiveAcceptance:
             "completed"
             if self.state["native_report"] == "allowed"
             and ledger_completed
-            else "cancelled" if result["status"] == "cancelled"
+            else "cancelled" if result["status"] == "cancelled" or report_cancelled
             else "blocked"
             if self.state["native_report"]
             in {"blocked", "input_blocked", "partial_delivery", "skill_incomplete"}

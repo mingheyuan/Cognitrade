@@ -12,11 +12,13 @@ import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
+from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
 from threading import Event, get_ident
 from time import monotonic
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
     BaseModel,
@@ -72,9 +74,18 @@ QUALITATIVE_SOURCE_ATTRIBUTION_RULES = (
     "SOURCE_ROLES_V1：snapshot_origins 给出结构化事实的原始快照、字段路径和提供者；"
     "这些行情/接口数值可以用于 conclusion 和 associations，明确写出原始来源，不能挂到公司 PDF 上。"
     "采集未查询、映射缺失、接口失败属于数据限制，只能作 unknown 披露，不能引用公司公告当作其出处。"
+    "有界查询返回零条/verified_empty 也是查询状态；不要把它与公告事实合写在一条 PDF finding 中，"
+    "应把公告事实及其 URL 保留为证据，将查询窗口和返回状态另列为无 URL 的 unknown 披露。"
     "evidence 中带文档 URL 的 finding 必须由该文档支持；晚于原文发布时点的实际收盘行情不能归因于该原文。"
     "原始 historical_evidence 字段也可能含旧版接口导航，source_discovery 标出的入口不是研究文章；"
     "不要把它当事实引用或再次提交正文归档。结构化数据本身仍保留，不代表该维度完全无数据。\n"
+    "PUBLICATION_TIME_VIEW_V1：published_at 保留归档原时间，published_at_market / market_publication_date"
+    "仅为该已知时刻按 market_timezone 换算的展示值，不是新证据或原文落款。"
+    "提及当地发布日期时不要直接截取 UTC 日期；事件发生日、报告期、文件落款与发布时刻不能混同，"
+    "草案封面的编制月份不是公开发布月份；原文日期与元数据不一致应分别说明各自含义，"
+    "例如封面标注8月、公开日期为9月1日，应写‘8月编制的草案于9月1日公开’，不能写‘8月发布’。"
+    "公开日期与文件中的估值基准日、董事会审议日也不能相互替代。"
+    "未知发布日期保持未知，visible_by 不得冒充发布日期。\n"
 )
 
 _DIMENSION_TYPES: dict[str, tuple[str, ...]] = {
@@ -184,6 +195,32 @@ class QualitativeGroupResult(BaseModel):
     agent_reviewed: Literal[True]
     group_label: str = Field(min_length=1)
     dimensions: list[QualitativeDimension] = Field(min_length=2, max_length=2)
+
+
+def _qualitative_group_json_schema() -> dict[str, Any]:
+    """Expose the existing citation alternatives to structured decoding.
+
+    Pydantic's after-validator is absent from its generated JSON Schema, so
+    the old wire contract invited factual evidence with both URL and ID null.
+    Keep native URL-only citations, optional archive-ID binding and honest
+    unknowns; the unchanged validators still check binding, sources and counts.
+    Valid cached research needs no invalidation: no delivery rule has changed.
+    """
+    schema = QualitativeGroupResult.model_json_schema()
+    evidence = schema["$defs"]["QualitativeEvidence"]
+    cited = deepcopy(evidence)
+    bound = deepcopy(evidence)
+    unknown = deepcopy(evidence)
+    for variant, field in ((cited, "url"), (bound, "evidence_id")):
+        # Retain existing string constraints, removing only the nullable arm.
+        variant["properties"][field] = next(
+            item for item in variant["properties"][field]["anyOf"]
+            if item.get("type") == "string"
+        )
+        variant["required"] = [*variant["required"], field]
+    unknown["properties"]["source"]["enum"] = ["unknown"]
+    schema["$defs"]["QualitativeEvidence"] = {"anyOf": [cited, bound, unknown]}
+    return schema
 
 
 def apply_qualitative_deep_dive(
@@ -540,6 +577,7 @@ def _evaluate_group(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             schema=QualitativeGroupResult,
+            json_schema_override=_qualitative_group_json_schema(),
             validation_context=local_context,
             temperature=0.1,
             research_profile=research_profile,
@@ -587,7 +625,12 @@ def _group_user_prompt(
     ).read_text(encoding="utf-8")
     prompts = {
         "A · Macro-Policy": "分析增长/通胀/利率/流动性向公司与行业的传导，以及政策目标、实施工具、受益与约束。",
-        "B · Industry-Events": "分析行业生命周期、供需和竞争格局，并区分公告/事件的时间、确定性与财务传导。",
+        "B · Industry-Events": (
+            "分析行业生命周期、供需和竞争格局，并区分公告/事件的时间、确定性与财务传导。"
+            "叙述事件前核对正文中该动作对应的日期：会议召开、审议通过、签约等动作的发生日取自正文，"
+            "不能从公告发布日期或落款推导。日期不同可写‘公告日公开的公告披露，发生日召开会议并审议通过……’；"
+            "正文未明确发生日时只写‘公告日披露……’，不补造发生日期。"
+        ),
         "C · Cost-Transmission": "从已识别原材料映射到相关期货，分析成本变动、价格传导、毛利率时滞与对冲条件。",
     }
     repair_instruction = ""
@@ -1096,10 +1139,34 @@ def _document_representation_view(
     return projected, representations
 
 
+def market_publication_time_view(value: Any, exchange_timezone: str | None) -> dict[str, str]:
+    """Derive a display date only from an explicit instant and known zone.
+
+    Never interpret a legacy naive/date-only value as UTC, or use observation
+    time as publication. The source timestamp and frozen input are untouched.
+    """
+    if not isinstance(value, str) or not exchange_timezone:
+        return {}
+    try:
+        instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if instant.tzinfo is None:
+            return {}
+        local = instant.astimezone(ZoneInfo(exchange_timezone))
+    except (ValueError, TypeError, ZoneInfoNotFoundError):
+        return {}
+    return {"published_at_market": local.isoformat(),
+            "market_publication_date": local.date().isoformat(),
+            "market_timezone": exchange_timezone}
+
+
 def _archived_document_records(
     row: dict[str, Any], *, preserve_full_text: bool = False,
 ) -> list[dict[str, Any]]:
     records = []
+    identity = _symbol_identity(row.get("symbol"))
+    market_zone = {"cn_equity": "Asia/Shanghai", "cn_fund": "Asia/Shanghai", "cn_index": "Asia/Shanghai",
+                   "hk_equity": "Asia/Hong_Kong", "us_equity": "America/New_York"}.get(identity[0]) if identity else None
+    exchange_timezone = row.get("exchange_timezone") or (row.get("query_manifest") or {}).get("exchange_timezone") or market_zone
     for ref in row.get("source_refs") or []:
         if (
             isinstance(ref, dict)
@@ -1115,6 +1182,8 @@ def _archived_document_records(
             metadata = {
                 "evidence_id": ref.get("id"),
                 **{key: ref.get(key) for key in ("provider", "published_at", "observed_at", "grade")},
+                **{key: ref[key] for key in ("publisher_published_at", "visible_by", "publication_time_basis", "publication_time_note") if key in ref},
+                **market_publication_time_view(ref.get("published_at"), exchange_timezone),
             }
             for record in extracted:
                 record.update(metadata)
@@ -1201,7 +1270,7 @@ def _dimension_context(
         "snapshot_origins": snapshot_origins,
         "source_discovery": source_discovery,
         "document_publications": {
-            url: list(dict.fromkeys(str(binding["published_at"]) for record in (stock_documents or [])
+            url: list(dict.fromkeys(str(binding.get("published_at_market") or binding["published_at"]) for record in (stock_documents or [])
                      if record["url"] == url for binding in record.get("archive_bindings", [])
                      if binding.get("published_at")))
             for url in {record["url"] for record in (stock_documents or [])}

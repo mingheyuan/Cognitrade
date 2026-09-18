@@ -15,6 +15,7 @@ from research_system.runtime.providers.errors import (
     LLMCancelledError,
     LLMDeadlineError,
     LLMProviderError,
+    LLMOutputRepetitionError,
     LLMUnavailableError,
     StructuredOutputError,
 )
@@ -172,6 +173,91 @@ def test_terminal_event_finishes_without_waiting_for_stream_eof(sdk):
     assert p.parse(system_prompt="s", user_prompt="u", schema=Value, timeout_seconds=0.2).value == 1
     assert p.last_call_metadata["request_trace"]["terminal_status"] == "completed"
     assert not sdk.get("interrupted") and sdk["closed"] and sdk["stream_exited"]
+
+
+def test_timeout_records_bounded_output_shape_without_text(sdk):
+    block = "private-evidence" * 32  # exactly 512 characters
+    sdk["events"] = [
+        ("item/started", {"item": {"id": "message-1", "type": "agentMessage", "phase": "final_answer"}}),
+        ("item/agentMessage/delta", {"itemId": "message-1", "delta": block[:19]}),
+        ("item/agentMessage/delta", {"itemId": "message-1", "delta": block[19:] + block * 9}),
+    ]
+    sdk["wait_after_events"] = True
+    p = provider()
+    with pytest.raises(LLMProviderError):
+        p.parse(system_prompt="s", user_prompt="u", schema=Value, timeout_seconds=0.05)
+    trace = p.last_call_metadata["request_trace"]["stop_snapshot"]["output_diagnostics"]
+    row = trace["messages"][0]
+    assert row["phase"] == "final_answer" and not row["completed"]
+    assert row["streamed_characters"] == 5120
+    assert row["max_consecutive_identical_512_character_blocks"] == 10
+    assert "private-evidence" not in json.dumps(p.last_call_metadata)
+
+
+def test_output_diagnostics_do_not_grow_with_message_history():
+    from research_system.runtime.providers.codex_output_trace import OutputTrace
+    trace = OutputTrace()
+    for index in range(50):
+        trace.record("item/started", {"item": {"id": str(index), "type": "agentMessage", "phase": "commentary"}})
+        trace.record("item/agentMessage/delta", {"itemId": str(index), "delta": "text" * 200})
+        trace.record("item/completed", {"item": {"id": str(index), "type": "agentMessage", "phase": "commentary"}})
+    result = trace.snapshot()
+    assert result["message_count"] == 50 and len(result["messages"]) == 8
+    assert all(row["completed"] for row in result["messages"])
+    assert all(len(message.pending) < 512 for message in trace.messages.values())
+
+
+def test_opted_in_repetition_interrupts_and_reaps_before_returning(sdk):
+    sdk["events"] = [
+        ("item/started", {"item": {"id": "m", "type": "agentMessage", "phase": "final_answer"}}),
+        ("item/agentMessage/delta", {"itemId": "m", "delta": '{"text":"' + "private-loop" * 500}),
+    ]
+    sdk["wait_after_events"] = True
+    p = provider()
+    with pytest.raises(LLMOutputRepetitionError):
+        p.parse(system_prompt="s", user_prompt="u", schema=Value, output_repetition_guard=True)
+    assert sdk["interrupted"] and sdk["closed"] and sdk["stream_exited"]
+    metadata = p.last_call_metadata
+    assert metadata["status"] == "output_repetition"
+    trace = metadata["request_trace"]
+    assert trace["runtime_closed"] and trace["interrupt_acknowledged"]
+    assert trace["stop_snapshot"]["output_guard"]["reason"] == "exact_periodic_output"
+    assert "private-loop" not in json.dumps(metadata)
+
+
+def test_schema_override_is_sent_but_canonical_validation_is_not_bypassed(sdk):
+    schema = Value.model_json_schema()
+    schema["properties"]["value"]["enum"] = [1]
+    assert provider().parse(system_prompt="s", user_prompt="u", schema=Value, json_schema_override=schema).value == 1
+    assert sdk["turn"][1]["output_schema"]["properties"]["value"]["enum"] == [1]
+    sdk["events"] = [("item/completed", {"item": {"type": "agentMessage", "text": '{"value":"not-an-int"}'}}),
+                     ("turn/completed", {"turn": {"status": "completed"}})]
+    with pytest.raises(StructuredOutputError):
+        provider().parse(system_prompt="s", user_prompt="u", schema=Value, json_schema_override=schema)
+
+
+def test_repetition_repair_opens_new_runtime_only_after_previous_exit(monkeypatch):
+    from domain_packs.finance_ashare.subagents.uzi_llm_support import parse_uzi_structured
+    runtimes = []
+
+    def create(config):
+        if runtimes:
+            assert runtimes[-1]["closed"] and runtimes[-1]["stream_exited"]
+        state = {}
+        if not runtimes:
+            state.update(events=[
+                ("item/started", {"item": {"id": "m", "type": "agentMessage", "phase": "final_answer"}}),
+                ("item/agentMessage/delta", {"itemId": "m", "delta": "repeating-stage" * 500}),
+            ], wait_after_events=True)
+        runtimes.append(state)
+        return sdk_factory(state)(config)
+
+    monkeypatch.setattr(transport, "AsyncCodex", create)
+    monkeypatch.setattr(transport, "runtime_config", lambda cwd: {"cwd": cwd})
+    assert parse_uzi_structured(provider(), uzi_stage="narrative_core", schema=Value,
+                                system_prompt="fixed", user_prompt="fixed").value == 1
+    assert len(runtimes) == 2 and all(r["closed"] for r in runtimes)
+    assert runtimes[0]["interrupted"]
 
 
 @pytest.mark.parametrize("late_status", ["interrupted", "completed"])

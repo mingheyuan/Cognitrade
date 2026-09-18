@@ -130,6 +130,7 @@ def build_settings_kwargs(root: Path, env_values: dict[str, str]) -> dict[str, A
             env_values.get("UZI_LLM_BUY_ZONE_REQUEST_TIMEOUT_SECONDS", "300")
         ),
         "uzi_llm_max_concurrency": int(env_values.get("UZI_LLM_MAX_CONCURRENCY", "2")),
+        "uzi_llm_queue_timeout_seconds": int(env_values.get("UZI_LLM_QUEUE_TIMEOUT_SECONDS", "1200")),
         "uzi_llm_transient_retries": int(
             env_values.get("UZI_LLM_TRANSIENT_RETRIES", "2")
         ),

@@ -1621,7 +1621,7 @@ class FundHoldingReportService:
         terminal_agent_failure = any(
             str(issue.get("dim") or "") == "agent_analysis"
             and str(issue.get("evidence") or "")
-            in {"llm_transport_timeout", "llm_provider_unavailable"}
+            in {"llm_transport_timeout", "llm_provider_unavailable", "llm_output_repetition"}
             for issue in issue_rows
         )
         critical_rows: list[tuple[str, str]] = []
@@ -1629,6 +1629,7 @@ class FundHoldingReportService:
         has_non_agent_critical = False
         has_transport_timeout = False
         has_provider_unavailable = False
+        has_output_repetition = False
         for issue in issue_rows:
             dimension = str(issue.get("dim") or "")
             failure_kind = str(issue.get("evidence") or "")
@@ -1663,6 +1664,9 @@ class FundHoldingReportService:
             elif failure_kind == "llm_provider_unavailable":
                 has_provider_unavailable = True
                 suggested_fix = "模型上游服务暂时不可用；系统已完成短退避重试，可稍后仅重试此项"
+            elif failure_kind == "llm_output_repetition":
+                has_output_repetition = True
+                suggested_fix = "模型连续重复输出，当前阶段的一次定向修复已用尽；可手动重试此项，保留其他合格阶段"
             elif dimension == "agent_analysis" and "可以忽略" in suggested_fix:
                 suggested_fix = "在 Agent OS 中完成结构化 Agent 分析后重算与自审，不允许忽略该 critical"
             elif "run.py" in suggested_fix or "fetch_X" in suggested_fix:
@@ -1683,6 +1687,8 @@ class FundHoldingReportService:
                 return f"UZI 质量门未通过：{details}。模型请求已超时，可稍后仅重试此项。"
             if has_provider_unavailable and not has_non_agent_critical:
                 return f"UZI 质量门未通过：{details}。模型上游暂时不可用，可稍后仅重试此项。"
+            if has_output_repetition and not any(issue.get("category") == "data" for issue in issue_rows):
+                return f"UZI 质量门未通过：{details}。重复输出不是数据采集缺口；恢复后仍需处理其余自审问题。"
             return f"UZI 质量门未通过：{details}。输入缺口需先在数据中心补齐并冻结新 Bundle；模型或内容错误可仅重试此项。"
         if final_status == "gated":
             return "UZI 质量门未通过，但子运行未返回具体 critical；请打开“证据”查看运行事件后仅重试此项。"

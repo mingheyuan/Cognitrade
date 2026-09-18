@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from tests.uzi_prompt_wire import decode_evidence, decode_paths
 
 from domain_packs.finance_ashare.subagents import uzi_392_analysis as host
 from tests.test_uzi_392_analysis import _lite_snapshots
@@ -89,8 +90,8 @@ def test_narrative_can_review_model_assumptions_and_catalysts_without_earlier_ci
     execute(provider, [research()])
     request = next(row for row in provider.requests if row["schema"] is host.AgentNarrativeCorePayload)
     prompt = request["system_prompt"]
-    evidence = json.loads(prompt.split("FROZEN_STAGE_EVIDENCE=", 1)[1].split("\n", 1)[0])
-    paths = set(json.loads(prompt.split("ALLOWED_LEAF_EVIDENCE_PATHS=", 1)[1].split("\n", 1)[0]))
+    evidence = decode_evidence(json.loads(prompt.split("FROZEN_STAGE_EVIDENCE=", 1)[1].split("\n", 1)[0]))
+    paths = set(decode_paths(json.loads(prompt.split("ALLOWED_LEAF_EVIDENCE_PATHS=", 1)[1].split("\n", 1)[0])))
     models = evidence.get("raw", {}).get("dimensions", {})
     assert set(models) == {"20_valuation_models", "21_research_workflow", "22_deep_methods"}
     for key in models:

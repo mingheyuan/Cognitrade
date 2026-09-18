@@ -39,6 +39,7 @@ from domain_packs.finance_ashare.subagents.uzi_llm_support import (
     parse_uzi_structured,
 )
 from domain_packs.finance_ashare.subagents.uzi_qualitative_deep_dive import (
+    market_publication_time_view,
     _GROUPS,
     QUALITATIVE_SOURCE_ATTRIBUTION_RULES,
     QualitativeGroupResult,
@@ -292,12 +293,18 @@ def _document_view(evidence, bindings):
 
 def _research_documents(snapshot, evidence, cutoff):
     bindings = snapshot_text_bindings(snapshot, evidence)
-    return [{"evidence_id": row.id, "document_hash": row.content_hash,
-             "url": row.source_url, "published_at": _database_utc(row.published_at).isoformat(),
-             "observed_at": _database_utc(row.observed_at).isoformat(),
-             "retrieved_at": _database_utc(row.observed_at).date().isoformat(),
-             **_document_view(row, bindings), **research_publication_projection(row)}
-            for row in evidence if _document_error(row, cutoff) is None]
+    documents = []
+    for row in evidence:
+        if _document_error(row, cutoff) is not None:
+            continue
+        document = {"evidence_id": row.id, "document_hash": row.content_hash,
+                    "url": row.source_url, "published_at": _database_utc(row.published_at).isoformat(),
+                    "observed_at": _database_utc(row.observed_at).isoformat(),
+                    "retrieved_at": _database_utc(row.observed_at).date().isoformat(),
+                    **_document_view(row, bindings), **research_publication_projection(row)}
+        document.update(market_publication_time_view(document["published_at"], snapshot.exchange_timezone))
+        documents.append(document)
+    return documents
 
 
 def _validate_fact(repository, snapshot, proposal: FactProposal):
@@ -507,6 +514,9 @@ def _company_profile_prompt_scope(scope, context):
     view["target"]["raw"] = {key: value for key, value in view["target"]["raw"].items()
                              if key in scope["allowed_fields"]}
     for document in view["documents"]:
+        document.update(market_publication_time_view(
+            document.get("published_at"), view["target"].get("exchange_timezone"),
+        ))
         # The profile scope records the real archive observation. Supply the
         # same date semantics as ordinary research documents, never as-of or
         # publication time. The immutable validation scope remains unchanged.
@@ -537,11 +547,13 @@ def _research_citation_view(context, profile_scope):
          "snapshot_hash": row.get("snapshot_hash"), **document}
         for dimension, row in context.items() for document in row.get("documents", [])
     ]
-    records.extend({"scope": "company_profile", **document}
+    records.extend({"scope": "company_profile", **document,
+                    **market_publication_time_view(document.get("published_at"),
+                        (profile_scope.get("target") or {}).get("exchange_timezone"))}
                    for document in (profile_scope or {}).get("documents", []))
     urls = list(dict.fromkeys(row["url"] for row in records))
     publications = {
-        url: list(dict.fromkeys(str(row["published_at"]) for row in records
+        url: list(dict.fromkeys(str(row.get("published_at_market") or row["published_at"]) for row in records
                                if row["url"] == url and row.get("published_at")))
         for url in urls
     }

@@ -23,6 +23,8 @@ def failed_stage_next_action(failure):
         return "取消已请求；等待在途阶段退出并保留已完成结果"
     if kind == "source_gap":
         return "回到数据中心显式补证，固定新输入后再恢复受影响阶段"
+    if kind == "llm_output_repetition":
+        return "模型重复输出，单阶段修复已用尽；保留合格阶段，等待手动重试，不重新采集"
     if kind == "llm_provider_unavailable" and failure.get("provider_retryable") is False:
         return "模型请求不可重试；保留服务错误原因，处理后再恢复"
     if kind in EXHAUSTED_MODEL_FAILURES:

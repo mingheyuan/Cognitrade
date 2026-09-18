@@ -30,10 +30,12 @@ from .errors import (
     LLMCancelledError,
     LLMDeadlineError,
     LLMProviderError,
+    LLMOutputRepetitionError,
     LLMUnavailableError,
 )
+from .codex_output_trace import OutputTrace
 
-TRANSPORT_VERSION = "codex-sdk-frozen-stage-v3-terminal-trace"
+TRANSPORT_VERSION = "codex-sdk-frozen-stage-v5-repetition-recovery"
 ISOLATION = {
     "model_provider": "openai", "forced_login_method": "chatgpt",
     "web_search": "disabled", "approval_policy": "never", "sandbox_mode": "read-only",
@@ -158,7 +160,7 @@ def turn_error(error: dict[str, Any]) -> CodexTurnError:
 async def execute(*, model: str, instructions: str, prompt: str,
                   output_schema: dict | None, effort: str | None, timeout: float,
                   deadline_at: float | None = None, cancellation: Event | None = None,
-                  frozen_session=None) -> dict[str, Any]:
+                  frozen_session=None, output_repetition_guard: bool = False) -> dict[str, Any]:
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("timeout_seconds must be finite and positive")
     started = monotonic()
@@ -171,6 +173,7 @@ async def execute(*, model: str, instructions: str, prompt: str,
              "input_characters": len(instructions) + len(prompt),
              "structured_output": output_schema is not None}
     metadata["request_trace"] = trace
+    output_trace = OutputTrace()
     last_event_at = None
     known_events = {
         "turn/started", "turn/completed", "item/started", "item/completed",
@@ -181,6 +184,7 @@ async def execute(*, model: str, instructions: str, prompt: str,
 
     def capture_trace() -> None:
         now = monotonic()
+        trace["output_diagnostics"] = output_trace.snapshot()
         metadata["elapsed_seconds"] = round(now - started, 6)
         trace["idle_seconds"] = round(now - (last_event_at or started), 6)
         trace["output_idle_seconds"] = (round(now - started - trace["last_output_seconds"], 6)
@@ -201,6 +205,7 @@ async def execute(*, model: str, instructions: str, prompt: str,
 
     def record_event(method: str, payload: dict) -> None:
         nonlocal last_event_at
+        output_trace.record(method, payload)
         last_event_at = monotonic()
         name = method if method in known_events else "other"
         trace["event_count"] += 1
@@ -233,6 +238,9 @@ async def execute(*, model: str, instructions: str, prompt: str,
             raise LLMDeadlineError("llm_stage_deadline_exceeded")
         if monotonic() >= request_deadline:
             raise LLMProviderError("llm_request_timeout")
+        if output_repetition_guard and (repetition := output_trace.repetition()):
+            trace["output_guard"] = {"reason": "exact_periodic_output", **repetition}
+            raise LLMOutputRepetitionError()
         if bridge is not None and bridge.failure is not None:
             raise bridge.failure
 
@@ -277,6 +285,10 @@ async def execute(*, model: str, instructions: str, prompt: str,
                 async for event in stream:
                     payload = event.payload.model_dump(mode="json", by_alias=True)
                     record_event(event.method, payload)
+                    # Check between deltas too: a busy stream need not yield
+                    # control to the outer polling task before its next event.
+                    if "stop_snapshot" not in trace:
+                        check()
                     if event.method == "model/rerouted":
                         raise CodexTurnError("model_rerouted")
                     if event.method == "item/completed":
@@ -325,6 +337,7 @@ async def execute(*, model: str, instructions: str, prompt: str,
             metadata["status"] = (
                 "cancelled" if isinstance(exc, (LLMCancelledError, asyncio.CancelledError)) else
                 "deadline" if isinstance(exc, LLMDeadlineError) else
+                "output_repetition" if isinstance(exc, LLMOutputRepetitionError) else
                 "timed_out" if str(exc) == "llm_request_timeout" else "failed"
             )
             capture_stop()
@@ -342,7 +355,7 @@ async def execute(*, model: str, instructions: str, prompt: str,
                 error.frozen_read_audit = frozen_session.audit()
             raise error from None
         finally:
-            if task is not None and not task.done() and handle is not None:
+            if handle is not None and trace.get("terminal_status") not in {"completed", "failed", "interrupted"}:
                 trace["interrupt_requested"] = True
                 try:
                     await asyncio.wait_for(handle.interrupt(), timeout=2)

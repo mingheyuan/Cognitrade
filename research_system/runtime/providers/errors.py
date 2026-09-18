@@ -21,6 +21,13 @@ class LLMDeadlineError(LLMProviderError):
     pass
 
 
+class LLMOutputRepetitionError(LLMProviderError):
+    """An opted-in authored-text turn emitted a long exact periodic suffix."""
+
+    def __init__(self):
+        super().__init__("llm_output_repetition")
+
+
 class CodexTurnError(LLMProviderError):
     def __init__(self, code: str, *, status_code: int | None = None):
         self.code = code

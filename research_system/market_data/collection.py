@@ -2130,7 +2130,16 @@ class MarketDataCollectionCoordinator:
                 MarketDataCollectionTask.job_id == job_id,
             )))
             self._set_job_progress(job, tasks)
-            job.updated_at = datetime.now(timezone.utc)
+            now = datetime.now(timezone.utc)
+            provider = dict((job.progress_json or {}).get("provider") or {})
+            if provider:
+                # This describes the structured source wave, not the slower
+                # research pipeline or successful completion of every slot.
+                # Do not leave a stale "persisting" label during Agent work.
+                provider.update(phase="settled", updated_at=iso(now))
+                job.progress_json = {**dict(job.progress_json or {}), "provider": provider}
+                job.checkpoint_json = {**dict(job.checkpoint_json or {}), "provider_progress": provider}
+            job.updated_at = now
             return True
 
     def _run_research_archive_stage(

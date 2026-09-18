@@ -178,6 +178,8 @@ def test_virtual_clock_replays_recorded_medium_queue_600_seconds_without_http():
     limiter = support._RequestLimiter(4)
     progress = []
     provider = RecordedGatewayProvider(failures=0)
+    # Replay the recorded admission setting, not today's independent default.
+    provider.settings = SimpleNamespace(uzi_llm_max_concurrency=4, uzi_llm_queue_timeout_seconds=600)
 
     def advance(*, timeout):
         now[0] += timeout

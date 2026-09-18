@@ -48,6 +48,11 @@ def test_legacy_navigation_is_classified_without_rewriting_frozen_facts():
     "固定数据未完成行业—原材料—合约映射，未执行价格查询。",
     "固定行业快照将长川科技归类为半导体设备；截至2026-09-02，行业净利润同比增长4.69%。",
     "截至2026-09-02、回溯180天的有界公告查询结果为零条事件记录；仅说明指定来源未返回事件。",
+    "固定快照截至2026-09-02显示关联品种为铜（CU0），最新收盘价为108040，12个月价格序列起点为78650；按序列首尾计算，价格明显高于12个月起点，但快照未提供公司实际铜采购敞口。",
+    "冻结期货快照截至2026年9月2日，显示铜收盘价为108040。",
+    "截至2026-09-02的历史有界事件查询窗口为2026-03-06至2026-09-02，规定来源查询结果为零条；因此本轮无法核实近30天公告分类、合同金额、诉讼金额或并购交易。该结论是数据查询状态，不是公司无事件的永久判断。",
+    "截至2026年9月2日的历史有界查询窗口为2026年3月6日至9月2日，规定来源查询结果为零条；但固定归档保留一份2026年8月22日公告，内容为公司拟于2026年9月3日参加业绩说明会。",
+    "报告披露公司于2026年5月28日召开2025年年度股东会。固定事件快照对截至2026-09-02的180日公告窗口返回“verified_empty”，因此本轮无法核实合同中标金额。",
 ])
 def test_known_misattributions_fail_the_actual_group_check(finding):
     rows = fixed_rows(historical=True)
@@ -75,6 +80,8 @@ def test_known_misattributions_fail_the_actual_group_check(finding):
     "铜 CU0 收盘价 108040，公司将于 2026-09-02 召开股东大会。",
     "公司公告披露数据快照备份项目已投产，并为客户提供公告查询服务。",
     "公司年报记载行业调查结果，按年度统计下游客户需求。",
+    "公司公告截至2026-08-14显示本报告期未开展期货套期保值。",
+    "公司年度报告披露公告查询窗口服务已上线，支持历史事件查询。",
 ])
 def test_scope_check_is_not_a_generic_semantic_or_forecast_gate(finding):
     assert not document_attribution_conflicts(finding, ["2026-08-14T00:00:00Z"])
@@ -95,7 +102,36 @@ def test_unknown_publication_is_not_inferred_from_a_url_or_observation():
     assert not document_attribution_conflicts("2026-09-02 铜 CU0 收盘价 108040。", ["unknown"])
 
 
-def test_old_misattributed_cache_repairs_only_the_affected_group(tmp_path, monkeypatch):
+def test_bounded_query_limitation_is_allowed_without_borrowing_a_document():
+    finding = "截至2026-09-02的历史有界事件查询窗口为2026-03-06至2026-09-02，规定来源查询结果为零条；仅说明本轮查询状态。"
+
+    class WithQueryDisclosure(CapturingProvider):
+        def parse(self, **kwargs):
+            group = super().parse(**kwargs)
+            for dimension in group.dimensions:
+                if dimension.dimension_id == "15_events":
+                    dimension.evidence.append(q.QualitativeEvidence(source="unknown", finding=finding))
+            return group
+
+    rows = fixed_rows(historical=True)
+    attach_shared_document(rows)
+    result = q.apply_qualitative_deep_dive({}, snapshot_rows=rows, llm_provider=WithQueryDisclosure())
+    assert result["qualitative_agent_execution"]["status"] == "completed"
+    events = result["qualitative_deep_dive"]["15_events"]
+    disclosure = next(row for row in events["disclosures"] if row["finding"] == finding)
+    assert disclosure["source"] == "unknown" and disclosure["url"] is None
+    assert len(events["evidence"]) == 2
+    assert result["qualitative_agent_execution"]["unknown_evidence_count"] == 1
+
+
+@pytest.mark.parametrize("group_prefix,dimension_index,finding", [
+    ("B", 0, "固定行业快照显示行业估值中位数PE为50.84。"),
+    ("C", 1, "固定快照截至2026-09-02显示关联品种为铜（CU0），最新收盘价为108040。"),
+    ("B", 1, "截至2026-09-02的历史有界事件查询窗口为2026-03-06至2026-09-02，规定来源查询结果为零条；该结论是数据查询状态。"),
+])
+def test_old_misattributed_cache_repairs_only_the_affected_group(
+    tmp_path, monkeypatch, group_prefix, dimension_index, finding,
+):
     rows = fixed_rows(historical=True)
     attach_shared_document(rows)
     urls = {dim: SHARED_URL for dim in q._DIMENSION_TYPES}
@@ -105,8 +141,8 @@ def test_old_misattributed_cache_repairs_only_the_affected_group(tmp_path, monke
 
     def old_cache(path):
         cached = load(path)
-        if cached is not None and cached.group_label.startswith("B"):
-            cached.dimensions[0].evidence[0].finding = "固定行业快照显示行业估值中位数PE为50.84。"
+        if cached is not None and cached.group_label.startswith(group_prefix):
+            cached.dimensions[dimension_index].evidence[0].finding = finding
         return cached
 
     second = CapturingProvider(urls=urls, workspace_root=tmp_path)
@@ -115,4 +151,4 @@ def test_old_misattributed_cache_repairs_only_the_affected_group(tmp_path, monke
         result = q.apply_qualitative_deep_dive({}, snapshot_rows=rows, llm_provider=second)
     assert result["qualitative_agent_execution"]["status"] == "completed"
     assert len(second.calls) == 1
-    assert second.calls[0]["group"].startswith("B")
+    assert second.calls[0]["group"].startswith(group_prefix)

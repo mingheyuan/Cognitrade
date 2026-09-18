@@ -59,7 +59,7 @@
             "required": ["stage", "kind", "error_type"],
             "properties": {
               "stage": {"type": "string"},
-              "kind": {"enum": ["agent_content_invalid", "source_gap", "pipeline_failure", "llm_cancelled", "llm_stage_deadline", "llm_queue_timeout", "llm_transport_timeout", "llm_provider_unavailable"]},
+              "kind": {"enum": ["agent_content_invalid", "source_gap", "pipeline_failure", "llm_cancelled", "llm_stage_deadline", "llm_queue_timeout", "llm_transport_timeout", "llm_provider_unavailable", "llm_output_repetition"]},
               "error_type": {"type": "string"},
               "provider_status_code": {"type": "integer", "minimum": 100, "maximum": 599},
               "provider_error_code": {"type": "string"},

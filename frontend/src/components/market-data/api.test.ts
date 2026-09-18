@@ -107,7 +107,12 @@ describe('MarketDataCenterApi', () => {
         publication_candidate: { can_publish: false, quality_gate: 'blocked', missing_dimensions: ['12_capital_flow'], scopes: [{ symbol: '600001.SH', can_publish: false }] },
         agent_recovery: { status: 'failed', attempted: ['12_capital_flow'], succeeded: [], failed: ['12_capital_flow'] },
         progress: { completed: 1, total: 1, child_complete: 3, child_total: 10, by_status: { partial: 1 },
-          native_postfetch: { status: 'partial', attempted: 2, succeeded: 1, failed: 1, persisted_snapshot_count: 1 } },
+          native_postfetch: { status: 'partial', attempted: 2, succeeded: 1, failed: 1, persisted_snapshot_count: 1 },
+          research_enrichment: { status: 'running', groups: [
+            { group: 'A', symbol: '600519.SH', status: 'completed', research: { body: 'not a progress field' } },
+            { group: 'B', symbol: '002371.SZ', status: 'model_failed', failure: { kind: 'llm_provider_unavailable', provider_error_code: 'serverOverloaded', error_type: 'CodexTurnError', request_payload: 'not a progress field' } },
+          ],
+            revisions: [{ snapshot_id: 'new-evidence-revision', native_projection: { private_payload: 'not a progress field' } }] } },
         task_summary: { total: 1, by_status: { partial: 1 }, active: 0, succeeded: 0, skipped: 0, retryable_failed: 1, blocked_failed: 0, by_error_code: [], by_dimension: [] },
         portfolio_summary: { total_holdings: 10, ready_holdings: 3, dimensions_per_holding: 22, total_slots: 220, ready_slots: 91, missing_slots: 129, retryable_slots: 80, blocked_slots: 49, active_slots: 0, unassessed_slots: 0, degraded_slots: 49, by_holding: [{ symbol: '600001.SH', total_slots: 22, ready_slots: 0, missing_slots: 22, retryable_slots: 0, blocked_slots: 22, active_slots: 0, unassessed_slots: 0, degraded_slots: 22 }], attempt: 2, current_child_job_ids: ['child-2'], by_error_code: [{ key: 'strict_contract_gap', count: 49, retryable_count: 0, blocked_count: 49, active_count: 0 }], by_dimension: [] },
         tasks: [{
@@ -128,6 +133,11 @@ describe('MarketDataCenterApi', () => {
 
     expect(page.items[0].progress).toMatchObject({ child_complete: 3, child_total: 10, completed: 0, partial: 1, running: 0, queued: 0 })
     expect(page.items[0].progress.native_postfetch).toMatchObject({ status: 'partial', attempted: 2, succeeded: 1, failed: 1, persisted_snapshot_count: 1 })
+    expect(page.items[0].progress.research_enrichment).toEqual({ status: 'running', reason_code: undefined,
+      groups: [
+        { group: 'A', symbol: '600519.SH', status: 'completed' },
+        { group: 'B', symbol: '002371.SZ', status: 'model_failed', failure: { kind: 'llm_provider_unavailable', provider_error_code: 'serverOverloaded' } },
+      ], revisions: [{ snapshot_id: 'new-evidence-revision' }] })
     expect(page.items[0].tasks?.[0]).toMatchObject({
       task_id: 'task-1', attempt: 1, max_attempts: 3, retryable: true,
       collection_outcome: 'retryable_failure', reason_code: 'historical_provider_failure',
