@@ -35,8 +35,9 @@ def document_attribution_conflicts(finding: str, publication_dates: list[str]) -
     # because the prose acknowledges that this is a query limitation.
     if re.search(r"历史有界(?:公告|事件)?查询窗口", finding):
         return True
-    if re.search(r"(?:本次|本轮|本地|固定|冻结)(?:的)?(?:公告|事件)快照"
-                 r"[^。；;\n]{0,100}(?:verified_empty|查询窗口|有界查询)", finding):
+    if re.search(r"(?:本次|本轮|本地|固定|冻结)(?:的)?"
+                 r"(?:市场|行情|期货|行业|宏观|政策|公告|事件|数据)?快照"
+                 r"[^。；;\n]{0,100}(?:provider_unavailable|verified_empty|查询窗口|有界查询)", finding):
         return True
     if not publication_dates or not re.search(r"收盘价|结算价|当日成交量|当日持仓量", finding):
         return False

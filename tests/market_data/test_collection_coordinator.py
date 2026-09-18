@@ -525,7 +525,7 @@ class CollectionCoordinatorTests(unittest.TestCase):
             completed["progress"]["provider"],
             {
                 "as_of_date": today.isoformat(),
-                "phase": "persisting",
+                "phase": "settled",
                 "snapshot_type": None,
                 "completed": 1,
                 "total": 1,
@@ -538,6 +538,10 @@ class CollectionCoordinatorTests(unittest.TestCase):
             },
         )
         self.assertGreaterEqual(completed["progress"]["provider"]["elapsed_seconds"], 0)
+        self.assertEqual(
+            completed["checkpoint"]["provider_progress"],
+            completed["progress"]["provider"],
+        )
         self.assertTrue(completed["progress"]["provider"]["started_at"])
 
     def test_adapter_validation_failure_is_isolated_and_batch_continues(self) -> None:

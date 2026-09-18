@@ -53,6 +53,8 @@ def test_legacy_navigation_is_classified_without_rewriting_frozen_facts():
     "截至2026-09-02的历史有界事件查询窗口为2026-03-06至2026-09-02，规定来源查询结果为零条；因此本轮无法核实近30天公告分类、合同金额、诉讼金额或并购交易。该结论是数据查询状态，不是公司无事件的永久判断。",
     "截至2026年9月2日的历史有界查询窗口为2026年3月6日至9月2日，规定来源查询结果为零条；但固定归档保留一份2026年8月22日公告，内容为公司拟于2026年9月3日参加业绩说明会。",
     "报告披露公司于2026年5月28日召开2025年年度股东会。固定事件快照对截至2026-09-02的180日公告窗口返回“verified_empty”，因此本轮无法核实合同中标金额。",
+    "报告披露，公司面临设备、零备件和原材料短缺风险。固定政策快照在2026-08-03至2026-09-02查询窗口返回provider_unavailable，未形成可引用的具体政策条目。",
+    "固定宏观快照的查询窗口为2026-08-03至2026-09-02，返回verified_empty。",
 ])
 def test_known_misattributions_fail_the_actual_group_check(finding):
     rows = fixed_rows(historical=True)
@@ -82,6 +84,7 @@ def test_known_misattributions_fail_the_actual_group_check(finding):
     "公司年报记载行业调查结果，按年度统计下游客户需求。",
     "公司公告截至2026-08-14显示本报告期未开展期货套期保值。",
     "公司年度报告披露公告查询窗口服务已上线，支持历史事件查询。",
+    "公司公告披露其快照备份系统在查询窗口内返回provider_unavailable，研发团队已修复。",
 ])
 def test_scope_check_is_not_a_generic_semantic_or_forecast_gate(finding):
     assert not document_attribution_conflicts(finding, ["2026-08-14T00:00:00Z"])
@@ -102,9 +105,11 @@ def test_unknown_publication_is_not_inferred_from_a_url_or_observation():
     assert not document_attribution_conflicts("2026-09-02 铜 CU0 收盘价 108040。", ["unknown"])
 
 
-def test_bounded_query_limitation_is_allowed_without_borrowing_a_document():
-    finding = "截至2026-09-02的历史有界事件查询窗口为2026-03-06至2026-09-02，规定来源查询结果为零条；仅说明本轮查询状态。"
-
+@pytest.mark.parametrize("finding", [
+    "截至2026-09-02的历史有界事件查询窗口为2026-03-06至2026-09-02，规定来源查询结果为零条；仅说明本轮查询状态。",
+    "固定政策快照在2026-08-03至2026-09-02查询窗口返回provider_unavailable，未形成可引用的具体政策条目。",
+])
+def test_bounded_query_limitation_is_allowed_without_borrowing_a_document(finding):
     class WithQueryDisclosure(CapturingProvider):
         def parse(self, **kwargs):
             group = super().parse(**kwargs)
@@ -128,6 +133,7 @@ def test_bounded_query_limitation_is_allowed_without_borrowing_a_document():
     ("B", 0, "固定行业快照显示行业估值中位数PE为50.84。"),
     ("C", 1, "固定快照截至2026-09-02显示关联品种为铜（CU0），最新收盘价为108040。"),
     ("B", 1, "截至2026-09-02的历史有界事件查询窗口为2026-03-06至2026-09-02，规定来源查询结果为零条；该结论是数据查询状态。"),
+    ("A", 1, "固定政策快照在2026-08-03至2026-09-02查询窗口返回provider_unavailable，未形成可引用的具体政策条目。"),
 ])
 def test_old_misattributed_cache_repairs_only_the_affected_group(
     tmp_path, monkeypatch, group_prefix, dimension_index, finding,
