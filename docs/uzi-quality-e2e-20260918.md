@@ -509,3 +509,47 @@ PR #33 的 `53b3836` 全后端 CI 发现一条终态进度旧断言：`persistin
 代码及可执行 TODO 已提交至 [PR #33](https://github.com/mingheyuan/Cognitrade/pull/33)，未合并。
 `ac734a6` 的前端、固定原生、数据库检查已通过，完整后端仍运行。待办清单分别保留
 日期／来源修复复验、完整链路验收、数据源授权限制、视觉验收与最终 CI，不以部分通过替代完成。
+
+## 11:16 续验：固定输入通过，发现成本组套保方向错误
+
+新 Manifest `01M2S7C7ZCERZV8HMX5HAKSKJY`，hash
+`25ed841d919331972d658eb231f69260ecc549fe3cd3073f6e4dd1b3e2108c99`。
+十股各 22 快照 hash、固定证据关系及原件 hash 一致，行情截止 9 月 2 日且未复权；
+实际固定的版本为 `b3665e8 / medium / full / gpt-5.6-luna / v10 / 15e8ea5e…`。
+11:16 仍五股运行、五股排队，尚无失败请求；北方已完成正文阶段并进入买入区分析。
+
+检查旧缓存时发现北方 C 组方向性错误，并从上一完整批次的真实工件确认：
+run `01M2RWPNNJ86KCXMJPX35CK3R5`，artifact `01M2S5FMFCENTCG5TXTQ91S2HZ`，hash
+`74978a3c94eda62b1ab0dffaa2c01669adc855b2d36af59c16dc3f22d683d34f`。
+`8_materials.associations` 与 `9_futures.associations/conclusion` 把期货空头描述成
+能抵消未来采购铜价上涨，且把多头描述为增加这一风险。即便是条件分析，损益方向仍错误。
+
+固定原生 Task 2.5 的 C 组及 Dim 9 要求先从公司年报核对套保方向与名义本金，链 4
+按多空敞口连接价格波动和财报影响，没有要求上述错误结论。基础关系另以
+[CME 买入套保说明](https://www.cmegroup.com/education/lessons/buying-futures-for-protection-against-rising-prices)
+及[买卖套保区别](https://www.cmegroup.com/education/courses/introduction-to-grains-and-oilseeds/how-to-hedge-grain-risk)
+交叉核对：未来采购通常用买入期货保护涨价风险，库存／销售通常用卖出期货保护跌价风险，
+实际效果还取决于基差、期限和数量等条件。这些通用方法参考不追加到历史公司证据目录。
+
+最小修复只在 C 组已有指引中明确敞口、线性期货多空损益和会计确认限制，仍保留完整原生
+方法论；不编造企业持仓、不增加正则硬门禁、不修改原生评分或旧报告。A/B 组提示不变，
+C 组缓存依赖现有提示 hash 自然失效。提示契约先复现 2 项失败，修复后日期／引用 Schema／
+原生方法／来源等必要组合 **111 项通过**；这些测试不代表模型事实正确性已获保证。
+补丁尚未部署，等待当前 E2E 终态后再安全部署与真实修订验证，不抢占现有模型任务。
+
+11:24 核查已有五股交付、五股运行、零失败请求；前五份原生数值／显示契约、原生汇总和
+多空选角匹配。北方新报告工件 `01M2S89AC3T6KTTMJVBZ51VECC`（hash
+`8ef12d3070ac4cf71627355b2d3eeeded426080a2f271750c0bb53b9580487a4`）未再写错 8 月 26 日
+董事会发生日，但改用了其他年度报告事件，不能称为已完整验证该次会议日期。其 C 组确实
+复用了旧套保方向错误，已在本轮 `fact-review.json` 记录，故仍需下一修订。
+
+中芯 A 组实际新请求 65.690 秒完成，只有 C 组命中旧定性缓存，新结果未把政策查询失败附在
+公司 PDF finding。抽查其固定原文：浮动利率／利率掉期、汇率避险、产业政策文号及实体清单
+年份均有正文支持；原件 hash `6a44b7cfe77129d47089ae71bee8c71d2733ae694b8910485e6c3e444de5cb13`，
+文本 hash `e8cad56c2a049e118921e3f1343e7f28484ff58049403a5c335c34be20121529`。
+这是阶段输出抽查，不代替尚未完成的最终报告与回测验收。
+
+新 C 组补丁镜像构建和部署预检通过：
+`sha256:7d56f9d0515998dd0f3aba062203d1049da305c03ca1b50152e992c24063cdf6`，
+执行 hash `cbb2cea45c4b3e364a09dae438f0c021038ff5a224b2a92f3564c6ae27f207e0`。
+在线 API 仍为 `494e9426… / 15e8ea5e…` 且健康，没有重启或中断本轮批次。
